@@ -1,11 +1,12 @@
 AuToGraFS
 =========
 
-Automatic Topological Generator for Framework Structures
+[Automatic Topological Generator for Framework Structures](http://pubs.acs.org/doi/abs/10.1021/jp507643v "Original publication")
 
-Manual coming very soon...
+Complete manual coming very soon...
 
 Dependencies to install first
+
 1. python 2.7
 2. ase
 3. pandas
