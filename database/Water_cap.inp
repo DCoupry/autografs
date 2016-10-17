@@ -1,0 +1,8 @@
+Data: shape = point_cap
+Data: name = water
+GEOMETRY CARTESIAN
+O      -0.00000004     -0.11081195      0.00000000     MMTYPE=O_3   QMMM=MM BOND=2/1.0:3/1.0:4/1.0                                 
+H       0.78397657      0.44324768      0.00000000     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+H      -0.78397624      0.44324791      0.00000000     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+X      -0.00000026     -1.11081195      0.00000000     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+END

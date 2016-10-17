@@ -1,0 +1,8 @@
+Data: shape = point_cap
+Data: name = NH2
+GEOMETRY CARTESIAN
+N      -1.12028303      2.11084903      0.00000000     MMTYPE=N_3   QMMM=MM BOND=2/1.0:3/1.0:4/1.0                                 
+H      -0.78696113      1.16803594      0.00000000     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+H      -0.78694392      2.58224920      0.81649673     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+X      -0.78694392      2.58224920     -0.81649673     MMTYPE=C_R   QMMM=MM BOND=1/1.0                                             
+END

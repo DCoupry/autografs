@@ -1,0 +1,30 @@
+Data: shape = tetrahedral
+Data: name  = H4ATC_Yaghi_tetrahedral. see "The Chemistry and Applications of Metal-Organic Frameworks", Furukawa et al.
+GEOMETRY CARTESIAN
+C      0.0         -1.74801    -0.0         MMTYPE=C_3  QMMM=MM BOND=2/1.0:3/1.0:20/1.0:22/1.0
+H      0.64065     -2.38892    -0.64065     MMTYPE=H_  QMMM=MM BOND=1/1.0
+H      -0.64065    -2.38892    0.64065      MMTYPE=H_  QMMM=MM BOND=1/1.0
+C      -0.0        0.0         -1.74801     MMTYPE=C_3  QMMM=MM BOND=5/1.0:6/1.0:19/1.0:22/1.0
+H      0.64065     -0.64065    -2.38892     MMTYPE=H_  QMMM=MM BOND=4/1.0
+H      -0.64065    0.64065     -2.38892     MMTYPE=H_  QMMM=MM BOND=4/1.0
+C      -1.74801    -0.0        0.0          MMTYPE=C_3  QMMM=MM BOND=8/1.0:9/1.0:21/1.0:22/1.0
+H      -2.38892    0.64065     -0.64065     MMTYPE=H_  QMMM=MM BOND=7/1.0
+H      -2.38892    -0.64065    0.64065      MMTYPE=H_  QMMM=MM BOND=7/1.0
+C      1.74801     0.0         -0.0         MMTYPE=C_3  QMMM=MM BOND=11/1.0:12/1.0:19/1.0:20/1.0
+H      2.38892     -0.64065    -0.64065     MMTYPE=H_  QMMM=MM BOND=10/1.0
+H      2.38892     0.64065     0.64065      MMTYPE=H_  QMMM=MM BOND=10/1.0
+C      -0.0        1.74801     0.0          MMTYPE=C_3  QMMM=MM BOND=14/1.0:15/1.0:19/1.0:21/1.0
+H      0.64065     2.38892     0.64065      MMTYPE=H_  QMMM=MM BOND=13/1.0
+H      -0.64065    2.38892     -0.64065     MMTYPE=H_  QMMM=MM BOND=13/1.0
+C      0.0         -0.0        1.74801      MMTYPE=C_3  QMMM=MM BOND=17/1.0:18/1.0:20/1.0:21/1.0
+H      -0.64065    -0.64065    2.38892      MMTYPE=H_  QMMM=MM BOND=16/1.0
+H      0.64065     0.64065     2.38892      MMTYPE=H_  QMMM=MM BOND=16/1.0
+C      0.8741      0.8741      -0.8741      MMTYPE=C_3  QMMM=MM BOND=4/1.0:10/1.0:13/1.0:25/1.0
+C      0.8741      -0.8741     0.8741       MMTYPE=C_3  QMMM=MM BOND=1/1.0:10/1.0:16/1.0:26/1.0
+C      -0.8741     0.8741      0.8741       MMTYPE=C_3  QMMM=MM BOND=7/1.0:13/1.0:16/1.0:24/1.0
+C      -0.8741     -0.8741     -0.8741      MMTYPE=C_3  QMMM=MM BOND=1/1.0:4/1.0:7/1.0:23/1.0
+X      -1.51482    -1.51482    -1.51482     MMTYPE=H_  QMMM=MM BOND=22/1.0
+X      -1.51482    1.51482     1.51482      MMTYPE=H_  QMMM=MM BOND=21/1.0
+X      1.51482     1.51482     -1.51482     MMTYPE=H_  QMMM=MM BOND=19/1.0
+X      1.51482     -1.51482    1.51482      MMTYPE=H_  QMMM=MM BOND=20/1.0
+END

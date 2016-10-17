@@ -1,0 +1,8 @@
+Data: shape = linear
+Data: name = acetylene
+GEOMETRY CARTESIAN
+C      -0.00000000     -0.00000000      0.55620091     MMTYPE=C_1   QMMM=MM BOND=2/3.0:4/1.0                                       
+C      -0.00000000     -0.00000000     -0.55620091     MMTYPE=C_1   QMMM=MM BOND=1/3.0:3/1.0                                       
+X      -0.00002426     -0.00000000     -1.20585202     MMTYPE=H_    QMMM=MM BOND=2/1.0                                             
+X       0.00002426     -0.00000000      1.20585202     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+END

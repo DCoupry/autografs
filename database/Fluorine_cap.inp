@@ -1,0 +1,6 @@
+Data: shape = point_cap
+Data: name = F
+GEOMETRY CARTESIAN
+F      -3.68867926     -0.20047170      0.00000000     MMTYPE=F_    QMMM=MM BOND=2/1.0          
+X      -2.68867926     -0.20047170      0.00000000     MMTYPE=C_R   QMMM=MM BOND=1/1.0          
+END

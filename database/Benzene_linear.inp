@@ -1,0 +1,16 @@
+Data: shape = linear
+Data: name = benzene
+GEOMETRY CARTESIAN
+C       0.00000000     -1.39103633      0.00000000     MMTYPE=C_R   QMMM=MM BOND=2/1.5:6/1.5:12/1.0                                
+C      -1.20606758     -0.69440959      0.00000000     MMTYPE=C_R   QMMM=MM BOND=1/1.5:3/1.5:8/1.0                                 
+C      -1.20606758      0.69440959     -0.00000000     MMTYPE=C_R   QMMM=MM BOND=2/1.5:4/1.5:10/1.0                                
+C      -0.00000000      1.39103633      0.00000000     MMTYPE=C_R   QMMM=MM BOND=3/1.5:5/1.5:11/1.0                                
+C       1.20606758      0.69440959      0.00000000     MMTYPE=C_R   QMMM=MM BOND=4/1.5:6/1.5:7/1.0                                 
+C       1.20606758     -0.69440959     -0.00000000     MMTYPE=C_R   QMMM=MM BOND=1/1.5:5/1.5:9/1.0                                 
+H       2.02806392      1.16933783      0.00000000     MMTYPE=H_    QMMM=MM BOND=5/1.0                                             
+H      -2.02806392     -1.16933783      0.00000000     MMTYPE=H_    QMMM=MM BOND=2/1.0                                             
+H       2.02806392     -1.16933783      0.00000000     MMTYPE=H_    QMMM=MM BOND=6/1.0                                             
+H      -2.02806392      1.16933783      0.00000000     MMTYPE=H_    QMMM=MM BOND=3/1.0                                             
+X       0.00000000      2.09099413      0.00000000     MMTYPE=H_    QMMM=MM BOND=4/1.0                                             
+X       0.00000000     -2.09099413      0.00000000     MMTYPE=H_    QMMM=MM BOND=1/1.0                                             
+END
