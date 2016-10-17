@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 """
 This module defines the fragment object, which is a wrapper around the :func:`~ase.Aroms` object
 """

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 """
 This module stores information on topologies.
 This is where new topologies should be implemented, both in references and in the maker functions.

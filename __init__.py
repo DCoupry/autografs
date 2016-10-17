@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
 """

@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+#!/usr/bin/python2.7
+
 """
 This module is the main Autografs file. It contains both the Model and Autografs classes,
 which are respectively the container and the constructor for framework crystals.

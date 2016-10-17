@@ -1,4 +1,6 @@
+# -*- coding: utf-8 -*-
 #!/usr/bin/python2.7
+
 """
 Title       : AtomTyper v0.2 
 Author      : D.E.Coupry, Jacobs University Bremen
