@@ -5,7 +5,7 @@ Automatic Topological Generator for Framework Structures
 
 Manual coming very soon...
 
-Dependencies to install first::
+Dependencies to install first
 1. python 2.7
 2. ase
 3. pandas
