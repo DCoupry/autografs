@@ -15,7 +15,7 @@ Clone this repository and add it to you pythonpath:
 ```
 cd $HOME
 git clone https://github.com/DCoupry/AuToGraFS.git
-export PYTHONPATH=$HOME/AuToGraFS/autografs
+export PYTHONPATH=$HOME/AuToGraFS:$PYTHONPATH
 ```
 
 then from any python script or command line:
@@ -25,7 +25,7 @@ then from any python script or command line:
 >>> mof = mofgen.make(label="IRMOF-5", topology="pcu", center="Zn_mof5_octahedral", linker="Benzene_linear")
 >>> mof.view()
 ```
-A useful utility is the Atomtyper available, which assigns bond orders and UFF atom types to a structure:
+A useful utility is the Atomtyper, which assigns bond orders and UFF atom types to a structure:
 ```
 >>> from atomtyper import *
 >>> typer = MolTyper(structure=mof.get_atoms(clean=True))
