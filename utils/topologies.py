@@ -83,7 +83,9 @@ class Topology(object):
         Xis  = numpy.where(numbers==0)[0]
         Ais  = numpy.where(numbers >0)[0]
         # setup the tags
-        self.atoms.tags[Xis] = Xis + 1
+        tags = numpy.zeros(len(self.atoms))
+        tags[Xis] = Xis + 1
+        self.atoms.set_tags(tags)
         tags = self.atoms.get_tags()
         # analyze
         # first build the neighborlist
@@ -112,6 +114,7 @@ class Topology(object):
             self.shapes[ai]    = (pg.schoenflies,self.atoms[ai].number)
             self.symmops[ai]   = pg.symmops
         return None
+
 
 
 def download_topologies() -> None:
@@ -156,10 +159,6 @@ def read_topologies_database(update_db     : bool = False,
             topologies_len = len(topologies)
             print("{0:<5} topologies loaded".format(topologies_len))
             return topologies
-
-
-    
-
 
 
 

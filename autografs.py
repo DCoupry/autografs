@@ -12,7 +12,7 @@ import sys
 import numpy
 import scipy
 import pickle
-
+import random
 import ase
 
 # todo: refine cell + progress of alignment
@@ -58,23 +58,26 @@ class Autografs(object):
             sbu_dict = self.get_sbu_dict(topology=topology,
                                          sbu_names=sbu_names)
         # carry on
-        for fragment_idx,sbu in sbu_dict.items():
-            fragment = topology.fragments[fragment_idx]
-            sbu         = sbu_data["SBU"]
-            has_mmtypes = ("mmtypes" in sbu.info.keys())
-            has_bonds   = ("bonds" in sbu.info.keys())
+        for idx,sbu in sbu_dict.items():
+            fragment_atoms = topology.fragments[idx]
+            sbu_atoms      = sbu.atoms
+            # check if has all info
+            sbu_info    = list(sbu.atoms.info.keys())
+            has_mmtypes = ("mmtypes" in sbu_info)
+            has_bonds   = ("bonds"   in sbu_info)
             if has_bonds and has_mmtypes:
-                sbu_types = sbu.info["mmtypes"]
+                sbu_types = sbu.atoms.info["mmtypes"]
+                sbu_bonds = sbu.atoms.info["bonds"]
             else:
-                sbu_bonds,sbu_types = analyze_mm(sbu)
+                sbu_bonds,sbu_types = analyze_mm(sbu.get_atoms())
             # align and get the scaling factor
-            sbu,f = self.align(fragment=fragment,
-                               sbu=sbu,
-                               box=topology.get_cell())
+            sbu_atoms,f = self.align(fragment=fragment_atoms,
+                               sbu=sbu_atoms,
+                               box=topology.atoms.get_cell())
             alpha += f
-            aligned.append(sbu=sbu,mmtypes=sbu_types,bonds=sbu_bonds)
+            aligned.append(index=idx,sbu=sbu_atoms,mmtypes=sbu_types,bonds=sbu_bonds)
         # refine the cell scaling using a good starting point
-        aligned.refine(x0=alpha)
+        aligned.refine(alpha0=alpha)
         return aligned
 
     def get_sbu_dict(self,
@@ -110,44 +113,51 @@ class Autografs(object):
         """
         TODO
         """
-        this_sbu            =      sbu.copy()
-        this_fragment       = fragment.copy()
-        # first we take advantage that all dummies outside the unit 
-        # box will bond over pbc to define a scaling ratio.
-        this_fragment.cell = box
-        this_fragment.pbc  = [1,1,1]
-        p       = this_fragment.get_scaled_positions(wrap=False)
-        outside = len(this_fragment) - numpy.sum(numpy.any(((p<0)|(p>1)),axis=1),dtype=int)
-        x_ratio = outside/float(len(this_fragment))
+        # first, we work with copies
+        sbu            =      sbu.copy()
+        fragment       = fragment.copy()
         # normalize and center
-        this_sbu_cop        = this_sbu.positions.mean(axis=0)
-        this_fragment_cop   = this_fragment.positions.mean(axis=0)
-        this_sbu.positions -= this_sbu_cop
-        fragment.positions -= this_fragment_cop
+        fragment_cop        = fragment.positions.mean(axis=0)
+        fragment.positions -= fragment_cop
+        sbu.positions      -= sbu.positions.mean(axis=0)
         # identify dummies in sbu
-        sbu_dummies_indices = [x.index for x in this_sbu if x.symbol=="X"]
-        sbu_dummies         = this_sbu[sbu_dummies_indices]
+        sbu_Xis = [x.index for x in sbu if x.symbol=="X"]
+        sbu_X   = sbu[sbu_Xis]
         # get the scaling factor
-        size_sbu      = numpy.linalg.norm(sbu_dummies.positions,axis=1)
+        size_sbu      = numpy.linalg.norm(sbu_X.positions,axis=1)
         size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
-        alpha         = numpy.mean(size_sbu/size_fragment)
-        ncop          = numpy.linalg.norm(this_fragment_cop)
+        alpha         = 2.0 * numpy.mean(size_sbu/size_fragment)
+        ncop          = numpy.linalg.norm(fragment_cop)
         if ncop<1e-6:
             direction  = numpy.ones(3,dtype=numpy.float32)
             direction /= numpy.linalg.norm(direction)
         else:
-            direction = this_fragment_cop / ncop
+            direction = fragment_cop / ncop
         alpha *= direction
         # scaling for better alignment
-        this_fragment.positions = this_fragment.positions.dot(numpy.eye(3)*alpha)
+        fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
         # getting the rotation matrix
-        X0  = sbu_dummies.get_positions()
-        X1  = this_fragment.get_positions()
+        X0  = sbu_X.get_positions()
+        X1  = fragment.get_positions()
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
-        this_sbu.positions = this_sbu.positions.dot(R)
-        this_sbu.tags[sbu_dummies_indices] = this_fragment.get_tags()
-        alpha =  alpha*x_ratio
-        return this_sbu,alpha
+        sbu.positions = sbu.positions.dot(R)
+        # tag the atoms
+        self.tag(sbu,fragment)
+        return sbu,alpha
+
+    def tag(self,
+            sbu      : ase.Atoms,
+            fragment : ase.Atoms) -> None:
+        """TODO"""
+        for atom in sbu:
+            if atom.symbol!="X":
+                continue
+            ps = atom.position
+            pf = fragment.positions
+            d  = numpy.linalg.norm(pf-ps,axis=1)
+            fi = numpy.argmin(d)
+            atom.tag = fragment[fi].tag
+        return None
 
 
     def list_available_topologies(self,

@@ -12,7 +12,7 @@ import sys
 import numpy
 import _pickle as pickle
 
-from ase              import Atom, Atoms
+import ase
 from ase.spacegroup   import crystal
 from ase.visualize    import view
 from ase.data         import chemical_symbols
@@ -39,7 +39,7 @@ class SBU(object):
         # initialize empty shape
         # shapes and symmops will be used to find
         # corresponding SBUs.
-        dummies = ase.Atoms([x for x in sbu if x.symbol=="X"])
+        dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
         pg = PointGroup(dummies,0.3)
         self.shape    = (pg.schoenflies,len(dummies))
         self.symmops  = pg.symmops
@@ -54,6 +54,7 @@ def read_sbu_database(update=False,path=None):
     """
     TODO
     """
+    from autografs.utils.io import read_sbu
     db_file = os.path.join(__data__,"sbu/sbu.pkl")
     user_db = (path is not None)
     no_dflt = (not os.path.isfile(db_file))

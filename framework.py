@@ -30,7 +30,7 @@ class Framework(object):
 
     def __init__(self,
                  topology : ase.Atoms = None,
-                 SBU      : list      = [],
+                 SBU      : dict      = {},
                  mmtypes  : numpy.ndarray = [],
                  bonds    : numpy.ndarray = []) -> None:
         """Constructor for the Framework class.
@@ -44,7 +44,7 @@ class Framework(object):
         mmtypes = numpy.asarray(mmtypes)
         bonds   = numpy.asarray(bonds)
         self.topology : ase.Atoms     = topology
-        self.SBU      : list          = SBU
+        self.SBU      : dict          = SBU
         self.mmtypes  : numpy.ndarray = mmtypes
         self.bonds    : numpy.ndarray = bonds
         return None
@@ -60,6 +60,7 @@ class Framework(object):
         return self.topology.copy()
 
     def append(self,
+               index   : int,
                sbu     : ase.Atoms,
                bonds   : numpy.ndarray,
                mmtypes : numpy.ndarray) -> None:
@@ -74,7 +75,7 @@ class Framework(object):
         mmtypes -- the MM atomic types.
         """
         # first append the atoms object to the list of sbu
-        self.SBU.append(sbu)
+        self.SBU[index] = sbu
         # make the bonds matrix with a new block
         self.bonds   = scipy.linalg.block_diag(self.bonds,bonds)
         # append the atom types
@@ -82,8 +83,7 @@ class Framework(object):
         return None
 
     def scale(self,
-              alpha  : float = 1.0,
-              update : bool  = False) -> None:
+              alpha  : float = 1.0) -> None:
         """Scale the building units positions by a factor alpha.
 
         This uses the correspondance between the atoms in the topology
@@ -92,50 +92,64 @@ class Framework(object):
         sbu.
         alpha -- scaling factor
         """
-        if update:
-            topology = self.topology
-        else:
-            topology = self.topology.copy()
         # get the scaled cell, normalized
         I    = numpy.eye(3)*alpha
-        cell = topology.get_cell()
+        cell = self.topology.get_cell()
         cell = cell.dot(I/numpy.linalg.norm(cell,axis=0))
-        topology.set_cell(cell,scale_atoms=True)
+        self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
-        for i,sbu in enumerate(self.SBU):
-            center = topology[i].position
-            cop    =  sbu.positions.mean(axis=0)
-            sbu.positions += center - cop
+        for i,sbu in self.SBU.items():
+            center = self.topology[i]
+            cop    = sbu.positions.mean(axis=0)
+            sbu.positions += center.position - cop
         return None
 
     def refine(self,
-               x0 : numpy.ndarray = [1.0]) -> None:
+               alpha0 : numpy.ndarray = [1.0,1.0,1.0]) -> None:
         """Refine cell scaling to minimize distances between dummies.
 
         We already have tagged the corresponding dummies during alignment,
         so we just need to calculate the MSE of the distances between 
         identical tags in the complete structure
-        x0 -- starting point of the scaling search algorithm
+        alpha0 -- starting point of the scaling search algorithm
         """
-
+        import copy
         def MSE(x : numpy.ndarray) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
+            x = x*alpha0
+            old_sbu  = copy.deepcopy(self.SBU)
+            old_topo = self.topology.copy() 
             self.scale(alpha=x)
             atoms        = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
+            # reinitialize stuff
+            self.SBU      = old_sbu
+            self.topology = old_topo
             # find the pairs...
-            pairs = [numpy.argwhere(tags==tag) for tag in set(tags)]
+            pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
+            pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
-            d = numpy.asarray(distances)
-            return numpy.mean(distances**2)
-        bounds = list(zip(0.5*x0,2.0*x0))
-        print(bounds)
-        result = scipy.optimize.minimize(fun    = MSE,
-                                         x0     = x0,
-                                         bounds = bounds)
-        self.scale(alpha=result.x)
+            d = numpy.asarray(d)
+            mse = numpy.mean(d**2)
+            return mse
+        # first get an idea of the bounds.
+        # minimum cell of a mof should be over 2.0 Ang.
+        low  = 0.5
+        high = 2.0
+        if numpy.amin(low*alpha0)<2.0:
+            low   = 2.0/numpy.amin(alpha0)
+            high *= 0.5/low
+        # optimize
+        result = scipy.optimize.minimize_scalar(fun    = MSE,
+                                                bounds = (low,high),
+                                                method = "Bounded",
+                                                options= {"disp"  : True,
+                                                          "xatol" : 1e-02})
+        # scale with result
+        alpha = result.x*alpha0
+        self.scale(alpha=alpha)
         return None
 
     def rotate(self):
@@ -156,16 +170,18 @@ class Framework(object):
         clean -- remove the dummies if True
         """
         # concatenate every sbu into one Atoms object
-        structure = ase.Atoms(cell=self.topology.cell)
+        cell = self.topology.get_cell()
+        pbc  = self.topology.get_pbc()
+        structure = ase.Atoms(cell=cell,pbc=pbc)
         bonds     = self.bonds.copy()
         mmtypes   = self.mmtypes.copy()  
-        for sbu in self.SBU:
+        for sbu in self.SBU.values():
             structure += sbu
         if not dummies:
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
-            tags  = atoms.get_tags()
-            pairs = [numpy.argwhere(tags==tag) for tag in set(tags)]
+            tags  = structure.get_tags()
+            pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
             for pair in pairs:
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
