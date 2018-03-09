@@ -1,23 +1,22 @@
-"""
-TODO
-"""
+#!/usr/bin/env python3.6
+# -*- coding: utf-8 -*-
+# Copyright : see accompanying license files for details
 
-__all__     = ["Autografs"]
 __author__  = "Damien Coupry"
+__credits__ = ["Prof. Matthew Addicoat"]
+__license__ = "MIT"
+__maintainer__ = "Damien Coupry"
 __version__ = 2.0
-
+__status__  = "alpha"
 
 import os
 import sys
 import numpy
-import scipy
-import pickle
 import random
 import ase
-
-# todo: refine cell + progress of alignment
+import scipy
 import scipy.optimize
-# from progress.bar            import Bar
+
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
@@ -29,13 +28,15 @@ from autografs.framework        import Framework
 
 
 class Autografs(object):
-    """
-    TODO
+    """Framework maker class to generate ASE Atoms objects from topologies.
+
+    AuToGraFS: Automatic Topological Generator for Framework Structures.
+    Addicoat, M. a, Coupry, D. E., & Heine, T. (2014).
+    The Journal of Physical Chemistry. A, 118(40), 9607–14. 
     """
 
     def  __init__(self):
-        """
-        TODO
+        """Constructor for the Autografs framework maker.
         """
         self.topologies : dict      = read_topologies_database()
         self.sbu        : ase.Atoms = read_sbu_database()
@@ -44,8 +45,18 @@ class Autografs(object):
              topology_name : str,
              sbu_names     : str  = None,
              sbu_dict      : dict = None) -> ase.Atoms :
-        """
-        TODO
+        """Create a framework using given topology and sbu.
+
+        Main funtion of Autografs. The sbu names and topology's
+        are to be taken from the compiled databases. The sbu_dict
+        can also be passed for multiple components frameworks.
+        If the sbu_names is a list of tuples in the shape 
+        (name,n), the number n will be used as a drawing probability
+        when multiple options are available for the same shape.
+        topology_name -- name of the topology to use
+        sbu_names     -- list of names of the sbu to use
+        sbu_dict -- (optional) one to one sbu to slot correspondance
+                    in the shape {index of slot : 'name of sbu'}
         """
         topology = Topology(name  = topology_name,
                             atoms = self.topologies[topology_name])
@@ -72,8 +83,7 @@ class Autografs(object):
                 sbu_bonds,sbu_types = analyze_mm(sbu.get_atoms())
             # align and get the scaling factor
             sbu_atoms,f = self.align(fragment=fragment_atoms,
-                               sbu=sbu_atoms,
-                               box=topology.atoms.get_cell())
+                               sbu=sbu_atoms)
             alpha += f
             aligned.append(index=idx,sbu=sbu_atoms,mmtypes=sbu_types,bonds=sbu_bonds)
         # refine the cell scaling using a good starting point
@@ -108,10 +118,15 @@ class Autografs(object):
 
     def align(self,
               fragment : ase.Atoms,
-              sbu      : ase.Atoms,
-              box      : numpy.ndarray) -> (ase.Atoms, float):
-        """
-        TODO
+              sbu      : ase.Atoms) -> (ase.Atoms, float):
+        """Return an aligned SBU.
+
+        The SBU is rotated on top of the fragment
+        using the procrustes library within scipy.
+        a scaling factor is also calculated for all three
+        cell vectors.
+        fragment -- the slot in the topology, ASE Atoms
+        sbu      -- object to align, ASE Atoms
         """
         # first, we work with copies
         sbu            =      sbu.copy()
@@ -148,7 +163,7 @@ class Autografs(object):
     def tag(self,
             sbu      : ase.Atoms,
             fragment : ase.Atoms) -> None:
-        """TODO"""
+        """Tranfer tags from the fragment to the closest dummies in the sbu"""
         for atom in sbu:
             if atom.symbol!="X":
                 continue
@@ -158,7 +173,6 @@ class Autografs(object):
             fi = numpy.argmin(d)
             atom.tag = fragment[fi].tag
         return None
-
 
     def list_available_topologies(self,
                                   sbu  : list = [],
@@ -192,8 +206,12 @@ class Autografs(object):
 
     def list_available_sbu(self,
                            topology : str) -> dict:
-        """
-        TODO
+        """Return the dictionary of compatible SBU.
+        
+        Filters the existing SBU by shape until only
+        those compatible with a slot within the topology are left.
+        TODO: use the symmetry operators instead of the shape itself.
+        topology -- name of the topology in the database
         """
         sbu = {shape:list(self.sbu.keys()) for shape in shapes}
         if topology:

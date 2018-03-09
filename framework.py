@@ -1,13 +1,20 @@
+#!/usr/bin/env python3.6
+# -*- coding: utf-8 -*-
+# Copyright : see accompanying license files for details
+
+__author__  = "Damien Coupry"
+__credits__ = ["Prof. Matthew Addicoat"]
+__license__ = "MIT"
+__maintainer__ = "Damien Coupry"
+__version__ = 2.0
+__status__  = "alpha"
+
 import os
 import sys
 import numpy
 import scipy
 import typing
 import ase
-
-# todo: refine cell + progress of alignment
-# from scipy.optimize import minimize_scalar as minimize
-# from progress.bar            import Bar
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.topologies import read_topologies_database
@@ -186,21 +193,29 @@ class Framework(object):
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
                     xi0 = pair[0]
-                    del xis[xi0]
+                    xis.remove(xi0)
                     structure.symbols[xi0] = "H"
                     mmtypes[xi0] = "H_" 
                 else:
                     xi0,xi1 = pair
                     bonds0  = numpy.where(bonds[xi0,:]>0.0)[0]
                     bonds1  = numpy.where(bonds[xi1,:]>0.0)[0]
-                    # the bond order will be the maximum one
-                    bo      = max(numpy.amax(bonds[xi0,:]),
-                                  numpy.amax(bonds[xi1,:]))
-                    # change the bonds
-                    ix        = numpy.ix_(bonds0,bonds1)
-                    bonds[ix] = bo
-                    ix        = numpy.ix_(bonds1,bonds0)
-                    bonds[ix] = bo
+                    if len(bonds0)==0:
+                        # dangling bit, mayhaps from defect
+                        xis.remove(xi0)
+                        xis.remove(xi1)
+                        if len(bonds1)==0:
+                            structure.symbols[xi1] = "H"
+                            mmtypes[xi0] = "H_" 
+                    else:
+                        # the bond order will be the maximum one
+                        bo      = max(numpy.amax(bonds[xi0,:]),
+                                      numpy.amax(bonds[xi1,:]))
+                        # change the bonds
+                        ix        = numpy.ix_(bonds0,bonds1)
+                        bonds[ix] = bo
+                        ix        = numpy.ix_(bonds1,bonds0)
+                        bonds[ix] = bo
             # book keeping on what has disappeared
             bonds   = numpy.delete(bonds,xis,axis=0)
             bonds   = numpy.delete(bonds,xis,axis=1)

@@ -1,3 +1,14 @@
+#!/usr/bin/env python3.6
+# -*- coding: utf-8 -*-
+# Copyright : see accompanying license files for details
+
+__author__  = "Damien Coupry"
+__credits__ = ["Prof. Matthew Addicoat"]
+__license__ = "MIT"
+__maintainer__ = "Damien Coupry"
+__version__ = 2.0
+__status__  = "alpha"
+
 import numpy as np
 from   scipy import cluster
 import itertools
@@ -8,8 +19,7 @@ from autografs.utils.operations import rotation, reflection, inertia
 
 
 class PointGroup(object):
-    """
-    A class to analyze the point group of a molecule. The general outline of
+    """A class to analyze the point group of a molecule. The general outline of
     the algorithm is as follows:
 
     1. Center the molecule around its center of mass.
@@ -74,6 +84,7 @@ class PointGroup(object):
             self.schoenflies = "Cs"
 
     def analyze(self):
+        """TODO"""
         if len(self.mol) == 1:
             self.schoenflies = "Kh"
         else:
@@ -107,6 +118,7 @@ class PointGroup(object):
 
 
     def analyze_linear(self):
+        """TODO"""
         inversion = - np.eye(3)
         if self.symmops["-I"] is not None:
             self.schoenflies = "D*h"
@@ -114,8 +126,7 @@ class PointGroup(object):
             self.schoenflies = "C*v"
 
     def analyze_asymmetric_top(self):
-        """
-        Handles assymetric top molecules, which cannot contain rotational
+        """Handles assymetric top molecules, which cannot contain rotational
         symmetry larger than 2.
         """
 

@@ -1,11 +1,13 @@
-"""
-TODO
-"""
+#!/usr/bin/env python3.6
+# -*- coding: utf-8 -*-
+# Copyright : see accompanying license files for details
 
-__all__     = ["read_sbu","read_sbu_database"]
 __author__  = "Damien Coupry"
+__credits__ = ["Prof. Matthew Addicoat"]
+__license__ = "MIT"
+__maintainer__ = "Damien Coupry"
 __version__ = 2.0
-
+__status__  = "alpha"
 
 import os
 import sys
@@ -26,6 +28,8 @@ import warnings
 
 from autografs.utils.pointgroup import PointGroup
 from autografs.utils            import __data__
+
+
 
 class SBU(object):
     """Contener class for a building unit information"""
@@ -48,6 +52,7 @@ class SBU(object):
     def get_atoms(self) -> ase.Atoms:
         """Return a copy of the topology as ASE Atoms."""
         return self.atoms.copy()
+
 
 
 def read_sbu_database(update=False,path=None):
