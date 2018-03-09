@@ -8,6 +8,10 @@ The Journal of Physical Chemistry. A, 118(40), 9607–14.
 """
 
 import math
+import os
 
-__all__     = ["autografs", "fragment", "atomtyper", "align", "topology", "utils"]
-__version__ = 1.1
+__all__     = ["autografs","framework","utils"]
+__version__ = 2.0
+
+from autografs.autografs import Autografs
+from autografs.framework import Framework
