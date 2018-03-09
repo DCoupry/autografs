@@ -27,34 +27,28 @@ import warnings
 from autografs.utils.pointgroup import PointGroup
 from autografs.utils            import __data__
 
+class SBU(object):
+    """Contener class for a building unit information"""
 
+    def __init__(self,
+                 name  : str,
+                 atoms : ase.Atoms) -> None:
+        """Constructor for a building unit, from an ASE Atoms."""
+        self.name  = name
+        self.atoms = atoms 
+        # initialize empty shape
+        # shapes and symmops will be used to find
+        # corresponding SBUs.
+        dummies = ase.Atoms([x for x in sbu if x.symbol=="X"])
+        pg = PointGroup(dummies,0.3)
+        self.shape    = (pg.schoenflies,len(dummies))
+        self.symmops  = pg.symmops
+        return None
 
-def read_sbu(path=None,formats=["xyz"]):
-    
-    from ase.io import iread
+    def get_atoms(self) -> ase.Atoms:
+        """Return a copy of the topology as ASE Atoms."""
+        return self.atoms.copy()
 
-    if path is not None:
-        path = os.path.abspath(path)
-    else:
-        path = os.path.join(__data__,"sbu")
-
-    SBUs = {}
-    for sbu_file in os.listdir(path):
-        ext = sbu_file.split(".")[-1]
-        if ext in formats:
-            for sbu in iread(os.path.join(path,sbu_file)):
-                try:
-                    name  = sbu.info["name"]
-                    dummies = Atoms([x for x in sbu if x.symbol=="X"])
-                    pg    = PointGroup(dummies,0.3)
-                    shape = (pg.schoenflies,len(dummies))
-                    SBUs[name] = {"Shape"    : shape,
-                                  "SBU"      : sbu,
-                                  "Symmetry" : pg.symmops}
-                except Exception as e:
-                    continue
-
-    return SBUs
 
 def read_sbu_database(update=False,path=None):
     """

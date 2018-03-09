@@ -125,3 +125,29 @@ def read_cgd() -> dict:
                 continue
         bar.finish()
     return topologies
+
+
+def read_sbu(path    : None = None,
+             formats : list =["xyz"]) -> dict:
+    """Return a dictionary of Atoms objects.
+
+    If the path is not specified, use the default library.
+    TODO: Should use a chained iterable of path soon.
+    path    -- where to find the sbu
+    formats -- what molecular file format to read
+    """
+    if path is not None:
+        path = os.path.abspath(path)
+    else:
+        path = os.path.join(__data__,"sbu")
+    SBUs = {}
+    for sbu_file in os.listdir(path):
+        ext = sbu_file.split(".")[-1]
+        if ext in formats:
+            for sbu in ase.io.iread(os.path.join(path,sbu_file)):
+                try:
+                    name  = sbu.info["name"]
+                    SBUs[name] = sbu
+                except Exception as e:
+                    continue
+    return SBUs

@@ -41,6 +41,14 @@ class Topology(object):
         self._analyze()
         return None
 
+    def get_atoms(self) -> ase.Atoms:
+        """Return a copy of the topology as ASE Atoms."""
+        return self.atoms.copy()
+
+    def get_unique_shapes(self) -> set:
+        """Return all unique shapes in the topology."""
+        return set(self.shapes.values())
+
     def _get_cutoffs(self,
                      Xis : numpy.ndarray,
                      Ais : numpy.ndarray) -> numpy.ndarray:

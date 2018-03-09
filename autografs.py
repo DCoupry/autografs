@@ -20,7 +20,9 @@ import scipy.optimize
 # from progress.bar            import Bar
 
 from autografs.utils.sbu        import read_sbu_database
+from autografs.utils.sbu        import SBU
 from autografs.utils.topologies import read_topologies_database
+from autografs.utils.topologies import Topology
 from autografs.utils.mmanalysis import analyze_mm 
 from autografs.framework        import Framework
 
@@ -45,19 +47,19 @@ class Autografs(object):
         """
         TODO
         """
+        topology = Topology(name  = topology_name,
+                            atoms = self.topologies[topology_name])
         # container for the aligned SBUs
         aligned  = Framework()
+        aligned.set_topology(topology=topology.get_atoms())
         alpha    = 0.0
-        # get the data from dictionaries
-        topology_data = self.topologies[topology_name]
         # identify the corresponding SBU
-        sbu_dict = self.get_sbu_dict(topology=topology_data,sbu_names=sbu_names)
+        if sbu_dict is None:
+            sbu_dict = self.get_sbu_dict(topology=topology,
+                                         sbu_names=sbu_names)
         # carry on
-        fragments = topology_data["Fragments"]
-        topology  = topology_data["Topology"]
-        aligned.set_topology(topology=topology)
-        for fragment_idx,sbu_data in sbu_dict.items():
-            fragment = fragments[fragment_idx][2]
+        for fragment_idx,sbu in sbu_dict.items():
+            fragment = topology.fragments[fragment_idx]
             sbu         = sbu_data["SBU"]
             has_mmtypes = ("mmtypes" in sbu.info.keys())
             has_bonds   = ("bonds" in sbu.info.keys())
@@ -78,21 +80,27 @@ class Autografs(object):
     def get_sbu_dict(self,
                      topology  : dict,
                      sbu_names : list) -> dict:
+        """Return a dictionary of SBU by corresponding fragment.
+
+        This stage get a one to one correspondance between
+        each topology slot and an available SBU from the list of names.
+        TODO: For now, we take the first available if more are given,
+        but we should be able to pass this directly to the class,
+        or a dictionary of probabilities for the different SBU.
+        We also need to implement a check on symmetry operators,
+        to catch stuff like 'squares cannot fit in a rectangle slot'.
+        topology  -- the Topology object
+        sbu_names -- the list of SBU names as strings
         """
-        TODO
-        """
+        from collections import defaultdict
         sbu_dict = {}
-        shapes = {shape:[] for shape in topology["Shapes"]}
-        for idx,(s0,s1,_,_) in topology["Fragments"].items():
-            shapes[(s0,s1)].append(idx)
-        for shape,indices in shapes.items():        
-            sbu_data = [self.sbu[s] for s in sbu_names if self.sbu[s]["Shape"]==shape]
-            if len(sbu_data)==len(indices):
-                for idx,sbdat in zip(indices,sbu_data):
-                    sbu_dict[idx] = sbdat
-            else:
-                for idx in indices:
-                    sbu_dict[idx] = sbu_data[0]
+        for index,shape in topology.shapes.items():        
+            by_shape = defaultdict(list)
+            for name in sbu_names:
+                sbu = SBU(name=name,atoms=self.sbu[name])
+                by_shape[sbu.shape].append(sbu)
+            # here, should accept probabilities also
+            sbu_dict[index] = random.choice(by_shape[shape])
         return sbu_dict
 
     def align(self,
@@ -141,31 +149,36 @@ class Autografs(object):
         alpha =  alpha*x_ratio
         return this_sbu,alpha
 
-    # def get_scaling_ratio(self):
-# 
-        # return alpha
-        
+
     def list_available_topologies(self,
                                   sbu  : list = [],
                                   full : bool = True) -> list:
-        """
-        TODO
-        """
+        """Return a list of topologies compatible with the SBUs
+
+        For each sbu in the list given in input, refines first by coordination
+        then by shapes within the topology. Thus, we do not need to analyze
+        every topology.
+        sbu  -- list of sbu names
+        full -- wether the topology is entirely represented by the sbu"""
         if sbu:
             topologies = []
             shapes = set([self.sbu[sbuk]["Shape"] for sbuk in sbu])
             for tk,tv in self.topologies.items():
-                tshapes = set(tv["Shapes"])
-                c0 = (all([s in tshapes for s in  shapes]))
-                c1 = (all([s in  shapes for s in tshapes]) and c0)
-                if c1 and full:
-                    topologies.append(tk)
-                elif c0 and not full:
-                    topologies.append(tk)
+                tcord = set(tk.get_atomic_numbers())
+                if any(s[1] in tcord for s in shapes):
+                    tv = Topology(name=tk,atoms=tv)
+                    tshapes = tv.get_unique_shapes()
+                    c0 = (all([s in tshapes for s in  shapes]))
+                    c1 = (all([s in  shapes for s in tshapes]) and c0)
+                    if c1 and full:
+                        topologies.append(tk)
+                    elif c0 and not full:
+                        topologies.append(tk)
+                else:
+                    continue
         else:
             topologies = list(self.topologies.keys())
         return topologies
-
 
     def list_available_sbu(self,
                            topology : str) -> dict:
