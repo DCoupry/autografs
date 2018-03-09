@@ -7,9 +7,8 @@ Complete manual coming very soon...
 
 Dependencies to install first
 
-1. python 2.7
+1. python 3.6
 2. ase
-3. pandas
 
 Clone this repository and add it to you pythonpath:
 ```
