@@ -12,7 +12,6 @@ __status__  = "alpha"
 import os
 import sys
 import numpy
-import random
 import ase
 import scipy
 import scipy.optimize
@@ -68,8 +67,19 @@ class Autografs(object):
         if sbu_dict is None:
             sbu_dict = self.get_sbu_dict(topology=topology,
                                          sbu_names=sbu_names)
+        else:
+            # the sbu_dict has been passed. if not SBU object, create them
+            for k,v in sbu_dict.item():
+                if not isinstance(v,SBU):
+                    assert isinstance(v,ase.Atoms)
+                    if "name" in v.info.keys():
+                        name = v.info["name"]
+                    else:
+                        name = str(k)
+                    sbu_dict[k] = SBU(name=name,atoms=v)
         # carry on
         for idx,sbu in sbu_dict.items():
+            print ("{} {} done!".format(sbu.name,idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
             # check if has all info
@@ -105,15 +115,26 @@ class Autografs(object):
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
-        
+        weights  = defaultdict(list)
+        by_shape = defaultdict(list)
+        for name in sbu_names:
+            # create the SBU object
+            sbu = SBU(name=name,atoms=self.sbu[name])
+            # check if probability is included
+            if isinstance(name,tuple):
+                name,p = name
+                p    = float(p)
+                name = str(name)
+                weights[sbu.shape].append(p)
+            else:
+                weights[sbu.shape].append(1.0)
+            by_shape[sbu.shape].append(sbu)
+        # now fill the choices
         sbu_dict = {}
         for index,shape in topology.shapes.items():        
-            by_shape = defaultdict(list)
-            for name in sbu_names:
-                sbu = SBU(name=name,atoms=self.sbu[name])
-                by_shape[sbu.shape].append(sbu)
-            # here, should accept probabilities also
-            sbu_dict[index] = random.choice(by_shape[shape])
+            # here, should accept weights also
+            sbu_dict[index] = numpy.random.choice(by_shape[shape],
+                                                  p=weights[shape])
         return sbu_dict
 
     def align(self,
@@ -205,8 +226,7 @@ class Autografs(object):
         return topologies
 
     def list_available_sbu(self,
-                           topology_name : str  = None,
-                           use_symmops   : bool = True) -> dict:
+                           topology_name : str  = None) -> dict:
         """Return the dictionary of compatible SBU.
         
         Filters the existing SBU by shape until only
@@ -214,26 +234,30 @@ class Autografs(object):
         TODO: use the symmetry operators instead of the shape itself.
         topology -- name of the topology in the database
         """
-        sbu = defaultdict(list)
+        av_sbu = defaultdict(list)
         if topology_name is not None:
-            topology = Topology(name=topology_name,atoms=self.topologies[topology])
+            topology = Topology(name=topology_name,
+                                atoms=self.topologies[topology])
+            topops = topology.get_unique_operations()
             shapes = topology.get_unique_shapes()
             # filter according to coordination first
             for sbuk,sbuv in self.sbu.items():
                 c = len([x for x in sbuv if x.symbol=="X"])
                 for shape in shapes:
+                    # first condition is coordination
                     if c==shape[1]:
-                        sbu[shape].append(sbuk)
-            if use_symmops:
-                topops = topology.get_unique_operations()
-                
+                        # now check symmops
+                        sbu = SBU(name=sbuk,
+                                  atoms=sbuv)
+                        if sbu.is_compatible(topops[shape]):
+                            av_sbu[shape].append(sbuk)
             else:
                 for shape in shapes:
-                    sbu[shape] = [sbuk for sbuk in sbu[shape] 
+                    av_sbu[shape] = [sbuk for sbuk in av_sbu[shape] 
                                        if self.sbu[sbuk]["Shape"]==shape]
         else:
-            sbu = list(self.sbu.keys())
-        return sbu
+            av_sbu = list(self.sbu.keys())
+        return av_sbu
 
 
 

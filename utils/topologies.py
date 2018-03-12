@@ -19,7 +19,7 @@ from ase              import Atom, Atoms
 from ase.spacegroup   import crystal
 from ase.data         import chemical_symbols
 from ase.neighborlist import NeighborList
-
+from collections import Counter
 
 from scipy.cluster.hierarchy import fclusterdata as cluster
 from progress.bar            import Bar
@@ -69,11 +69,13 @@ class Topology(object):
             symmops = self.symmops[idx]
             these_ops = []
             for s,o in symmops:
-                these_ops.append("{0}{1}".format(s,o[0]))
+                if s is not "I":
+                    sym = "{0}{1}".format(s,o[0])
+                elif o is not None:
+                    sym = "I"
+                these_ops.append(sym)
             ops[shape] = [(o,these_ops.count(o)) for o in set(these_ops)]
         return ops
-
-
 
     def _get_cutoffs(self,
                      Xis : numpy.ndarray,

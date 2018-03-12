@@ -16,6 +16,7 @@ from scipy.sparse import csgraph
 from ase.data import covalent_radii
 from ase.neighborlist import NeighborList
 from ase import Atom
+import ase
 from itertools import combinations
 from ase.visualize import view
 

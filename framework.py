@@ -21,6 +21,7 @@ from autografs.utils.topologies import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
 
 
+
 class Framework(object):
     """
     The Framework object contain the results of an Autografs run.
@@ -55,6 +56,41 @@ class Framework(object):
         self.mmtypes  : numpy.ndarray = mmtypes
         self.bonds    : numpy.ndarray = bonds
         return None
+
+    def __contains__(self, 
+                     obj : object) -> None:
+        """Iterable intrinsic"""
+        r = False
+        if hasattr(obj, 'atoms'):
+            r = any([obj.atoms==sbu.atoms for sbu in self.SBU.values()])
+        return r
+
+    def __delitem__(self,
+                    key : str) -> None:
+        """Indexable intrinsic"""
+        del self.SBU[key]
+        return None
+
+    def __setitem__(self,
+                    key : str,
+                    obj : object) -> None:
+        """Indexable intrinsic"""
+        if hasattr(obj, 'atoms'):
+            self.SBU[key] = object
+        return None
+
+    def __getitem__(self,
+                    key : str) -> None:
+        """Indexable intrinsic"""
+        return self.SBU[key]
+
+    def __len__(self):
+        """Sizeable intrinsic"""
+        return len(self.SBU)
+
+    def __iter__(self):
+        """Iterable intrinsic"""
+        return iter(self.SBU.values())
 
     def set_topology(self,
                      topology : ase.Atoms) -> None:
@@ -159,10 +195,30 @@ class Framework(object):
         self.scale(alpha=alpha)
         return None
 
-    def rotate(self):
+    def rotate(self,
+               index : int,
+               angle : float) -> None:
+        """Rotate the SBU at index around a Cinf symmetry axis"""
+        sbu = self.SBU[index]
+        if sbu.shape[1]==2:
+            axis = [x.position for x in sbu.atoms if x.symbol=="X"]
+            axis = numpy.asarray(axis)
+            self.SBU[index].atoms.rotate(v=axis,a=angle)
         return None
 
-    def flip(self):
+    def flip(self,
+             index : int) -> None:
+        """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
+        sbu    = self.SBU[index]
+        if sbu.shape[1]==2:
+            axis = [x.position for x in sbu.atoms if x.symbol=="X"]
+            axis = numpy.asarray(axis)
+            self.SBU[index].atoms.rotate(v=axis,a=180.0)
+        else:
+            sigmav = [op[2] for op in sbu.symmops["sigma"] if op[0]=="v"]
+            if sigmav:
+                pos = sbu.atoms.positions.dot(sigmav[0])
+                self.SBU[index].atoms.set_positions(pos)
         return None
 
     def functionalize(self):
@@ -184,6 +240,7 @@ class Framework(object):
         mmtypes   = self.mmtypes.copy()  
         for sbu in self.SBU.values():
             structure += sbu
+        symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
@@ -194,7 +251,7 @@ class Framework(object):
                 if len(pair)==1:
                     xi0 = pair[0]
                     xis.remove(xi0)
-                    structure.symbols[xi0] = "H"
+                    symbols[xi0] = "H"
                     mmtypes[xi0] = "H_" 
                 else:
                     xi0,xi1 = pair
@@ -205,7 +262,7 @@ class Framework(object):
                         xis.remove(xi0)
                         xis.remove(xi1)
                         if len(bonds1)==0:
-                            structure.symbols[xi1] = "H"
+                            symbols[xi1] = "H"
                             mmtypes[xi0] = "H_" 
                     else:
                         # the bond order will be the maximum one
@@ -217,6 +274,7 @@ class Framework(object):
                         ix        = numpy.ix_(bonds1,bonds0)
                         bonds[ix] = bo
             # book keeping on what has disappeared
+            structure.set_chemical_symbols(symbols)
             bonds   = numpy.delete(bonds,xis,axis=0)
             bonds   = numpy.delete(bonds,xis,axis=1)
             mmtypes = numpy.delete(mmtypes,xis)

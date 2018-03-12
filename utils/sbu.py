@@ -20,6 +20,7 @@ from ase.visualize    import view
 from ase.data         import chemical_symbols
 from ase.neighborlist import NeighborList
 
+from collections import Counter
 
 from scipy.cluster.hierarchy import fclusterdata as cluster
 from progress.bar            import Bar
@@ -27,6 +28,7 @@ import warnings
 
 
 from autografs.utils.pointgroup import PointGroup
+from autografs.utils.mmanalysis import analyze_mm 
 from autografs.utils            import __data__
 
 
@@ -40,18 +42,48 @@ class SBU(object):
         """Constructor for a building unit, from an ASE Atoms."""
         self.name  = name
         self.atoms = atoms 
-        # initialize empty shape
-        # shapes and symmops will be used to find
-        # corresponding SBUs.
-        dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
-        pg = PointGroup(dummies,0.3)
-        self.shape    = (pg.schoenflies,len(dummies))
-        self.symmops  = pg.symmops
+        self._analyze()
         return None
+
+    def is_compatible(self,
+                      symmops : list ) -> bool:
+        """Return True if symmetry compatible with symmops.
+        
+        For an SBU to be compatible for alignment with a topology slot
+        it has to have at least as many symmetry operators as the slot for
+        each type of symmetry. We assme the coordination is checked elsewhere.
+        symmops -- (op type, count). e.g: ("C2",5) means 5 C2 in the slot.
+        """
+        compatible = True
+        for optype,count in symmops:
+            ops1 = self.symmops[optype]
+            if optype=="I":
+                i0 = (ops1 is None)
+                i1 = (ops0 is None)
+                compatible = (i0==i1)
+            else:
+                # we only care about the order
+                o0 = Counter([o[0] for o in ops0])
+                o1 = Counter([o[0] for o in ops1])
+                compatible = all([o1[o]>=o0[o] for o in o0.keys()])
+            if not compatible:
+                break
+        return compatible
 
     def get_atoms(self) -> ase.Atoms:
         """Return a copy of the topology as ASE Atoms."""
         return self.atoms.copy()
+
+    def _analyze(self) -> None:
+        """Guesses the mmtypes, bonds and pointgroup"""
+        dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
+        pg = PointGroup(dummies,0.3)
+        bonds,mmtypes = analyze_mm(self.get_atoms())
+        self.shape    = (pg.schoenflies,len(dummies))
+        self.symmops  = pg.symmops
+        self.bonds    = bonds
+        self.mmtypes  = mmtypes
+        return None
 
 
 
