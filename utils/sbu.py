@@ -45,6 +45,13 @@ class SBU(object):
         self._analyze()
         return None
 
+    def __repr__(self) -> str:
+        """Return representation for nice printing"""
+        return str(self.name)
+
+    def copy(self):
+        return SBU(name=self.name,atoms=self.atoms.copy())
+
     def is_compatible(self,
                       symmops : list ) -> bool:
         """Return True if symmetry compatible with symmops.

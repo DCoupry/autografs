@@ -143,8 +143,8 @@ class Framework(object):
         # then center the SBUs on this position
         for i,sbu in self.SBU.items():
             center = self.topology[i]
-            cop    = sbu.positions.mean(axis=0)
-            sbu.positions += center.position - cop
+            cop    = sbu.atoms.positions.mean(axis=0)
+            sbu.atoms.positions += center.position - cop
         return None
 
     def refine(self,
@@ -156,19 +156,15 @@ class Framework(object):
         identical tags in the complete structure
         alpha0 -- starting point of the scaling search algorithm
         """
-        import copy
         def MSE(x : numpy.ndarray) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
             x = x*alpha0
-            old_sbu  = copy.deepcopy(self.SBU)
-            old_topo = self.topology.copy() 
             self.scale(alpha=x)
             atoms        = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
             # reinitialize stuff
-            self.SBU      = old_sbu
-            self.topology = old_topo
+            self.scale(alpha=1.0/x)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
             pairs =  numpy.asarray(pairs).reshape(-1,2)
@@ -199,26 +195,29 @@ class Framework(object):
                index : int,
                angle : float) -> None:
         """Rotate the SBU at index around a Cinf symmetry axis"""
-        sbu = self.SBU[index]
-        if sbu.shape[1]==2:
-            axis = [x.position for x in sbu.atoms if x.symbol=="X"]
+        if self[index].shape[1]==2:
+            axis = [x.position for x in self[index].atoms 
+                               if x.symbol=="X"]
             axis = numpy.asarray(axis)
-            self.SBU[index].atoms.rotate(v=axis,a=angle)
+            axis = axis[0]-axis[1]
+            self[index].atoms.rotate(v=axis,a=angle)
         return None
 
     def flip(self,
              index : int) -> None:
         """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
-        sbu    = self.SBU[index]
-        if sbu.shape[1]==2:
-            axis = [x.position for x in sbu.atoms if x.symbol=="X"]
+        if self[index].shape[1]==2:
+            axis = [x.position for x in self[index].atoms 
+                               if x.symbol=="X"]
             axis = numpy.asarray(axis)
-            self.SBU[index].atoms.rotate(v=axis,a=180.0)
+            axis = axis[0]-axis[1]
+            self[index].atoms.rotate(v=axis,a=180.0)
         else:
-            sigmav = [op[2] for op in sbu.symmops["sigma"] if op[0]=="v"]
+            sigmav = [op[2] for op in self.SBU[index].symmops["sigma"]
+                            if op[0]=="v"]
             if sigmav:
                 pos = sbu.atoms.positions.dot(sigmav[0])
-                self.SBU[index].atoms.set_positions(pos)
+                self[index].atoms.set_positions(pos)
         return None
 
     def functionalize(self):
@@ -238,15 +237,17 @@ class Framework(object):
         structure = ase.Atoms(cell=cell,pbc=pbc)
         bonds     = self.bonds.copy()
         mmtypes   = self.mmtypes.copy()  
-        for sbu in self.SBU.values():
-            structure += sbu
+        for sbu in self:
+            structure += sbu.atoms
         symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
             tags  = structure.get_tags()
+            print(tags)
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
             for pair in pairs:
+                print(pair)
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
                     xi0 = pair[0]

@@ -79,7 +79,6 @@ class Autografs(object):
                     sbu_dict[k] = SBU(name=name,atoms=v)
         # carry on
         for idx,sbu in sbu_dict.items():
-            print ("{} {} done!".format(sbu.name,idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
             # check if has all info
@@ -95,7 +94,9 @@ class Autografs(object):
             sbu_atoms,f = self.align(fragment=fragment_atoms,
                                sbu=sbu_atoms)
             alpha += f
-            aligned.append(index=idx,sbu=sbu_atoms,mmtypes=sbu_types,bonds=sbu_bonds)
+            sbu.atoms.positions = sbu_atoms.positions
+            sbu.atoms.set_tags(sbu_atoms.get_tags())
+            aligned.append(index=idx,sbu=sbu,mmtypes=sbu_types,bonds=sbu_bonds)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
@@ -134,7 +135,7 @@ class Autografs(object):
         for index,shape in topology.shapes.items():        
             # here, should accept weights also
             sbu_dict[index] = numpy.random.choice(by_shape[shape],
-                                                  p=weights[shape])
+                                                  p=weights[shape]).copy()
         return sbu_dict
 
     def align(self,
