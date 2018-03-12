@@ -60,6 +60,21 @@ class Topology(object):
         """Return all unique shapes in the topology."""
         return set(self.shapes.values())
 
+    def get_unique_operations(self) -> dict:
+        """Return all unique symmetry operations in the topology."""
+        ops = {}
+        for idx,shape in self.shapes.items():
+            if shape in ops.keys():
+                continue
+            symmops = self.symmops[idx]
+            these_ops = []
+            for s,o in symmops:
+                these_ops.append("{0}{1}".format(s,o[0]))
+            ops[shape] = [(o,these_ops.count(o)) for o in set(these_ops)]
+        return ops
+
+
+
     def _get_cutoffs(self,
                      Xis : numpy.ndarray,
                      Ais : numpy.ndarray) -> numpy.ndarray:

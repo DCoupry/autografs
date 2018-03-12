@@ -16,7 +16,7 @@ import random
 import ase
 import scipy
 import scipy.optimize
-
+from collections import defaultdict
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
@@ -105,7 +105,7 @@ class Autografs(object):
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
-        from collections import defaultdict
+        
         sbu_dict = {}
         for index,shape in topology.shapes.items():        
             by_shape = defaultdict(list)
@@ -205,7 +205,8 @@ class Autografs(object):
         return topologies
 
     def list_available_sbu(self,
-                           topology : str) -> dict:
+                           topology_name : str  = None,
+                           use_symmops   : bool = True) -> dict:
         """Return the dictionary of compatible SBU.
         
         Filters the existing SBU by shape until only
@@ -213,11 +214,25 @@ class Autografs(object):
         TODO: use the symmetry operators instead of the shape itself.
         topology -- name of the topology in the database
         """
-        sbu = {shape:list(self.sbu.keys()) for shape in shapes}
-        if topology:
-            shapes = self.topologies[topology]["Shapes"]
-            for shape in shapes:
-                sbu[shape] = [sbuk for sbuk in sbu[shape] if self.sbu[sbuk]["Shape"]==shape]
+        sbu = defaultdict(list)
+        if topology_name is not None:
+            topology = Topology(name=topology_name,atoms=self.topologies[topology])
+            shapes = topology.get_unique_shapes()
+            # filter according to coordination first
+            for sbuk,sbuv in self.sbu.items():
+                c = len([x for x in sbuv if x.symbol=="X"])
+                for shape in shapes:
+                    if c==shape[1]:
+                        sbu[shape].append(sbuk)
+            if use_symmops:
+                topops = topology.get_unique_operations()
+                
+            else:
+                for shape in shapes:
+                    sbu[shape] = [sbuk for sbuk in sbu[shape] 
+                                       if self.sbu[sbuk]["Shape"]==shape]
+        else:
+            sbu = list(self.sbu.keys())
         return sbu
 
 

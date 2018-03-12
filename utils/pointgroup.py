@@ -1,9 +1,9 @@
 #!/usr/bin/env python3.6
 # -*- coding: utf-8 -*-
-# Copyright : see accompanying license files for details
+# Heavily adapted from the pymatgen library
 
 __author__  = "Damien Coupry"
-__credits__ = ["Prof. Matthew Addicoat"]
+__credits__ = ["Prof. Matthew Addicoat","Shyue Ping Ong"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
 __version__ = 2.0
