@@ -197,8 +197,8 @@ class Autografs(object):
         return None
 
     def list_available_topologies(self,
-                                  sbu  : list = [],
-                                  full : bool = True) -> list:
+                                  sbu_names  : list = [],
+                                  full       : bool = True) -> list:
         """Return a list of topologies compatible with the SBUs
 
         For each sbu in the list given in input, refines first by coordination
@@ -206,24 +206,22 @@ class Autografs(object):
         every topology.
         sbu  -- list of sbu names
         full -- wether the topology is entirely represented by the sbu"""
-        if sbu:
-            topologies = []
-            shapes = set([self.sbu[sbuk]["Shape"] for sbuk in sbu])
-            for tk,tv in self.topologies.items():
-                tcord = set(tk.get_atomic_numbers())
-                if any(s[1] in tcord for s in shapes):
-                    tv = Topology(name=tk,atoms=tv)
-                    tshapes = tv.get_unique_shapes()
-                    c0 = (all([s in tshapes for s in  shapes]))
-                    c1 = (all([s in  shapes for s in tshapes]) and c0)
-                    if c1 and full:
-                        topologies.append(tk)
-                    elif c0 and not full:
-                        topologies.append(tk)
-                else:
-                    continue
-        else:
-            topologies = list(self.topologies.keys())
+        # if sbu_names:
+        #     topologies = []
+        #     sbu = [SBU(name=n,atoms=self.topologies[n]) for n in sbu_names]
+        #     for tk in self.topologies.keys():
+
+        #         av_sbu = self.list_available_sbu(topology_name=tk)
+        #         slot_filled = numpy.zeros(len(av_sbu),dtype=bool)
+        #         # for slotk,slotv in av_sbu.items():
+        #         #     [s in slotv for s in sbu_names]
+        #         # all the SBU are here, and all slots are filled
+        #         c0 = all([any([s in av for av in av_sbu.values()]) for s in sbu_names])
+        #         # all the sbu are here, and some slots are not filled
+        #         c1 = all([any([s in av for av in av_sbu.values()]) for s in sbu_names])
+
+        # else:
+        topologies = list(self.topologies.keys())
         return topologies
 
     def list_available_sbu(self,
@@ -238,7 +236,7 @@ class Autografs(object):
         av_sbu = defaultdict(list)
         if topology_name is not None:
             topology = Topology(name=topology_name,
-                                atoms=self.topologies[topology])
+                                atoms=self.topologies[topology_name])
             topops = topology.get_unique_operations()
             shapes = topology.get_unique_shapes()
             # filter according to coordination first
@@ -250,15 +248,13 @@ class Autografs(object):
                         # now check symmops
                         sbu = SBU(name=sbuk,
                                   atoms=sbuv)
-                        if sbu.is_compatible(topops[shape]):
+                        if sbu.shape == shape:
                             av_sbu[shape].append(sbuk)
-            else:
-                for shape in shapes:
-                    av_sbu[shape] = [sbuk for sbuk in av_sbu[shape] 
-                                       if self.sbu[sbuk]["Shape"]==shape]
+                        elif sbu.is_compatible(topops[shape]):
+                            av_sbu[shape].append(sbuk)
         else:
             av_sbu = list(self.sbu.keys())
-        return av_sbu
+        return dict(av_sbu)
 
 
 

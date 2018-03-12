@@ -244,10 +244,8 @@ class Framework(object):
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
             tags  = structure.get_tags()
-            print(tags)
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
             for pair in pairs:
-                print(pair)
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
                     xi0 = pair[0]

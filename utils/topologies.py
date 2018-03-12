@@ -68,13 +68,17 @@ class Topology(object):
                 continue
             symmops = self.symmops[idx]
             these_ops = []
-            for s,o in symmops:
-                if s is not "I":
-                    sym = "{0}{1}".format(s,o[0])
-                elif o is not None:
-                    sym = "I"
-                these_ops.append(sym)
-            ops[shape] = [(o,these_ops.count(o)) for o in set(these_ops)]
+            for s,o in symmops.items():
+                if o is None:
+                    continue
+                elif len(o)>0 and s not in ["I","-I"]:
+                    sym = ["{0}{1}".format(s,this_o[0]) for this_o in o]
+                elif len(o)>0 and o is not None:
+                    sym = [s,]
+                else:
+                    sym = []
+                these_ops += sym
+            ops[shape] = {o:these_ops.count(o) for o in set(these_ops)}
         return ops
 
     def _get_cutoffs(self,

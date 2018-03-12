@@ -42,6 +42,9 @@ class SBU(object):
         """Constructor for a building unit, from an ASE Atoms."""
         self.name  = name
         self.atoms = atoms 
+        self.symmops = {}
+        self.mmtypes = []
+        self.bonds   = []
         self._analyze()
         return None
 
@@ -52,27 +55,38 @@ class SBU(object):
     def copy(self):
         return SBU(name=self.name,atoms=self.atoms.copy())
 
+    def get_unique_operations(self) -> dict:
+        """Return all unique symmetry operations in the topology."""
+        these_ops = []
+        for s,o in self.symmops.items():
+            if o is None:
+                continue
+            elif len(o)>0 and s not in ["I","-I"]:
+                sym = ["{0}{1}".format(s,this_o[0]) for this_o in o]
+            elif len(o)>0 and o is not None:
+                sym = [s,]
+            else:
+                sym = []
+            these_ops += sym
+        ops = {o:these_ops.count(o) for o in set(these_ops)}
+        return ops
+
     def is_compatible(self,
                       symmops : list ) -> bool:
         """Return True if symmetry compatible with symmops.
         
         For an SBU to be compatible for alignment with a topology slot
         it has to have at least as many symmetry operators as the slot for
-        each type of symmetry. We assme the coordination is checked elsewhere.
+        each type of symmetry. We assume the coordination is checked elsewhere.
         symmops -- (op type, count). e.g: ("C2",5) means 5 C2 in the slot.
         """
         compatible = True
-        for optype,count in symmops:
-            ops1 = self.symmops[optype]
-            if optype=="I":
-                i0 = (ops1 is None)
-                i1 = (ops0 is None)
-                compatible = (i0==i1)
-            else:
-                # we only care about the order
-                o0 = Counter([o[0] for o in ops0])
-                o1 = Counter([o[0] for o in ops1])
-                compatible = all([o1[o]>=o0[o] for o in o0.keys()])
+        sbuops = self.get_unique_operations()
+        for s,o in symmops.items():
+            if s not in sbuops.keys():
+                compatible = False
+            elif o>sbuops[s]:
+                 compatible = False
             if not compatible:
                 break
         return compatible
@@ -84,7 +98,7 @@ class SBU(object):
     def _analyze(self) -> None:
         """Guesses the mmtypes, bonds and pointgroup"""
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
-        pg = PointGroup(dummies,0.3)
+        pg = PointGroup(dummies,0.1)
         bonds,mmtypes = analyze_mm(self.get_atoms())
         self.shape    = (pg.schoenflies,len(dummies))
         self.symmops  = pg.symmops
