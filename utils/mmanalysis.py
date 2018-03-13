@@ -52,7 +52,7 @@ def read_uff_library(library : str = "uff4mof") -> numpy.ndarray:
 
 def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
     """Guesses the bond order in neighbourlist based on covalent radii 
-    the radii for BO > 1 are extrapolated by removing 0.15 Angstroms by order 
+    the radii for BO > 1 are extrapolated by removing 0.1 Angstroms by order 
     see Beatriz Cordero, Veronica Gomez, Ana E. Platero-Prats, Marc Reves, Jorge Echeverria,
     Eduard Cremades, Flavia Barragan and Santiago Alvarez (2008). 
     "Covalent radii revisited". 
@@ -64,12 +64,12 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
     symbols   = numpy.array(sbu.get_chemical_symbols())
     numbers   = numpy.array(sbu.get_atomic_numbers())
     positions = numpy.array(sbu.get_positions())
-    BO1 = numpy.array([covalent_radii[n] if n>0 else 0.70 for n in numbers])
-    BO2 = BO1 - 0.15
-    BO3 = BO2 - 0.15
-    nl1 = NeighborList(cutoffs=BO1,bothways=True,self_interaction=False,skin=0.3)
-    nl2 = NeighborList(cutoffs=BO2,bothways=True,self_interaction=False,skin=0.3)
-    nl3 = NeighborList(cutoffs=BO3,bothways=True,self_interaction=False,skin=0.3)
+    BO1 = numpy.array([covalent_radii[n] if n>0 else 0.35 for n in numbers])
+    BO2 = BO1 - 0.1
+    BO3 = BO2 - 0.1
+    nl1 = NeighborList(cutoffs=BO1,bothways=True,self_interaction=False,skin=0.1)
+    nl2 = NeighborList(cutoffs=BO2,bothways=True,self_interaction=False,skin=0.1)
+    nl3 = NeighborList(cutoffs=BO3,bothways=True,self_interaction=False,skin=0.1)
     nl1.build(sbu); nl2.build(sbu); nl3.build(sbu)
     for atom in sbu:
         i1, _ = nl1.get_neighbors(atom.index)

@@ -16,6 +16,8 @@ import scipy
 import typing
 import ase
 
+from collections import defaultdict
+
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
@@ -49,12 +51,14 @@ class Framework(object):
         mmtypes  -- array of type names. e.g: 'C_R','O_3'...
         bonds    -- block-symmetric matrix of bond orders.
         """
-        mmtypes = numpy.asarray(mmtypes)
-        bonds   = numpy.asarray(bonds)
-        self.topology : ase.Atoms     = topology
-        self.SBU      : dict          = SBU
-        self.mmtypes  : numpy.ndarray = mmtypes
-        self.bonds    : numpy.ndarray = bonds
+        self.topology = topology
+        self.SBU      = SBU
+        self.mmtypes  = numpy.asarray(mmtypes)
+        self.bonds    = numpy.asarray(bonds)
+        # keep a dict of elements to delete in 
+        # each SBU at connection time. Necessary for example
+        # during iterative functionalization.
+        self._todel = defaultdict(list)
         return None
 
     def __contains__(self, 
@@ -90,7 +94,7 @@ class Framework(object):
 
     def __iter__(self):
         """Iterable intrinsic"""
-        return iter(self.SBU.values())
+        return iter(self.SBU.items())
 
     def set_topology(self,
                      topology : ase.Atoms) -> None:
@@ -141,7 +145,7 @@ class Framework(object):
         cell = cell.dot(I/numpy.linalg.norm(cell,axis=0))
         self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
-        for i,sbu in self.SBU.items():
+        for i,sbu in self:
             center = self.topology[i]
             cop    = sbu.atoms.positions.mean(axis=0)
             sbu.atoms.positions += center.position - cop
@@ -213,14 +217,91 @@ class Framework(object):
             axis = axis[0]-axis[1]
             self[index].atoms.rotate(v=axis,a=180.0)
         else:
-            sigmav = [op[2] for op in self.SBU[index].symmops["sigma"]
+            sigmav = [op[2] for op in self[index].symmops["sigma"]
                             if op[0]=="v"]
             if sigmav:
-                pos = sbu.atoms.positions.dot(sigmav[0])
+                cop = sbu.atoms.positions.mean(axis=0)
+                pos = sbu.atoms.positions - cop
+                pos = pos.dot(sigmav[0])  + cop
                 self[index].atoms.set_positions(pos)
         return None
 
-    def functionalize(self):
+    def list_functionalizable_sites(self,symbol=None) -> list:
+        """Return a list of tuple for functionalizable sites"""
+        sites = []
+        for idx,sbu in self:
+            bonds = sbu.bonds
+            for atom in sbu.atoms:
+                if symbol is not None and atom.symbol!=symbol:
+                    continue
+                bidx = numpy.where(bonds[atom.index,:]>0.0)[0]
+                if len(bidx)!=1:
+                    continue
+                elif bonds[atom.index,bidx[0]]!=1.0:
+                    continue
+                else:
+                    sites.append((idx,atom.index))
+        return sites
+
+    def functionalize(self,
+                      where : tuple,
+                      fg    : ase.Atoms) -> None:
+        """Modify a valid slot atom to become a functional group.
+        
+        The specified slot index and atom index within the slot
+        are examined: if the corresponding atom is a single
+        atom connected by a bond order of 1 to exactly one other
+        atom, it can be functionalized. The given functional group
+        has to have exactly one dummy atom. For best performance,
+        set the x-func distance at the C-H bond distance.
+        where -- (slot index, atom index)
+        fg    -- ASE Atoms to replace the atom in where by.
+        TODO : move the SBU import to toplevel
+        """
+        from autografs.utils.sbu import SBU
+        sidx, aidx = where
+        # create the SBU object for the functional group
+        fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
+        fg = SBU(name=fg_name,atoms=fg)
+        print(fg.bonds)
+        # center the positions
+        fg_cop = fg.atoms.positions.mean(axis=0)
+        fg.atoms.positions -= fg_cop
+        # check that only one dummy exists
+        xidx = [x.index for x in fg.atoms if x.symbol=="X"]
+        assert len(xidx)==1
+        xidx  = xidx[0]
+        # center the sbu
+        sbu   = self.SBU[sidx].atoms
+        sbu_name = self.SBU[sidx].name
+        sbu_cop = sbu.positions.mean(axis=0)
+        sbu.positions -= sbu_cop
+        # find the bonds
+        bonds = self.SBU[sidx].bonds
+        bidx  = numpy.where(bonds[aidx]>0.0)[0]
+        print(aidx,bidx,bonds[aidx,bidx[0]])
+        # check that only one bond exists
+        assert len(bidx)==1 and bonds[aidx,bidx[0]]==1.0
+        # now get vectors to align
+        fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
+        print(xidx,fgbidx,fg.bonds[xidx,fgbidx[0]])
+        assert len(fgbidx)==1 and fg.bonds[xidx,fgbidx]==1.0
+        # func-x
+        v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
+        # where[1]-bonded atom
+        v1 = sbu.positions[aidx]-sbu.positions[bidx]
+        R,s = scipy.linalg.orthogonal_procrustes(v0,v1)
+        fg.atoms.positions = fg.atoms.positions.dot(R)
+        fg.atoms.positions -= fg.atoms.positions[xidx]
+        fg.atoms.positions += sbu.positions[bidx]
+        # create the new object
+        # keep note of what to delete.
+        self._todel[sidx].append(aidx)
+        del fg.atoms[xidx]
+        sbu += fg.atoms
+        sbu.positions += sbu_cop
+        self.SBU[sidx].set_atoms(sbu,analyze=False)
+        print("***")
         return None
 
     def get_atoms(self,
@@ -237,7 +318,8 @@ class Framework(object):
         structure = ase.Atoms(cell=cell,pbc=pbc)
         bonds     = self.bonds.copy()
         mmtypes   = self.mmtypes.copy()  
-        for sbu in self:
+        for idx,sbu in self:
+            del sbu.atoms[self._todel[idx]]
             structure += sbu.atoms
         symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:

@@ -52,6 +52,15 @@ class SBU(object):
         """Return representation for nice printing"""
         return str(self.name)
 
+    def set_atoms(self,
+                  atoms   : ase.Atoms,
+                  analyze : bool = False) -> None:
+        """Set new Atoms object and reanalyze"""
+        self.atoms = atoms
+        if analyze:
+            self._analyze()
+        return None
+
     def copy(self):
         return SBU(name=self.name,atoms=self.atoms.copy())
 
