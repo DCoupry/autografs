@@ -181,7 +181,7 @@ class Framework(object):
             # scale with this parameter
             x = x*alpha0
             self.scale(alpha=x)
-            atoms        = self.get_atoms(dummies=True)
+            atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
             # reinitialize stuff
             self.scale(alpha=1.0/x)
@@ -374,4 +374,17 @@ class Framework(object):
             bonds   = numpy.delete(bonds,xis,axis=1)
             mmtypes = numpy.delete(mmtypes,xis)
             del structure[xis]
-        return structure
+        return structure, bonds, mmtypes
+
+    def write(self,
+              f   : str = "./mof",
+              ext : str = "gin") -> None:
+        """Write a chemical information file to disk in selected format"""
+        atoms,bonds,mmtypes = self.get_atoms(dummies=False)
+        print(atoms)
+        path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))
+        if ext=="gin":
+            from autografs.utils.io import write_gin
+            write_gin(path,atoms,bonds,mmtypes)
+        else:
+            ase.io.write(path,atoms)

@@ -255,5 +255,6 @@ if __name__ == "__main__":
     sbu_names      = ["Benzene_linear","Zn_mof5_octahedral"]
     topology_name  = "pcu"
     mof = molgen.make(topology_name=topology_name,sbu_names=sbu_names)
-    ase.visualize.view(mof.get_atoms())
+    atoms,_,_ = mof.get_atoms()
+    ase.visualize.view(atoms)
 

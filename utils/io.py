@@ -162,3 +162,60 @@ def read_sbu(path    : None = None,
                 except Exception as e:
                     continue
     return SBUs
+
+
+def write_gin(path,atoms,bonds,mmtypes):
+    with open(path,"w") as fileobj:
+        fileobj.write('opti conp molmec cartesian\n')
+        pbc = atoms.get_pbc()
+        if pbc.any():
+            cell = atoms.get_cell().tolist()
+            if not pbc[2]:
+                fileobj.write('{0}\n'.format('svectors'))
+                fileobj.write('{0:.3f} {1:.3f} {2:.3f}\n'.format(*cell[0]))
+                fileobj.write('{0:.3f} {1:.3f} {2:.3f}\n'.format(*cell[1]))
+            else:
+                fileobj.write('{0}\n'.format('vectors'))
+                fileobj.write('{0:.3f} {1:.3f} {2:.3f}\n'.format(*cell[0]))
+                fileobj.write('{0:.3f} {1:.3f} {2:.3f}\n'.format(*cell[1]))
+                fileobj.write('{0:.3f} {1:.3f} {2:.3f}\n'.format(*cell[2]))
+        fileobj.write('{0}\n'.format('cartesian'))
+        symbols = atoms.get_chemical_symbols()
+        #We need to map MMtypes to numbers. We'll do it via a dictionary
+        symb_types=[]
+        mmdic={}
+        types_seen=1
+        for m,s in zip(mmtypes,symbols):
+            if m not in mmdic:
+                mmdic[m]="{0}{1}".format(s,types_seen)
+                types_seen+=1
+                symb_types.append(mmdic[m])
+            else:
+                symb_types.append(mmdic[m])
+        # write it
+        for s, (x, y, z), in zip(symb_types, atoms.get_positions()):
+            fileobj.write('{0:<4} {1:<7} {2:<15.8f} {3:<15.8f} {4:<15.8f}\n'.format(s,'core',x,y,z))
+        fileobj.write('\n')
+        bondstring = {4:'quadruple',
+                      3:'triple',
+                      2:'double',
+                      1.5:'resonant',
+                      1.0:'',
+                      0.5:'half',
+                      0.25:'quarter'}
+        #write the bonding
+        for (i0,i1),b in numpy.ndenumerate(bonds):
+            if i0<i1 and b>0.0:
+                fileobj.write('{0} {1:<4} {2:<4} {3:<10}\n'.format('connect',i0+1,i1+1,bondstring[b]))
+        fileobj.write('\n')
+        fileobj.write('{0}\n'.format('species'))
+        for  k,v in  mmdic.items():
+            fileobj.write('{0:<5} {1:<5}\n'.format(v,k))
+        fileobj.write('\n')
+        fileobj.write('library uff4mof\n')
+        fileobj.write('\n')
+        name = ".".join(path.split("/")[-1].split(".")[:-1])
+        fileobj.write('output movie xyz {0}.xyz\n'.format(name))
+        if pbc.any():
+            fileobj.write('output cif {0}.cif\n'.format(name))
+        return None
