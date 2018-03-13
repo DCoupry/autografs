@@ -81,22 +81,13 @@ class Autografs(object):
         for idx,sbu in sbu_dict.items():
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
-            # check if has all info
-            sbu_info    = list(sbu.atoms.info.keys())
-            has_mmtypes = ("mmtypes" in sbu_info)
-            has_bonds   = ("bonds"   in sbu_info)
-            if has_bonds and has_mmtypes:
-                sbu_types = sbu.atoms.info["mmtypes"]
-                sbu_bonds = sbu.atoms.info["bonds"]
-            else:
-                sbu_bonds,sbu_types = analyze_mm(sbu.get_atoms())
             # align and get the scaling factor
             sbu_atoms,f = self.align(fragment=fragment_atoms,
                                sbu=sbu_atoms)
             alpha += f
             sbu.atoms.positions = sbu_atoms.positions
             sbu.atoms.set_tags(sbu_atoms.get_tags())
-            aligned.append(index=idx,sbu=sbu,mmtypes=sbu_types,bonds=sbu_bonds)
+            aligned.append(index=idx,sbu=sbu,mmtypes=sbu.mmtypes,bonds=sbu.bonds)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned

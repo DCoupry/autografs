@@ -129,6 +129,22 @@ class Framework(object):
         self.mmtypes = numpy.hstack([self.mmtypes,mmtypes])
         return None
 
+    def get_bonds(self) -> numpy.ndarray:
+        """Return and update the current bond matrix"""
+        bonds = []
+        for _,sbu in self:
+            bonds = scipy.linalg.block_diag(bonds,sbu.bonds)
+        self.bonds = bonds
+        return numpy.copy(self.bonds)
+
+    def get_mmtypes(self) -> numpy.ndarray:
+        """Return and update the current bond matrix"""
+        mmtypes = []
+        for _,sbu in self:
+            mmtypes = numpy.hstack([mmtypes,sbu.mmtypes])
+        self.mmtypes = mmtypes
+        return numpy.copy(self.mmtypes)
+
     def scale(self,
               alpha  : float = 1.0) -> None:
         """Scale the building units positions by a factor alpha.
@@ -263,7 +279,6 @@ class Framework(object):
         # create the SBU object for the functional group
         fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
         fg = SBU(name=fg_name,atoms=fg)
-        print(fg.bonds)
         # center the positions
         fg_cop = fg.atoms.positions.mean(axis=0)
         fg.atoms.positions -= fg_cop
@@ -279,12 +294,10 @@ class Framework(object):
         # find the bonds
         bonds = self.SBU[sidx].bonds
         bidx  = numpy.where(bonds[aidx]>0.0)[0]
-        print(aidx,bidx,bonds[aidx,bidx[0]])
         # check that only one bond exists
         assert len(bidx)==1 and bonds[aidx,bidx[0]]==1.0
         # now get vectors to align
         fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
-        print(xidx,fgbidx,fg.bonds[xidx,fgbidx[0]])
         assert len(fgbidx)==1 and fg.bonds[xidx,fgbidx]==1.0
         # func-x
         v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
@@ -301,7 +314,6 @@ class Framework(object):
         sbu += fg.atoms
         sbu.positions += sbu_cop
         self.SBU[sidx].set_atoms(sbu,analyze=False)
-        print("***")
         return None
 
     def get_atoms(self,
@@ -316,11 +328,13 @@ class Framework(object):
         cell = self.topology.get_cell()
         pbc  = self.topology.get_pbc()
         structure = ase.Atoms(cell=cell,pbc=pbc)
-        bonds     = self.bonds.copy()
-        mmtypes   = self.mmtypes.copy()  
         for idx,sbu in self:
-            del sbu.atoms[self._todel[idx]]
-            structure += sbu.atoms
+            atoms = sbu.atoms
+            del atoms[self._todel[idx]]
+            self[idx].set_atoms(atoms,analyze=True)
+            structure += atoms
+        bonds   = self.get_bonds()
+        mmtypes = self.get_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:
             # keep track of dummies

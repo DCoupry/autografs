@@ -34,7 +34,7 @@ from autografs.utils            import __data__
 
 
 class SBU(object):
-    """Contener class for a building unit information"""
+    """Container class for a building unit information"""
 
     def __init__(self,
                  name  : str,
