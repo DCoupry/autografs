@@ -41,8 +41,9 @@ class Autografs(object):
 
     def make(self,
              topology_name : str,
-             sbu_names     : str  = None,
-             sbu_dict      : dict = None) -> ase.Atoms :
+             sbu_names     : str   = None,
+             sbu_dict      : dict  = None,
+             supercell     : tuple = (1,1,1)) -> ase.Atoms :
         """Create a framework using given topology and sbu.
 
         Main funtion of Autografs. The sbu names and topology's
@@ -57,8 +58,14 @@ class Autografs(object):
                     in the shape {index of slot : 'name of sbu'}
         """
         # ase.visualize.view(self.topologies[topology_name])
+        # make the supercell prior to alignment
+        if isinstance(supercell,int):
+            supercell = (supercell,supercell,supercell)
+        topology_atoms  = self.topologies[topology_name]
+        topology_atoms *= supercell
+        # make the Topology object
         topology = Topology(name  = topology_name,
-                            atoms = self.topologies[topology_name])
+                            atoms = topology_atoms)
         # container for the aligned SBUs
         aligned  = Framework()
         aligned.set_topology(topology=topology.get_atoms())
