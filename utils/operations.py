@@ -87,7 +87,7 @@ def procrustes(X, Y, method="Q"):
         scale = 1.0
     
     elif method == "SVD":
-        u, w, vt = svd(X.T.dot(Y).T)
+        u, w, vt = numpy.linalg.svd(X.T.dot(Y).T)
         R = u.dot(vt)
         scale = w.sum()
 

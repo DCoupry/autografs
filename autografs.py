@@ -22,6 +22,7 @@ from autografs.utils.sbu        import SBU
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.topologies import Topology
 from autografs.framework        import Framework
+from autografs.utils.operations import procrustes
 
 
 
@@ -63,6 +64,8 @@ class Autografs(object):
             supercell = (supercell,supercell,supercell)
         topology_atoms  = self.topologies[topology_name]
         topology_atoms *= supercell
+        print(topology_atoms.get_tags())
+        ase.visualize.view(topology_atoms)
         # make the Topology object
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
@@ -178,6 +181,7 @@ class Autografs(object):
         X0  = sbu_X.get_positions()
         X1  = fragment.get_positions()
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
+        # R,s = procrustes(X0, X1, method="SVD")
         sbu.positions = sbu.positions.dot(R)
         # tag the atoms
         self.tag(sbu,fragment)

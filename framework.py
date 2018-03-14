@@ -241,11 +241,13 @@ class Framework(object):
             x = x*alpha0
             self.scale(alpha=x)
             atoms,_,_    = self.get_atoms(dummies=True)
+            ase.visualize.view(atoms)
             tags         = atoms.get_tags()
             # reinitialize stuff
             self.scale(alpha=1.0/x)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
+            print(tags)
             pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
