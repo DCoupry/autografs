@@ -21,7 +21,6 @@ from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.topologies import Topology
-from autografs.utils.mmanalysis import analyze_mm 
 from autografs.framework        import Framework
 
 
@@ -108,6 +107,7 @@ class Autografs(object):
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
+        print(topology.get_unique_shapes())
         weights  = defaultdict(list)
         by_shape = defaultdict(list)
         for name in sbu_names:
@@ -127,7 +127,8 @@ class Autografs(object):
             by_shape[slot].append(sbu)
         # now fill the choices
         sbu_dict = {}
-        for index,shape in topology.shapes.items():        
+        for index,shape in topology.shapes.items():       
+            print(shape,by_shape[shape]) 
             # here, should accept weights also
             sbu_dict[index] = numpy.random.choice(by_shape[shape],
                                                   p=weights[shape]).copy()
@@ -218,7 +219,7 @@ class Autografs(object):
                     allsbu = (comp&allsbu)
                 if full and allsbu and all(filled.values()):
                     topologies.append(tk)
-                elif allsbu:
+                elif allsbu and not full:
                     topologies.append(tk)
         else:
             topologies = list(self.topologies.keys())

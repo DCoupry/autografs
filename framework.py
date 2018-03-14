@@ -133,15 +133,17 @@ class Framework(object):
         """Return and update the current bond matrix"""
         bonds = []
         for _,sbu in self:
-            bonds = scipy.linalg.block_diag(bonds,sbu.bonds)
+            bonds.append(sbu.bonds)
+        bonds = scipy.linalg.block_diag(*bonds)
         self.bonds = bonds
-        return numpy.copy(self.bonds)
+        return bonds
 
     def get_mmtypes(self) -> numpy.ndarray:
         """Return and update the current bond matrix"""
         mmtypes = []
         for _,sbu in self:
-            mmtypes = numpy.hstack([mmtypes,sbu.mmtypes])
+            mmtypes.append(sbu.mmtypes)
+        mmtypes = numpy.hstack(mmtypes)
         self.mmtypes = mmtypes
         return numpy.copy(self.mmtypes)
 
@@ -158,7 +160,7 @@ class Framework(object):
         # get the scaled cell, normalized
         I    = numpy.eye(3)*alpha
         cell = self.topology.get_cell()
-        cell = cell.dot(I/numpy.linalg.norm(cell,axis=0))
+        cell = cell.dot(I*1.732/numpy.linalg.norm(cell))
         self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:
@@ -196,11 +198,11 @@ class Framework(object):
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
-        low  = 0.25
-        high = 2.0
+        low  = 0.1
+        high = 1.5
         if numpy.amin(low*alpha0)<2.0:
-            low   = 2.0/numpy.amin(alpha0)
-            high *= 0.25/low
+            low   = 1.5/numpy.amin(alpha0)
+            high *= 0.1/low
         # optimize
         result = scipy.optimize.minimize_scalar(fun    = MSE,
                                                 bounds = (low,high),
@@ -341,7 +343,7 @@ class Framework(object):
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
             tags  = structure.get_tags()
-            pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
+            pairs = [numpy.argwhere(tags==tag) for tag in set(tags[xis])]
             for pair in pairs:
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:

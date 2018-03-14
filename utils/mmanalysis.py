@@ -78,7 +78,6 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
         bonds[atom.index,i1] = 1.0
         bonds[atom.index,i2] = 2.0
         bonds[atom.index,i3] = 3.0
-
     # cleanup with particular cases
     # identify particular atoms
     hydrogens = numpy.where(symbols=="H")[0]
@@ -125,7 +124,6 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
     bix = bonds[ix]
     bix[numpy.nonzero(bix)] = 0.5
     bonds[ix] = bix
-
     # aromaticity and rings
     rings = []
     # first, use the compressed sparse graph object
@@ -149,7 +147,6 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
             smallenough = (len(ring)<=10)
             if isring and not seen and bigenough and smallenough:
                 rings.append(ring)
-
     # we now have a list of all the shortest rings within 
     # the molecular graph. If planar, the ring might be aromatic
     aromatic_epsilon = 1e-5
@@ -164,17 +161,14 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
                             for x in combinations(ring_positions,4)])
             if coplanar:
                 aromatic.append(ring)
-
     # aromatic bond fixing
     aromatic  = numpy.array(aromatic).ravel()
     ix        = numpy.ix_(aromatic,aromatic)
     bix       = bonds[ix]
     bix[numpy.nonzero(bix)] = 1.5
     bonds[ix] = bix
-
     # hydrogen bonds
-
-
+    # TODO
     return bonds
 
 def uff_symbol(atom : ase.Atoms) -> str:

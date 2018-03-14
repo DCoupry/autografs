@@ -166,7 +166,7 @@ def read_sbu(path    : None = None,
 
 def write_gin(path,atoms,bonds,mmtypes):
     with open(path,"w") as fileobj:
-        fileobj.write('opti conp molmec cartesian\n')
+        fileobj.write('opti conp molmec cartesian noautobond\n')
         pbc = atoms.get_pbc()
         if pbc.any():
             cell = atoms.get_cell().tolist()
