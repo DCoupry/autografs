@@ -149,7 +149,7 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
                 rings.append(ring)
     # we now have a list of all the shortest rings within 
     # the molecular graph. If planar, the ring might be aromatic
-    aromatic_epsilon = 1e-5
+    aromatic_epsilon = 0.1
     aromatic = []
     for ring in rings:
         homocycle   = (symbols[ring]=="C").all()

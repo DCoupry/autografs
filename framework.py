@@ -353,21 +353,24 @@ class Framework(object):
                     mmtypes[xi0] = "H_" 
                 else:
                     xi0,xi1 = pair
-                    bonds0  = numpy.where(bonds[xi0,:]>0.0)[0]
-                    bonds1  = numpy.where(bonds[xi1,:]>0.0)[0]
-                    if len(bonds0)==0:
-                        # dangling bit, mayhaps from defect
-                        xis.remove(xi0)
+                    bonds0  = numpy.where(bonds[:,xi0]>0.0)[0]
+                    bonds1  = numpy.where(bonds[:,xi1]>0.0)[0]
+                    # dangling bit, mayhaps from defect
+                    if len(bonds0)==0 and len(bonds1)!=0:
                         xis.remove(xi1)
-                        if len(bonds1)==0:
-                            symbols[xi1] = "H"
-                            mmtypes[xi0] = "H_" 
+                        symbols[xi1] = "H"
+                        mmtypes[xi1] = "H_" 
+                    elif len(bonds1)==0 and len(bonds0)!=0:
+                        xis.remove(xi0)
+                        symbols[xi0] = "H"
+                        mmtypes[xi0] = "H_"                         
                     else:
                         # the bond order will be the maximum one
                         bo      = max(numpy.amax(bonds[xi0,:]),
                                       numpy.amax(bonds[xi1,:]))
                         # change the bonds
                         ix        = numpy.ix_(bonds0,bonds1)
+                        # print("****** {} | {}".format(ix,bo))
                         bonds[ix] = bo
                         ix        = numpy.ix_(bonds1,bonds0)
                         bonds[ix] = bo
