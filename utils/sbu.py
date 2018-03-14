@@ -38,14 +38,16 @@ class SBU(object):
 
     def __init__(self,
                  name  : str,
-                 atoms : ase.Atoms) -> None:
+                 atoms : ase.Atoms = None) -> None:
         """Constructor for a building unit, from an ASE Atoms."""
         self.name  = name
         self.atoms = atoms 
         self.symmops = {}
         self.mmtypes = []
         self.bonds   = []
-        self._analyze()
+        self.shape = ("C1",0)
+        if self.atoms is not None:
+            self._analyze()
         return None
 
     def __repr__(self) -> str:
@@ -62,7 +64,13 @@ class SBU(object):
         return None
 
     def copy(self):
-        return SBU(name=self.name,atoms=self.atoms.copy())
+        new = SBU(name=str(self.name))
+        new.set_atoms(atoms=self.get_atoms(),analyze=False)
+        new.symmops = self.symmops.copy()
+        new.mmtypes = numpy.copy(self.mmtypes)
+        new.bonds   = numpy.copy(self.bonds)
+        new.shape   = (self.shape[0],self.shape[1])
+        return new
 
     def get_unique_operations(self) -> dict:
         """Return all unique symmetry operations in the topology."""
@@ -107,10 +115,11 @@ class SBU(object):
     def _analyze(self) -> None:
         """Guesses the mmtypes, bonds and pointgroup"""
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
-        pg = PointGroup(dummies,0.1)
+        if len(dummies)>0:
+            pg = PointGroup(dummies,0.1)
+            self.shape    = (pg.schoenflies,len(dummies))
+            self.symmops  = pg.symmops
         bonds,mmtypes = analyze_mm(self.get_atoms())
-        self.shape    = (pg.schoenflies,len(dummies))
-        self.symmops  = pg.symmops
         self.bonds    = bonds
         self.mmtypes  = mmtypes
         return None

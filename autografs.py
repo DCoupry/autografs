@@ -87,7 +87,7 @@ class Autografs(object):
             alpha += f
             sbu.atoms.positions = sbu_atoms.positions
             sbu.atoms.set_tags(sbu_atoms.get_tags())
-            aligned.append(index=idx,sbu=sbu,mmtypes=sbu.mmtypes,bonds=sbu.bonds)
+            aligned.append(index=idx,sbu=sbu)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
@@ -107,7 +107,6 @@ class Autografs(object):
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
-        print(topology.get_unique_shapes())
         weights  = defaultdict(list)
         by_shape = defaultdict(list)
         for name in sbu_names:
@@ -128,7 +127,6 @@ class Autografs(object):
         # now fill the choices
         sbu_dict = {}
         for index,shape in topology.shapes.items():       
-            print(shape,by_shape[shape]) 
             # here, should accept weights also
             sbu_dict[index] = numpy.random.choice(by_shape[shape],
                                                   p=weights[shape]).copy()

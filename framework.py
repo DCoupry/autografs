@@ -15,6 +15,7 @@ import numpy
 import scipy
 import typing
 import ase
+import itertools
 
 from collections import defaultdict
 
@@ -96,6 +97,15 @@ class Framework(object):
         """Iterable intrinsic"""
         return iter(self.SBU.items())
 
+    def copy(self) -> object:
+        """Return a copy of itself as a new instance"""
+        new = self.__class__(topology=self.get_topology(),
+                             SBU = self.SBU.copy(),
+                             mmtypes= self.get_mmtypes(),
+                             bonds=self.get_bonds())
+        new._todel = self._todel.copy()
+        return new
+
     def set_topology(self,
                      topology : ase.Atoms) -> None:
         """Set the topology attribute with an ASE Atoms object."""
@@ -106,11 +116,57 @@ class Framework(object):
         """Return a copy of the topology attribute as an ASE Atoms object."""
         return self.topology.copy()
 
+    def get_supercell(self,
+                      m : tuple = (2,2,2)) -> object:
+        """Return a framework supercell usin m as multiplier"""
+        if isinstance(m,int):
+            m = (m,m,m)
+        # get the offset direction ranges
+        x = list(range(0,m[0]+1,1))
+        y = list(range(0,m[1]+1,1))
+        z = list(range(0,m[2]+1,1))
+        # new framework object
+        supercell = self.__class__(topology = self.topology,
+                              SBU      = self.SBU,
+                              mmtypes  = self.get_mmtypes(),
+                              bonds    = self.get_bonds())
+        ocell = supercell.topology.get_cell()
+        otopo = supercell.topology.copy()
+        noff  = 0
+        L     = len(otopo)
+        # iterate over offsets and add the corresponding objects
+        for offset in itertools.product(x,y,z):
+            # central cell, ignore
+            if offset==(0,0,0):
+                continue
+            else:
+                noff += 1 
+                coffset = ocell.dot(offset)
+                for atom in otopo.copy():
+                    atom.position += coffset
+                    supercell.topology.append(atom)
+                    if atom.symbol=="X":
+                        continue
+                    newidx = len(supercell.topology)-1
+                    # check that the SBU was not deleted before
+                    if atom.index not in self.SBU.keys():
+                        continue
+                    sbu = self[atom.index].copy()
+                    tags = sbu.atoms.get_tags()
+                    tags[tags>0] += L*noff
+                    sbu.atoms.set_tags(tags)
+                    sbu.atoms.positions += coffset
+                    supercell.append(index = newidx,
+                                     sbu   = sbu,
+                                     update= False)
+                    self._todel[newidx] = list(self._todel[atom.index])
+        return supercell
+
+
     def append(self,
                index   : int,
                sbu     : ase.Atoms,
-               bonds   : numpy.ndarray,
-               mmtypes : numpy.ndarray) -> None:
+               update  : bool = False) -> None:
         """Append all data releted to a building unit in the framework.
 
         This includes the ASE Atoms object, the bonding matrix, and the 
@@ -123,10 +179,11 @@ class Framework(object):
         """
         # first append the atoms object to the list of sbu
         self.SBU[index] = sbu
-        # make the bonds matrix with a new block
-        self.bonds   = scipy.linalg.block_diag(self.bonds,bonds)
-        # append the atom types
-        self.mmtypes = numpy.hstack([self.mmtypes,mmtypes])
+        if update:
+            # make the bonds matrix with a new block
+            self.bonds   = self.get_bonds()
+            # append the atom types
+            self.mmtypes = self.get_mmtypes()
         return None
 
     def get_bonds(self) -> numpy.ndarray:
@@ -253,6 +310,8 @@ class Framework(object):
             for atom in sbu.atoms:
                 if symbol is not None and atom.symbol!=symbol:
                     continue
+                if atom.symbol=="X":
+                    continue
                 bidx = numpy.where(bonds[atom.index,:]>0.0)[0]
                 if len(bidx)!=1:
                     continue
@@ -312,11 +371,14 @@ class Framework(object):
         fg.atoms.positions += sbu.positions[bidx]
         # create the new object
         # keep note of what to delete.
-        self._todel[sidx].append(aidx)
-        del fg.atoms[xidx]
+        self._todel[sidx] += [aidx,xidx+len(sbu)]
         sbu += fg.atoms
         sbu.positions += sbu_cop
         self.SBU[sidx].set_atoms(sbu,analyze=False)
+        self.SBU[sidx].bonds = scipy.linalg.block_diag(bonds,
+                                                       fg.bonds)
+        self.SBU[sidx].mmtypes = numpy.hstack([self.SBU[sidx].mmtypes,
+                                              fg.mmtypes])
         return None
 
     def get_atoms(self,
@@ -328,22 +390,29 @@ class Framework(object):
         clean -- remove the dummies if True
         """
         # concatenate every sbu into one Atoms object
-        cell = self.topology.get_cell()
-        pbc  = self.topology.get_pbc()
+        print("get_atoms")
+        framework = self.copy()
+        cell = framework.topology.get_cell()
+        pbc  = framework.topology.get_pbc()
         structure = ase.Atoms(cell=cell,pbc=pbc)
-        for idx,sbu in self:
+        for idx,sbu in framework:
             atoms = sbu.atoms
-            del atoms[self._todel[idx]]
-            self[idx].set_atoms(atoms,analyze=True)
+            todel = framework._todel[idx]
+            if len(todel)>0:
+                print(atoms[todel])
+                del atoms[todel]
+            print(atoms)
+            framework[idx].set_atoms(atoms,analyze=True)
             structure += atoms
-        bonds   = self.get_bonds()
-        mmtypes = self.get_mmtypes()
+        bonds   = framework.get_bonds()
+        mmtypes = framework.get_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:
             # keep track of dummies
             xis   = [x.index for x in structure if x.symbol=="X"]
             tags  = structure.get_tags()
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags[xis])]
+            # raise
             for pair in pairs:
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
@@ -370,7 +439,6 @@ class Framework(object):
                                       numpy.amax(bonds[xi1,:]))
                         # change the bonds
                         ix        = numpy.ix_(bonds0,bonds1)
-                        # print("****** {} | {}".format(ix,bo))
                         bonds[ix] = bo
                         ix        = numpy.ix_(bonds1,bonds0)
                         bonds[ix] = bo
@@ -380,6 +448,7 @@ class Framework(object):
             bonds   = numpy.delete(bonds,xis,axis=1)
             mmtypes = numpy.delete(mmtypes,xis)
             del structure[xis]
+            print(bonds.shape,len(structure))
         return structure, bonds, mmtypes
 
     def write(self,
@@ -387,7 +456,6 @@ class Framework(object):
               ext : str = "gin") -> None:
         """Write a chemical information file to disk in selected format"""
         atoms,bonds,mmtypes = self.get_atoms(dummies=False)
-        print(atoms)
         path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))
         if ext=="gin":
             from autografs.utils.io import write_gin
