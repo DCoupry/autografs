@@ -57,6 +57,7 @@ class Autografs(object):
         sbu_dict -- (optional) one to one sbu to slot correspondance
                     in the shape {index of slot : 'name of sbu'}
         """
+        # ase.visualize.view(self.topologies[topology_name])
         topology = Topology(name  = topology_name,
                             atoms = self.topologies[topology_name])
         # container for the aligned SBUs
@@ -93,7 +94,7 @@ class Autografs(object):
         return aligned
 
     def get_sbu_dict(self,
-                     topology  : dict,
+                     topology  : object,
                      sbu_names : list) -> dict:
         """Return a dictionary of SBU by corresponding fragment.
 
@@ -112,15 +113,18 @@ class Autografs(object):
         for name in sbu_names:
             # create the SBU object
             sbu = SBU(name=name,atoms=self.sbu[name])
+            comp, slot = topology.has_compatible_slot(sbu=sbu)
+            if not comp:
+                continue
             # check if probability is included
             if isinstance(name,tuple):
                 name,p = name
                 p    = float(p)
                 name = str(name)
-                weights[sbu.shape].append(p)
+                weights[slot].append(p)
             else:
-                weights[sbu.shape].append(1.0)
-            by_shape[sbu.shape].append(sbu)
+                weights[slot].append(1.0)
+            by_shape[slot].append(sbu)
         # now fill the choices
         sbu_dict = {}
         for index,shape in topology.shapes.items():        
@@ -196,23 +200,28 @@ class Autografs(object):
         then by shapes within the topology. Thus, we do not need to analyze
         every topology.
         sbu  -- list of sbu names
-        full -- wether the topology is entirely represented by the sbu"""
-        # if sbu_names:
-        #     topologies = []
-        #     sbu = [SBU(name=n,atoms=self.topologies[n]) for n in sbu_names]
-        #     for tk in self.topologies.keys():
-
-        #         av_sbu = self.list_available_sbu(topology_name=tk)
-        #         slot_filled = numpy.zeros(len(av_sbu),dtype=bool)
-        #         # for slotk,slotv in av_sbu.items():
-        #         #     [s in slotv for s in sbu_names]
-        #         # all the SBU are here, and all slots are filled
-        #         c0 = all([any([s in av for av in av_sbu.values()]) for s in sbu_names])
-        #         # all the sbu are here, and some slots are not filled
-        #         c1 = all([any([s in av for av in av_sbu.values()]) for s in sbu_names])
-
-        # else:
-        topologies = list(self.topologies.keys())
+        full -- wether the topology is entirely represented by the sbu
+        """
+        if sbu_names:
+            topologies = []
+            sbu = [SBU(name=n,atoms=self.sbu[n]) for n in sbu_names]
+            for tk,tv in self.topologies.items():
+                try:
+                    topology = Topology(name=tk,atoms=tv)
+                except Exception:
+                    continue
+                filled = {shape:False for shape in topology.get_unique_shapes()}
+                allsbu = True
+                comps  = [topology.has_compatible_slot(s) for s in sbu]
+                for comp,shape in comps:
+                    filled[shape] = comp
+                    allsbu = (comp&allsbu)
+                if full and allsbu and all(filled.values()):
+                    topologies.append(tk)
+                elif allsbu:
+                    topologies.append(tk)
+        else:
+            topologies = list(self.topologies.keys())
         return topologies
 
     def list_available_sbu(self,

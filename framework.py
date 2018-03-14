@@ -176,6 +176,7 @@ class Framework(object):
         identical tags in the complete structure
         alpha0 -- starting point of the scaling search algorithm
         """
+        print("refining cell")
         def MSE(x : numpy.ndarray) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
@@ -195,11 +196,11 @@ class Framework(object):
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
-        low  = 0.5
+        low  = 0.25
         high = 2.0
         if numpy.amin(low*alpha0)<2.0:
             low   = 2.0/numpy.amin(alpha0)
-            high *= 0.5/low
+            high *= 0.25/low
         # optimize
         result = scipy.optimize.minimize_scalar(fun    = MSE,
                                                 bounds = (low,high),

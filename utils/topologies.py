@@ -81,6 +81,27 @@ class Topology(object):
             ops[shape] = {o:these_ops.count(o) for o in set(these_ops)}
         return ops
 
+    def has_compatible_slot(self,
+                            sbu : object) -> (bool,tuple):
+        """Return (True,shape) for a slot compatible with the SBU"""
+        compatible = False
+        slot      = None
+        if sbu.shape in self.get_unique_shapes():
+            compatible = True
+            slot       = sbu.shape
+        else:
+            symmops = self.get_unique_operations()
+            for shape,ops in symmops.items():
+                if shape[1]!=sbu.shape[1]:
+                    compatible = False
+                    slot      = None
+                    break
+                elif sbu.is_compatible(ops):
+                    compatible = True
+                    slot       = shape
+                    break
+        return compatible,slot
+
     def _get_cutoffs(self,
                      Xis : numpy.ndarray,
                      Ais : numpy.ndarray) -> numpy.ndarray:
