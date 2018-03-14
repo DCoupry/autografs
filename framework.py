@@ -124,14 +124,14 @@ class Framework(object):
         # get the offset direction ranges
         x = list(range(0,m[0]+1,1))
         y = list(range(0,m[1]+1,1))
-        z = list(range(0,m[2]+1,1))
+        z = list(range(0,m[2]+1,1)) 
         # new framework object
-        supercell = self.__class__(topology = self.topology,
-                              SBU      = self.SBU,
-                              mmtypes  = self.get_mmtypes(),
-                              bonds    = self.get_bonds())
+        supercell = self.copy()
         ocell = supercell.topology.get_cell()
         otopo = supercell.topology.copy()
+        cellfactor = numpy.asarray([x[-1],y[-1],z[-1]],dtype=float)
+        newcell = ocell.dot(numpy.eye(3)*cellfactor)
+        supercell.topology.set_cell(newcell,scale_atoms=False)
         noff  = 0
         L     = len(otopo)
         # iterate over offsets and add the corresponding objects
@@ -149,9 +149,9 @@ class Framework(object):
                         continue
                     newidx = len(supercell.topology)-1
                     # check that the SBU was not deleted before
-                    if atom.index not in self.SBU.keys():
+                    if atom.index not in supercell.SBU.keys():
                         continue
-                    sbu = self[atom.index].copy()
+                    sbu = supercell[atom.index].copy()
                     tags = sbu.atoms.get_tags()
                     tags[tags>0] += L*noff
                     sbu.atoms.set_tags(tags)
@@ -159,7 +159,7 @@ class Framework(object):
                     supercell.append(index = newidx,
                                      sbu   = sbu,
                                      update= False)
-                    self._todel[newidx] = list(self._todel[atom.index])
+                    supercell._todel[newidx] = list(supercell._todel[atom.index])
         return supercell
 
 
@@ -235,7 +235,6 @@ class Framework(object):
         identical tags in the complete structure
         alpha0 -- starting point of the scaling search algorithm
         """
-        print("refining cell")
         def MSE(x : numpy.ndarray) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
@@ -390,7 +389,6 @@ class Framework(object):
         clean -- remove the dummies if True
         """
         # concatenate every sbu into one Atoms object
-        print("get_atoms")
         framework = self.copy()
         cell = framework.topology.get_cell()
         pbc  = framework.topology.get_pbc()
@@ -399,9 +397,7 @@ class Framework(object):
             atoms = sbu.atoms
             todel = framework._todel[idx]
             if len(todel)>0:
-                print(atoms[todel])
                 del atoms[todel]
-            print(atoms)
             framework[idx].set_atoms(atoms,analyze=True)
             structure += atoms
         bonds   = framework.get_bonds()
@@ -448,7 +444,6 @@ class Framework(object):
             bonds   = numpy.delete(bonds,xis,axis=1)
             mmtypes = numpy.delete(mmtypes,xis)
             del structure[xis]
-            print(bonds.shape,len(structure))
         return structure, bonds, mmtypes
 
     def write(self,
