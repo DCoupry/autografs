@@ -197,6 +197,7 @@ class Autografs(object):
             ps = atom.position
             pf = fragment.positions
             d  = numpy.linalg.norm(pf-ps,axis=1)
+            # TODO check that each tag appears only once
             fi = numpy.argmin(d)
             atom.tag = fragment[fi].tag
         return None
