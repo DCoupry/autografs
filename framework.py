@@ -163,7 +163,6 @@ class Framework(object):
                     supercell._todel[newidx] = list(supercell._todel[atom.index])
         return supercell
 
-
     def append(self,
                index   : int,
                sbu     : ase.Atoms,
@@ -218,7 +217,7 @@ class Framework(object):
         # get the scaled cell, normalized
         I    = numpy.eye(3)*alpha
         cell = self.topology.get_cell()
-        cell = cell.dot(I*1.732/numpy.linalg.norm(cell))
+        cell = cell.dot(I*1.73/numpy.linalg.norm(cell,axis=0))
         self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:

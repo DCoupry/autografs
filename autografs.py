@@ -41,9 +41,9 @@ class Autografs(object):
         """Constructor for the Autografs framework maker.
         """
         logger.info("Reading the topology database.")
-        self.topologies : dict      = read_topologies_database()
+        self.topologies : dict = read_topologies_database()
         logger.info("Reading the building units database.")
-        self.sbu        : ase.Atoms = read_sbu_database()
+        self.sbu        : dict = read_sbu_database()
 
 
     def make(self,
@@ -79,7 +79,7 @@ class Autografs(object):
                             atoms = topology_atoms)
         # container for the aligned SBUs
         aligned  = Framework()
-        aligned.set_topology(topology=topology.get_atoms())
+        aligned.set_topology(topology=topology_atoms)
         alpha    = 0.0
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
@@ -97,24 +97,22 @@ class Autografs(object):
                         name = str(k)
                     sbu_dict[k] = SBU(name=name,atoms=v)
         # some logging
-        sbu_str = []
         for idx,sbu in sbu_dict.items():
-            s0 = "\nSlot {sl}, {s00} {s01} -->".format(sl=idx,
-                                                       s00=topology.shapes[idx][0],
-                                                       s01=topology.shapes[idx][1])
-            s1 = s0 + " SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
-                                                      s10=sbu.shape[0],
-                                                      s11=sbu.shape[1])
-            sbu_str.append(s1)
-        logger.info("".join(sbu_str))
+            logging.info("Slot {sl}, {s00} {s01}".format(sl=idx,
+                                                         s00=topology.shapes[idx][0],
+                                                         s01=topology.shapes[idx][1]))
+            logging.info("\t|-->SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
+                                                                s10=sbu.shape[0],
+                                                                s11=sbu.shape[1]))
         # carry on
         for idx,sbu in sbu_dict.items():
-            logger.info("Aligning fragment number {idx}".format(idx=idx))
+            logger.info("Treating slot number {idx}".format(idx=idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
-            # align and get the scaling factor
+            logger.info("\tAligning SBU {name}".format(name=sbu.name))
+            # now align and get the scaling factor
             sbu_atoms,f = self.align(fragment=fragment_atoms,
-                               sbu=sbu_atoms)
+                                     sbu=sbu_atoms)
             alpha += f
             sbu.atoms.positions = sbu_atoms.positions
             sbu.atoms.set_tags(sbu_atoms.get_tags())
@@ -139,29 +137,37 @@ class Autografs(object):
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
+        logger.debug("Generating slot to SBU map.")
         weights  = defaultdict(list)
         by_shape = defaultdict(list)
         for name in sbu_names:
+            # check if probabilities included
+            if isinstance(name,tuple):
+                name,p = name
+                p    = float(p)
+                name = str(name)
+            else:
+                p = 1.0
             # create the SBU object
             sbu = SBU(name=name,atoms=self.sbu[name])
             comp, slot = topology.has_compatible_slot(sbu=sbu)
             if not comp:
                 continue
+            weights[slot].append(p)
             # check if probability is included
-            if isinstance(name,tuple):
-                name,p = name
-                p    = float(p)
-                name = str(name)
-                weights[slot].append(p)
-            else:
-                weights[slot].append(1.0)
             by_shape[slot].append(sbu)
         # now fill the choices
         sbu_dict = {}
         for index,shape in topology.shapes.items():       
             # here, should accept weights also
-            sbu_dict[index] = numpy.random.choice(by_shape[shape],
-                                                  p=weights[shape]).copy()
+            p = weights[shape]
+            p /= numpy.sum(p)
+            sbu_chosen = numpy.random.choice(by_shape[shape],
+                                                  p=p).copy()
+            logger.debug("Slot {sl}: {sb} chosen with p={p}.".format(sl=index,
+                                                                     sb=sbu_chosen.name,
+                                                                     p=p))
+            sbu_dict[index] = sbu_chosen
         return sbu_dict
 
     def align(self,
@@ -185,43 +191,59 @@ class Autografs(object):
         sbu.positions      -= sbu.positions.mean(axis=0)
         # identify dummies in sbu
         sbu_Xis = [x.index for x in sbu if x.symbol=="X"]
-        sbu_X   = sbu[sbu_Xis]
         # get the scaling factor
-        size_sbu      = numpy.linalg.norm(sbu_X.positions,axis=1)
+        size_sbu      = numpy.linalg.norm(sbu[sbu_Xis].positions,axis=1)
         size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
-        alpha         = 2.0 * numpy.mean(size_sbu/size_fragment)
+        alpha         = numpy.mean(size_sbu/size_fragment)
         ncop          = numpy.linalg.norm(fragment_cop)
         if ncop<1e-6:
             direction  = numpy.ones(3,dtype=numpy.float32)
             direction /= numpy.linalg.norm(direction)
         else:
             direction = fragment_cop / ncop
-        alpha *= direction
         # scaling for better alignment
         fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
+        alpha *= direction
         # getting the rotation matrix
-        X0  = sbu_X.get_positions()
+        X0  = sbu[sbu_Xis].get_positions()
         X1  = fragment.get_positions()
+        if X0.shape[0]>3:
+            X0 = self.get_vector_space(X0)
+            X1 = self.get_vector_space(X1)
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
-        # R,s = procrustes(X0, X1, method="SVD")
-        sbu.positions = sbu.positions.dot(R)
+        sbu.positions = sbu.positions.dot(R)+fragment_cop
+        fragment.positions += fragment_cop
+        res_d = ase.geometry.distance(sbu[sbu_Xis],fragment)
+        logger.info("\tResidual distance: {d}".format(d=res_d))
         # tag the atoms
         self.tag(sbu,fragment)
         return sbu,alpha
+
+    def get_vector_space(self,
+                         X : numpy.ndarray) -> numpy.ndarray:
+        """Returns a vector space as three points."""
+        x0 = X[0]
+        dots = [x0.dot(x)for x in X]
+        x1 = X[numpy.argmin(dots)]
+        dots = [x1.dot(x)for x in X[1:]]
+        x2 = X[numpy.argmin(dots)]
+        return numpy.asarray([x0,x1,x2])
 
     def tag(self,
             sbu      : ase.Atoms,
             fragment : ase.Atoms) -> None:
         """Tranfer tags from the fragment to the closest dummies in the sbu"""
-        for atom in sbu:
-            if atom.symbol!="X":
-                continue
-            ps = atom.position
-            pf = fragment.positions
-            d  = numpy.linalg.norm(pf-ps,axis=1)
-            # TODO check that each tag appears only once
-            fi = numpy.argmin(d)
-            atom.tag = fragment[fi].tag
+        logger.info("\tTagging dummies.")
+        # we keep a record of used tags.
+        unused = [x.index for x in sbu if x.symbol=="X"]
+        for atom in fragment:
+            ids = [s.index for s in sbu if s.index in unused]
+            pf = atom.position
+            ps = sbu.positions[unused]
+            d  = numpy.linalg.norm(ps-pf,axis=1)
+            si = ids[numpy.argmin(d)]
+            sbu[si].tag = atom.tag
+            unused.remove(si)
         return None
 
     def list_available_topologies(self,
@@ -236,12 +258,14 @@ class Autografs(object):
         full -- wether the topology is entirely represented by the sbu
         """
         if sbu_names:
+            logger.info("Checking topology compatibility.")
             topologies = []
             sbu = [SBU(name=n,atoms=self.sbu[n]) for n in sbu_names]
             for tk,tv in self.topologies.items():
                 try:
                     topology = Topology(name=tk,atoms=tv)
-                except Exception:
+                except Exception as exc:
+                    logger.error("Topology {tk} not loaded: {exc}".format(tk=tk,exc=exc))
                     continue
                 filled = {shape:False for shape in topology.get_unique_shapes()}
                 allsbu = True
@@ -250,10 +274,13 @@ class Autografs(object):
                     filled[shape] = comp
                     allsbu = (comp&allsbu)
                 if full and allsbu and all(filled.values()):
+                    logger.info("\tTopology {tk} fully available.".format(tk=tk))
                     topologies.append(tk)
                 elif allsbu and not full:
+                    logger.info("\tTopology {tk} partially available.".format(tk=tk))
                     topologies.append(tk)
         else:
+            logger.info("Listing full database of topologies.")
             topologies = list(self.topologies.keys())
         return topologies
 
@@ -268,6 +295,7 @@ class Autografs(object):
         """
         av_sbu = defaultdict(list)
         if topology_name is not None:
+            logger.info("Checking SBU compatibility.")
             topology = Topology(name=topology_name,
                                 atoms=self.topologies[topology_name])
             topops = topology.get_unique_operations()
@@ -279,13 +307,19 @@ class Autografs(object):
                     # first condition is coordination
                     if c==shape[1]:
                         # now check symmops
-                        sbu = SBU(name=sbuk,
-                                  atoms=sbuv)
+                        try:
+                            sbu = SBU(name=sbuk,
+                                      atoms=sbuv)
+                        except Exception as exc:
+                            log.error("SBU {k} not loaded: {exc}".format(k=sbuk,exc=exc))
                         if sbu.shape == shape:
+                            logger.info("SBU {k} is compatible by shape.".format(k))
                             av_sbu[shape].append(sbuk)
                         elif sbu.is_compatible(topops[shape]):
+                            logger.info("SBU {k} is compatible by symmetry.".format(k))
                             av_sbu[shape].append(sbuk)
         else:
+            logger.info("Listing full database of SBU.")
             av_sbu = list(self.sbu.keys())
         return dict(av_sbu)
 

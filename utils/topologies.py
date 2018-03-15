@@ -60,6 +60,17 @@ class Topology(object):
         logger.debug("Topology {0}: returning atoms.".format(self.name))
         return self.atoms.copy()
 
+    def get_fragments(self) -> ase.Atoms:
+        """Return a concatenated version of the fragments."""
+        logger.debug("Topology {0}: returning fragments.".format(self.name))
+        frags = ase.Atoms(cell=self.atoms.get_cell(),
+                          pbc=self.atoms.get_pbc())
+        for idx,frag in self.fragments.items():
+            tags = numpy.ones(len(frag))*idx
+            frag.set_tags(tags)
+            frags+=frag
+        return frags
+
     def get_unique_shapes(self) -> set:
         """Return all unique shapes in the topology."""
         logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name))
@@ -126,14 +137,26 @@ class Topology(object):
             mindist  = numpy.amin(dists)
             # let's not analyse every single distance...
             dists    = dists[dists<2.0*mindist].reshape(-1,1)
-            clusters = cluster(dists, mindist*0.5, criterion='distance')
-            for cluster_index in set(clusters):
-                # check this cluster distances
-                indices   = numpy.where(clusters==cluster_index)[0]
-                cutoff_tmp = dists[indices].mean() 
-                if cutoff_tmp<cutoff :
-                    # if better score, replace the cutoff
-                    cutoff = cutoff_tmp
+            L   = 0
+            eps = mindist*0.5
+            coord = self.atoms[other_index].number
+            # we nee to coerce the cutoffs to have 
+            # the good amount of dummies. 
+            # in theory, should loop only once
+            while L!=coord:
+                clusters = cluster(dists, eps, criterion='distance')
+                for cluster_index in set(clusters):
+                    # check this cluster distances
+                    indices   = numpy.where(clusters==cluster_index)[0]
+                    L = len(indices)
+                    if L>coord:
+                        eps*=0.75
+                    elif L<coord:
+                        eps*=1.5
+                    cutoff_tmp = dists[indices].mean() 
+                    if cutoff_tmp<cutoff :
+                        # if better score, replace the cutoff
+                        cutoff = cutoff_tmp
             cutoffs[other_index] = cutoff
         return cutoffs
 
@@ -170,7 +193,7 @@ class Topology(object):
             # create the Atoms object
             fragment = Atoms("X"*len(ni),positions,tags=tags[ni]) 
             # calculate the point group properties
-            pg       = PointGroup(fragment,cutoffs.mean())
+            pg       = PointGroup(fragment.copy(),cutoffs.mean())
             # save that info
             self.fragments[ai] = fragment
             self.shapes[ai]    = (pg.schoenflies,self.atoms[ai].number)
