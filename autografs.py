@@ -109,7 +109,7 @@ class Autografs(object):
             logger.info("Treating slot number {idx}".format(idx=idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
-            logger.info("\tAligning SBU {name}".format(name=sbu.name))
+            logger.debug("Aligning SBU {name}".format(name=sbu.name))
             # now align and get the scaling factor
             sbu_atoms,f = self.align(fragment=fragment_atoms,
                                      sbu=sbu_atoms)
@@ -214,7 +214,7 @@ class Autografs(object):
         sbu.positions = sbu.positions.dot(R)+fragment_cop
         fragment.positions += fragment_cop
         res_d = ase.geometry.distance(sbu[sbu_Xis],fragment)
-        logger.info("\tResidual distance: {d}".format(d=res_d))
+        logger.debug("Residual distance: {d}".format(d=res_d))
         # tag the atoms
         self.tag(sbu,fragment)
         return sbu,alpha
@@ -233,7 +233,7 @@ class Autografs(object):
             sbu      : ase.Atoms,
             fragment : ase.Atoms) -> None:
         """Tranfer tags from the fragment to the closest dummies in the sbu"""
-        logger.info("\tTagging dummies.")
+        logger.debug("\tTagging dummies.")
         # we keep a record of used tags.
         unused = [x.index for x in sbu if x.symbol=="X"]
         for atom in fragment:

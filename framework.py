@@ -122,6 +122,7 @@ class Framework(object):
         """Return a framework supercell usin m as multiplier"""
         if isinstance(m,int):
             m = (m,m,m)
+        logger.info("Creating supercell {0}x{1}x{2}.".format(*m))
         # get the offset direction ranges
         x = list(range(0,m[0]+1,1))
         y = list(range(0,m[1]+1,1))
@@ -251,6 +252,7 @@ class Framework(object):
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.mean(d**2)
+            logger.info("\tScaling error = {e}".format(e=mse))
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
