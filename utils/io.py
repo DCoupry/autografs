@@ -164,7 +164,11 @@ def read_sbu(path    : None = None,
     return SBUs
 
 
-def write_gin(path,atoms,bonds,mmtypes):
+def write_gin(path,
+              atoms,
+              bonds,
+              mmtypes):
+    """Write an GULP input file to disc"""
     with open(path,"w") as fileobj:
         fileobj.write('opti conp molmec cartesian noautobond\n')
         pbc = atoms.get_pbc()

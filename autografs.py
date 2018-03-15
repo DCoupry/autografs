@@ -13,9 +13,12 @@ import os
 import sys
 import numpy
 import ase
+import logging
 import scipy
 import scipy.optimize
+
 from collections import defaultdict
+
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
@@ -24,7 +27,7 @@ from autografs.utils.topologies import Topology
 from autografs.framework        import Framework
 from autografs.utils.operations import procrustes
 
-
+logger = logging.getLogger(__name__) 
 
 class Autografs(object):
     """Framework maker class to generate ASE Atoms objects from topologies.
@@ -37,8 +40,11 @@ class Autografs(object):
     def  __init__(self):
         """Constructor for the Autografs framework maker.
         """
+        logger.info("Reading the topology database.")
         self.topologies : dict      = read_topologies_database()
+        logger.info("Reading the building units database.")
         self.sbu        : ase.Atoms = read_sbu_database()
+
 
     def make(self,
              topology_name : str,
@@ -59,14 +65,16 @@ class Autografs(object):
                     in the shape {index of slot : 'name of sbu'}
         """
         # ase.visualize.view(self.topologies[topology_name])
+        logger.info("Starting the MOF generation.")
         # make the supercell prior to alignment
         if isinstance(supercell,int):
             supercell = (supercell,supercell,supercell)
         topology_atoms  = self.topologies[topology_name]
-        topology_atoms *= supercell
-        print(topology_atoms.get_tags())
-        ase.visualize.view(topology_atoms)
+        if supercell!=(1,1,1):
+            logger.info("{0}x{1}x{2} supercell of the topology is used.".format(*supercell))
+            topology_atoms *= supercell
         # make the Topology object
+        logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
         # container for the aligned SBUs
@@ -74,12 +82,13 @@ class Autografs(object):
         aligned.set_topology(topology=topology.get_atoms())
         alpha    = 0.0
         # identify the corresponding SBU
+        logger.info("Scheduling the SBU to slot alignment.")
         if sbu_dict is None:
             sbu_dict = self.get_sbu_dict(topology=topology,
                                          sbu_names=sbu_names)
         else:
             # the sbu_dict has been passed. if not SBU object, create them
-            for k,v in sbu_dict.item():
+            for k,v in sbu_dict.items():
                 if not isinstance(v,SBU):
                     assert isinstance(v,ase.Atoms)
                     if "name" in v.info.keys():
@@ -87,8 +96,20 @@ class Autografs(object):
                     else:
                         name = str(k)
                     sbu_dict[k] = SBU(name=name,atoms=v)
+        # some logging
+        sbu_str = []
+        for idx,sbu in sbu_dict.items():
+            s0 = "\nSlot {sl}, {s00} {s01} -->".format(sl=idx,
+                                                       s00=topology.shapes[idx][0],
+                                                       s01=topology.shapes[idx][1])
+            s1 = s0 + " SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
+                                                      s10=sbu.shape[0],
+                                                      s11=sbu.shape[1])
+            sbu_str.append(s1)
+        logger.info("".join(sbu_str))
         # carry on
         for idx,sbu in sbu_dict.items():
+            logger.info("Aligning fragment number {idx}".format(idx=idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
             # align and get the scaling factor
@@ -99,6 +120,7 @@ class Autografs(object):
             sbu.atoms.set_tags(sbu_atoms.get_tags())
             aligned.append(index=idx,sbu=sbu)
         # refine the cell scaling using a good starting point
+        logger.info("Refining unit cell.")
         aligned.refine(alpha0=alpha)
         return aligned
 
