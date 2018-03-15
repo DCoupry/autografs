@@ -29,6 +29,8 @@ import warnings
 from autografs.utils.pointgroup import PointGroup
 from autografs.utils           import __data__
 
+import logging
+logger = logging.getLogger(__name__)
 
 
 warnings.filterwarnings("error")
@@ -40,6 +42,7 @@ class Topology(object):
                  name  : str,
                  atoms : ase.Atoms) -> None:
         """Constructor for a topology, from an ASE Atoms."""
+        logger.debug("Creating Topology {0}".format(name))
         self.name  = name
         self.atoms = atoms 
         # initialize empty fragments
@@ -54,14 +57,17 @@ class Topology(object):
 
     def get_atoms(self) -> ase.Atoms:
         """Return a copy of the topology as ASE Atoms."""
+        logger.debug("Topology {0}: returning atoms.".format(self.name))
         return self.atoms.copy()
 
     def get_unique_shapes(self) -> set:
         """Return all unique shapes in the topology."""
+        logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name))
         return set(self.shapes.values())
 
     def get_unique_operations(self) -> dict:
         """Return all unique symmetry operations in the topology."""
+        logger.debug("Topology {0}: listing symmetry operations.".format(self.name))
         ops = {}
         for idx,shape in self.shapes.items():
             if shape in ops.keys():
@@ -107,6 +113,8 @@ class Topology(object):
                      Ais : numpy.ndarray) -> numpy.ndarray:
         """Return the cutoffs leading to the desired connectivity"""
         # initialize cutoffs to small non-zero skin partameter
+        # TODO check on coordination
+        logger.debug("Generating cutoffs")
         skin    = 5e-3
         cutoffs = numpy.zeros(len(self.atoms))+skin
         # we iterate over non-dummies
@@ -132,6 +140,7 @@ class Topology(object):
     def _analyze(self) -> None:
         """Analyze the topology to cut the fragments out."""
         # separate the dummies from the rest
+        logger.debug("Analyzing fragments of topology {0}.".format(self.name))
         numbers = numpy.asarray(self.atoms.get_atomic_numbers())
         Xis  = numpy.where(numbers==0)[0]
         Ais  = numpy.where(numbers >0)[0]
@@ -179,7 +188,7 @@ def download_topologies() -> None:
     path = os.path.join(root,"nets.cgd")
     resp = requests.get(url, stream=True)
     if resp.status_code == 200:
-        print("Successfully downloaded the nets from RCSR.")
+        logger.info("Successfully downloaded the nets from RCSR.")
         resp.raw.decode_content = True
         with open(path,"wb") as outpt:
             shutil.copyfileobj(resp.raw, outpt)        
@@ -193,24 +202,24 @@ def read_topologies_database(update_db     : bool = False,
     db_file  = os.path.join(root,"topologies.pkl")
     cgd_file = os.path.join(root,"nets.cgd")
     if ((not os.path.isfile(cgd_file)) or (update_source)):
-        print("Downloading the topologies from RCSR.")
+        logger.info("Downloading the topologies from RCSR.")
         download_topologies()
     else:
-        print("Using saved nets from RCSR")
+        logger.info("Using saved nets from RCSR")
     if ((not os.path.isfile(db_file)) or (update_db)):
-        print("Reloading the topologies from scratch")
+        logger.info("Reloading the topologies from scratch")
         topologies     = read_cgd()
         topologies_len = len(topologies)
-        print("{0:<5} topologies saved".format(topologies_len))
+        logger.info("{0:<5} topologies saved".format(topologies_len))
         with open(db_file,"wb") as pkl:
             pickle.dump(obj=topologies,file=pkl)
         return topologies
     else:
-        print("Using saved topologies")
+        logger.info("Using saved topologies")
         with open(db_file,"rb") as pkl:
             topologies     = pickle.load(file=pkl)
             topologies_len = len(topologies)
-            print("{0:<5} topologies loaded".format(topologies_len))
+            logger.info("{0:<5} topologies loaded".format(topologies_len))
             return topologies
 
 

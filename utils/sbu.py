@@ -12,6 +12,7 @@ __status__  = "alpha"
 import os
 import sys
 import numpy
+import logging
 import _pickle as pickle
 
 import ase
@@ -31,6 +32,7 @@ from autografs.utils.pointgroup import PointGroup
 from autografs.utils.mmanalysis import analyze_mm 
 from autografs.utils            import __data__
 
+logger = logging.getLogger(__name__) 
 
 
 class SBU(object):
@@ -40,6 +42,7 @@ class SBU(object):
                  name  : str,
                  atoms : ase.Atoms = None) -> None:
         """Constructor for a building unit, from an ASE Atoms."""
+        logger.debug("New instance of SBU {0}".format(name))
         self.name  = name
         self.atoms = atoms 
         self.symmops = {}
@@ -48,22 +51,56 @@ class SBU(object):
         self.shape = ("C1",0)
         if self.atoms is not None:
             self._analyze()
+        logger.debug("{self}".format(self=self.__str__()))
         return None
 
     def __repr__(self) -> str:
-        """Return representation for nice printing"""
-        return str(self.name)
+        """Return representation full printing"""
+        strings = []
+        strings.append("\nSBU: {name}\n".format(name=self.name))
+        # catch for empty object
+        if self.atoms is None:
+            return "".join(strings)
+        strings.append("Point group : {sc}\n".format(sc=self.shape[0]))
+        strings.append("Coordination: {co}\n".format(co=self.shape[1]))
+        for atom in self.atoms:
+            p0,p1,p2 = atom.position
+            sy = atom.symbol
+            tp = self.mmtypes[atom.index]
+            s = "{sy:<3} {p0:>5.2f} {p1:>5.2f} {p2:>5.2f} {tp:<5}\n".format(sy=sy,
+                                                                            p0=p0,
+                                                                            p1=p1,
+                                                                            p2=p2,
+                                                                            tp=tp)
+            strings.append(s)
+        # bonding matrix
+        strings.append("Bonding:\n")
+        for (i0,i1),b in numpy.ndenumerate(self.bonds):
+            if i0<i1 and b>0:
+                s = "{i0:<3} connected to {i1:<3}, bo = {bo:1.2f}\n".format(i0=i0,
+                                                                            i1=i1,
+                                                                            bo=b)
+                strings.append(s)
+        return "".join(strings)
+
+    def __str__(self) -> str:
+        """Uses repr to print the string.TODO=distinct."""
+        return self.__repr__()
 
     def set_atoms(self,
                   atoms   : ase.Atoms,
                   analyze : bool = False) -> None:
         """Set new Atoms object and reanalyze"""
+        logger.debug("Resetting Atoms in SBU {0}".format(self.name))
         self.atoms = atoms
         if analyze:
+            logger.debug("\tAnalysis required.")
             self._analyze()
         return None
 
-    def copy(self):
+    def copy(self) -> object:
+        """Return a copy of the object"""
+        logger.debug("SBU {0}: creating copy.".format(self.name))
         new = SBU(name=str(self.name))
         new.set_atoms(atoms=self.get_atoms(),analyze=False)
         new.symmops = self.symmops.copy()
@@ -74,6 +111,7 @@ class SBU(object):
 
     def get_unique_operations(self) -> dict:
         """Return all unique symmetry operations in the topology."""
+        logger.debug("SBU {0}: listing symmetry operations.".format(self.name))
         these_ops = []
         for s,o in self.symmops.items():
             if o is None:
@@ -97,6 +135,7 @@ class SBU(object):
         each type of symmetry. We assume the coordination is checked elsewhere.
         symmops -- (op type, count). e.g: ("C2",5) means 5 C2 in the slot.
         """
+        logger.debug("SBU {0}: checking compatibility with slot.".format(self.name))
         compatible = True
         sbuops = self.get_unique_operations()
         for s,o in symmops.items():
@@ -106,14 +145,17 @@ class SBU(object):
                  compatible = False
             if not compatible:
                 break
+        logger.debug("\tCompatibility = {cmp}.".format(cmp=compatible))
         return compatible
 
     def get_atoms(self) -> ase.Atoms:
         """Return a copy of the topology as ASE Atoms."""
+        logger.debug("SBU {0}: returning atoms.".format(self.name))
         return self.atoms.copy()
 
     def _analyze(self) -> None:
         """Guesses the mmtypes, bonds and pointgroup"""
+        logger.debug("SBU {0}: analyze bonding and symmetry.".format(self.name))
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
         if len(dummies)>0:
             pg = PointGroup(dummies,0.1)
@@ -126,28 +168,27 @@ class SBU(object):
 
 
 
-def read_sbu_database(update=False,path=None):
-    """
-    TODO
-    """
+def read_sbu_database(update : bool = False,
+                      path   : str  = None):
+    """Return a dictionnary of ASE Atoms as SBUs"""
     from autografs.utils.io import read_sbu
     db_file = os.path.join(__data__,"sbu/sbu.pkl")
     user_db = (path is not None)
     no_dflt = (not os.path.isfile(db_file))
     if (user_db or update or no_dflt):
-        print("Reloading the building units from scratch")
+        logger.info("Reloading the building units from scratch")
         sbu = read_sbu(path=path)
         sbu_len = len(sbu)
-        print("{0:<5} sbu saved".format(sbu_len))
+        logger.info("{0:<5} sbu saved".format(sbu_len))
         with open(db_file,"wb") as pkl:
             pickle.dump(obj=sbu,file=pkl)
         return sbu
     else:
-        print("Using saved sbu")
+        logger.info("Using saved sbu")
         with open(db_file,"rb") as pkl:
             sbu = pickle.load(file=pkl)
             sbu_len = len(sbu)
-            print("{0:<5} sbu loaded".format(sbu_len))
+            logger.info("{0:<5} sbu loaded".format(sbu_len))
             return sbu
 
 

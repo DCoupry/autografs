@@ -16,13 +16,14 @@ import scipy
 import typing
 import ase
 import itertools
-
+import logging
 from collections import defaultdict
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
 
+logger = logging.getLogger(__name__) 
 
 
 class Framework(object):
@@ -241,13 +242,11 @@ class Framework(object):
             x = x*alpha0
             self.scale(alpha=x)
             atoms,_,_    = self.get_atoms(dummies=True)
-            ase.visualize.view(atoms)
             tags         = atoms.get_tags()
             # reinitialize stuff
             self.scale(alpha=1.0/x)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
-            print(tags)
             pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
@@ -454,6 +453,7 @@ class Framework(object):
         """Write a chemical information file to disk in selected format"""
         atoms,bonds,mmtypes = self.get_atoms(dummies=False)
         path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))
+        logger.info("Framework saved to disk at {p}.".format(p=path))
         if ext=="gin":
             from autografs.utils.io import write_gin
             write_gin(path,atoms,bonds,mmtypes)
