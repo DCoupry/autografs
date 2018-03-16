@@ -53,6 +53,7 @@ class Framework(object):
         mmtypes  -- array of type names. e.g: 'C_R','O_3'...
         bonds    -- block-symmetric matrix of bond orders.
         """
+        logger.debug("Creating Framework instance.")
         self.topology = topology
         self.SBU      = SBU
         self.mmtypes  = numpy.asarray(mmtypes)
@@ -110,6 +111,7 @@ class Framework(object):
     def set_topology(self,
                      topology : ase.Atoms) -> None:
         """Set the topology attribute with an ASE Atoms object."""
+        logger.debug("Setting topology.")
         self.topology = topology.copy()
         return None
 
@@ -179,6 +181,7 @@ class Framework(object):
         mmtypes -- the MM atomic types.
         """
         # first append the atoms object to the list of sbu
+        logger.debug("Appending SBU {n} to framework.".format(n=sbu.name))
         self.SBU[index] = sbu
         if update:
             # make the bonds matrix with a new block
@@ -189,6 +192,7 @@ class Framework(object):
 
     def get_bonds(self) -> numpy.ndarray:
         """Return and update the current bond matrix"""
+        logger.debug("Updating framework bond matrix.")
         bonds = []
         for _,sbu in self:
             bonds.append(sbu.bonds)
@@ -198,6 +202,7 @@ class Framework(object):
 
     def get_mmtypes(self) -> numpy.ndarray:
         """Return and update the current bond matrix"""
+        logger.debug("Updating framework MM types.")
         mmtypes = []
         for _,sbu in self:
             mmtypes.append(sbu.mmtypes)
@@ -206,7 +211,7 @@ class Framework(object):
         return numpy.copy(self.mmtypes)
 
     def scale(self,
-              alpha  : float = 1.0) -> None:
+              alpha  : numpy.ndarray) -> None:
         """Scale the building units positions by a factor alpha.
 
         This uses the correspondance between the atoms in the topology
@@ -215,6 +220,7 @@ class Framework(object):
         sbu.
         alpha -- scaling factor
         """
+        logger.debug("Scaling framework by {0}x{1}x{2}.".format(*alpha))
         # get the scaled cell, normalized
         I    = numpy.eye(3)*alpha
         cell = self.topology.get_cell()
@@ -236,6 +242,7 @@ class Framework(object):
         identical tags in the complete structure
         alpha0 -- starting point of the scaling search algorithm
         """
+        logger.info("Refining unit cell.")
         def MSE(x : numpy.ndarray) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
@@ -269,6 +276,7 @@ class Framework(object):
                                                           "xatol" : 1e-02})
         # scale with result
         alpha = result.x*alpha0
+        logger.info("Best scaling achieved by {0}x{1}x{2}.".format(*alpha))
         self.scale(alpha=alpha)
         return None
 
@@ -277,6 +285,7 @@ class Framework(object):
                angle : float) -> None:
         """Rotate the SBU at index around a Cinf symmetry axis"""
         if self[index].shape[1]==2:
+            logger.info("Rotating {idx} by {a}.".format(idx=index,a=angle))
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
             axis = numpy.asarray(axis)
@@ -287,6 +296,7 @@ class Framework(object):
     def flip(self,
              index : int) -> None:
         """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
+        logger.info("Flipping {idx}".format(idx=index))
         if self[index].shape[1]==2:
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
@@ -305,6 +315,10 @@ class Framework(object):
 
     def list_functionalizable_sites(self,symbol=None) -> list:
         """Return a list of tuple for functionalizable sites"""
+        if symbol is not None:
+            logger.info("Listing available functionalizable {s}".format(symbol))
+        else:
+            logger.info("Listing all available functionalization sites")
         sites = []
         for idx,sbu in self:
             bonds = sbu.bonds
@@ -341,45 +355,51 @@ class Framework(object):
         sidx, aidx = where
         # create the SBU object for the functional group
         fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
-        fg = SBU(name=fg_name,atoms=fg)
-        # center the positions
-        fg_cop = fg.atoms.positions.mean(axis=0)
-        fg.atoms.positions -= fg_cop
-        # check that only one dummy exists
-        xidx = [x.index for x in fg.atoms if x.symbol=="X"]
-        assert len(xidx)==1
-        xidx  = xidx[0]
-        # center the sbu
-        sbu   = self.SBU[sidx].atoms
-        sbu_name = self.SBU[sidx].name
-        sbu_cop = sbu.positions.mean(axis=0)
-        sbu.positions -= sbu_cop
-        # find the bonds
-        bonds = self.SBU[sidx].bonds
-        bidx  = numpy.where(bonds[aidx]>0.0)[0]
-        # check that only one bond exists
-        assert len(bidx)==1 and bonds[aidx,bidx[0]]==1.0
-        # now get vectors to align
-        fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
-        assert len(fgbidx)==1 and fg.bonds[xidx,fgbidx]==1.0
-        # func-x
-        v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
-        # where[1]-bonded atom
-        v1 = sbu.positions[aidx]-sbu.positions[bidx]
-        R,s = scipy.linalg.orthogonal_procrustes(v0,v1)
-        fg.atoms.positions = fg.atoms.positions.dot(R)
-        fg.atoms.positions -= fg.atoms.positions[xidx]
-        fg.atoms.positions += sbu.positions[bidx]
-        # create the new object
-        # keep note of what to delete.
-        self._todel[sidx] += [aidx,xidx+len(sbu)]
-        sbu += fg.atoms
-        sbu.positions += sbu_cop
-        self.SBU[sidx].set_atoms(sbu,analyze=False)
-        self.SBU[sidx].bonds = scipy.linalg.block_diag(bonds,
-                                                       fg.bonds)
-        self.SBU[sidx].mmtypes = numpy.hstack([self.SBU[sidx].mmtypes,
-                                              fg.mmtypes])
+        logger.info("Functionalization of atom {1} in slot {0}.".format(*where))
+        try:
+            logger.info("\t|--> replace by {f}.".format(fg_name))
+            fg = SBU(name=fg_name,atoms=fg)
+            # center the positions
+            fg_cop = fg.atoms.positions.mean(axis=0)
+            fg.atoms.positions -= fg_cop
+            # check that only one dummy exists
+            xidx = [x.index for x in fg.atoms if x.symbol=="X"]
+            assert len(xidx)==1
+            xidx  = xidx[0]
+            # center the sbu
+            sbu   = self.SBU[sidx].atoms
+            sbu_name = self.SBU[sidx].name
+            sbu_cop = sbu.positions.mean(axis=0)
+            sbu.positions -= sbu_cop
+            # find the bonds
+            bonds = self.SBU[sidx].bonds
+            bidx  = numpy.where(bonds[aidx]>0.0)[0]
+            # check that only one bond exists
+            assert len(bidx)==1 and bonds[aidx,bidx[0]]==1.0
+            # now get vectors to align
+            fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
+            assert len(fgbidx)==1 and fg.bonds[xidx,fgbidx]==1.0
+            # func-x
+            v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
+            # where[1]-bonded atom
+            v1 = sbu.positions[aidx]-sbu.positions[bidx]
+            R,s = scipy.linalg.orthogonal_procrustes(v0,v1)
+            fg.atoms.positions = fg.atoms.positions.dot(R)
+            fg.atoms.positions -= fg.atoms.positions[xidx]
+            fg.atoms.positions += sbu.positions[bidx]
+            # create the new object
+            # keep note of what to delete.
+            self._todel[sidx] += [aidx,xidx+len(sbu)]
+            sbu += fg.atoms
+            sbu.positions += sbu_cop
+            self.SBU[sidx].set_atoms(sbu,analyze=False)
+            self.SBU[sidx].bonds = scipy.linalg.block_diag(bonds,
+                                                           fg.bonds)
+            self.SBU[sidx].mmtypes = numpy.hstack([self.SBU[sidx].mmtypes,
+                                                  fg.mmtypes])
+        except Exception as exc:
+            logger.error("\t|--> ERROR WHILE FUNCTIONALIZING.")
+            logger.error("\t|--> {exc}".format(exc))
         return None
 
     def get_atoms(self,
@@ -390,6 +410,12 @@ class Framework(object):
         connect the corresponding atoms or leave hem in place
         clean -- remove the dummies if True
         """
+        logger.debug("Creating ASE Atoms from framework.")
+        if dummies:
+            logger.debug("\tDummies will be kept.")
+            logger.debug("\tNo connection between SBU will occur.")
+        else:
+            logger.debug("\tDummies will be removed during connection.")
         # concatenate every sbu into one Atoms object
         framework = self.copy()
         cell = framework.topology.get_cell()

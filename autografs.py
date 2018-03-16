@@ -25,7 +25,6 @@ from autografs.utils.sbu        import SBU
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.topologies import Topology
 from autografs.framework        import Framework
-from autografs.utils.operations import procrustes
 
 logger = logging.getLogger(__name__) 
 
@@ -118,7 +117,6 @@ class Autografs(object):
             sbu.atoms.set_tags(sbu_atoms.get_tags())
             aligned.append(index=idx,sbu=sbu)
         # refine the cell scaling using a good starting point
-        logger.info("Refining unit cell.")
         aligned.refine(alpha0=alpha)
         return aligned
 
