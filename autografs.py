@@ -22,8 +22,8 @@ from collections import defaultdict
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
-from autografs.utils.topologies import read_topologies_database
-from autografs.utils.topologies import Topology
+from autografs.utils.topology   import read_topologies_database
+from autografs.utils.topology   import Topology
 from autografs.framework        import Framework
 
 logger = logging.getLogger(__name__) 
@@ -69,6 +69,7 @@ class Autografs(object):
         if isinstance(supercell,int):
             supercell = (supercell,supercell,supercell)
         topology_atoms  = self.topologies[topology_name]
+        ase.visualize.view(topology_atoms)
         if supercell!=(1,1,1):
             logger.info("{0}x{1}x{2} supercell of the topology is used.".format(*supercell))
             topology_atoms *= supercell
@@ -148,7 +149,6 @@ class Autografs(object):
             if not comp:
                 continue
             weights[slot].append(p)
-            # check if probability is included
             by_shape[slot].append(sbu)
         # now fill the choices
         sbu_dict = {}
@@ -156,6 +156,8 @@ class Autografs(object):
             # here, should accept weights also
             p = weights[shape]
             p /= numpy.sum(p)
+            print(shape)
+            print(p)
             sbu_chosen = numpy.random.choice(by_shape[shape],
                                                   p=p).copy()
             logger.debug("Slot {sl}: {sb} chosen with p={p}.".format(sl=index,
@@ -201,7 +203,7 @@ class Autografs(object):
         # getting the rotation matrix
         X0  = sbu.atoms[sbu_Xis].get_positions()
         X1  = fragment.get_positions()
-        if X0.shape[0]>3:
+        if X0.shape[0]>5:
             X0 = self.get_vector_space(X0)
             X1 = self.get_vector_space(X1)
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
@@ -219,8 +221,9 @@ class Autografs(object):
         x0 = X[0]
         dots = [x0.dot(x)for x in X]
         x1 = X[numpy.argmin(dots)]
-        dots = [x1.dot(x)for x in X[1:]]
-        x2 = X[numpy.argmin(dots)]
+        # dots = [x1.dot(x)for x in X[1:]]
+        # x2 = X[numpy.argmin(dots)]
+        x2 = numpy.cross(x0,x1)
         return numpy.asarray([x0,x1,x2])
 
     def list_available_topologies(self,
@@ -277,6 +280,7 @@ class Autografs(object):
                                 atoms=self.topologies[topology_name])
             topops = topology.get_unique_operations()
             shapes = topology.get_unique_shapes()
+            print(shapes)
             # filter according to coordination first
             for sbuk,sbuv in self.sbu.items():
                 c = len([x for x in sbuv if x.symbol=="X"])
@@ -290,10 +294,10 @@ class Autografs(object):
                         except Exception as exc:
                             log.error("SBU {k} not loaded: {exc}".format(k=sbuk,exc=exc))
                         if sbu.shape == shape:
-                            logger.info("SBU {k} is compatible by shape.".format(k))
+                            logger.info("SBU {k} is compatible by shape.".format(k=sbuk))
                             av_sbu[shape].append(sbuk)
                         elif sbu.is_compatible(topops[shape]):
-                            logger.info("SBU {k} is compatible by symmetry.".format(k))
+                            logger.info("SBU {k} is compatible by symmetry.".format(k=sbuk))
                             av_sbu[shape].append(sbuk)
         else:
             logger.info("Listing full database of SBU.")

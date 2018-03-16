@@ -20,9 +20,9 @@ import logging
 from collections import defaultdict
 
 from autografs.utils.sbu        import read_sbu_database
-from autografs.utils.topologies import read_topologies_database
+from autografs.utils.topology   import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
-from autografs.utils.topologies import Topology
+from autografs.utils.topology   import Topology
 
 logger = logging.getLogger(__name__) 
 
@@ -232,9 +232,10 @@ class Framework(object):
         """
         logger.debug("Scaling framework by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
         # get the scaled cell, normalized
-        I    = numpy.eye(3)*alpha
-        cell = self.topology.get_cell()
-        cell = cell.dot(I*1.73/numpy.linalg.norm(cell,axis=0))
+        I     = numpy.eye(3)*alpha
+        cell  = self.topology.get_cell()
+        ncell = numpy.linalg.norm(cell,axis=0)
+        cell  = cell.dot(I*1.73/ncell)
         self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:
@@ -273,6 +274,8 @@ class Framework(object):
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
+        # and directions with no pbc should be 1.0
+        alpha0[alpha0<1e-6] = 20.0
         low  = 0.1
         high = 1.5
         if numpy.amin(low*alpha0)<2.0:
