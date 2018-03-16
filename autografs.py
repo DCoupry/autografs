@@ -106,15 +106,11 @@ class Autografs(object):
         # carry on
         for idx,sbu in sbu_dict.items():
             logger.debug("Treating slot number {idx}".format(idx=idx))
-            fragment_atoms = topology.fragments[idx]
-            sbu_atoms      = sbu.atoms
-            logger.debug("Aligning SBU {name}".format(name=sbu.name))
+            logger.debug("\t|-->Aligning SBU {name}".format(name=sbu.name))
             # now align and get the scaling factor
-            sbu_atoms,f = self.align(fragment=fragment_atoms,
-                                     sbu=sbu_atoms)
+            sbu,f = self.align(fragment=topology.fragments[idx],
+                                     sbu=sbu)
             alpha += f
-            sbu.atoms.positions = sbu_atoms.positions
-            sbu.atoms.set_tags(sbu_atoms.get_tags())
             aligned.append(index=idx,sbu=sbu)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
@@ -170,7 +166,7 @@ class Autografs(object):
 
     def align(self,
               fragment : ase.Atoms,
-              sbu      : ase.Atoms) -> (ase.Atoms, float):
+              sbu      : object) -> (ase.Atoms, float):
         """Return an aligned SBU.
 
         The SBU is rotated on top of the fragment
@@ -181,20 +177,19 @@ class Autografs(object):
         sbu      -- object to align, ASE Atoms
         """
         # first, we work with copies
-        sbu            =      sbu.copy()
         fragment       = fragment.copy()
         # normalize and center
-        fragment_cop        = fragment.positions.mean(axis=0)
-        fragment.positions -= fragment_cop
-        sbu.positions      -= sbu.positions.mean(axis=0)
+        fragment_cop         = fragment.positions.mean(axis=0)
+        fragment.positions  -= fragment_cop
+        sbu.atoms.positions -= sbu.atoms.positions.mean(axis=0)
         # identify dummies in sbu
-        sbu_Xis = [x.index for x in sbu if x.symbol=="X"]
+        sbu_Xis = [x.index for x in sbu.atoms if x.symbol=="X"]
         # get the scaling factor
-        size_sbu      = numpy.linalg.norm(sbu[sbu_Xis].positions,axis=1)
+        size_sbu      = numpy.linalg.norm(sbu.atoms[sbu_Xis].positions,axis=1)
         size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
         alpha         = numpy.mean(size_sbu/size_fragment)
         # TODO check initial scaling: it goes up too much with unit cell
-        ncop          = numpy.linalg.norm(fragment_cop)
+        ncop = numpy.linalg.norm(fragment_cop)
         if ncop<1e-6:
             direction  = numpy.ones(3,dtype=numpy.float32)
             direction /= numpy.linalg.norm(direction)
@@ -202,20 +197,20 @@ class Autografs(object):
             direction = fragment_cop / ncop
         # scaling for better alignment
         fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
-        # alpha *= direction
+        alpha *= direction
         # getting the rotation matrix
-        X0  = sbu[sbu_Xis].get_positions()
+        X0  = sbu.atoms[sbu_Xis].get_positions()
         X1  = fragment.get_positions()
         if X0.shape[0]>3:
             X0 = self.get_vector_space(X0)
             X1 = self.get_vector_space(X1)
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
-        sbu.positions = sbu.positions.dot(R)+fragment_cop
+        sbu.atoms.positions = sbu.atoms.positions.dot(R)+fragment_cop
         fragment.positions += fragment_cop
-        res_d = ase.geometry.distance(sbu[sbu_Xis],fragment)
+        res_d = ase.geometry.distance(sbu.atoms[sbu_Xis],fragment)
         logger.debug("Residual distance: {d}".format(d=res_d))
         # tag the atoms
-        self.tag(sbu,fragment)
+        sbu.transfer_tags(fragment)
         return sbu,alpha
 
     def get_vector_space(self,
@@ -227,23 +222,6 @@ class Autografs(object):
         dots = [x1.dot(x)for x in X[1:]]
         x2 = X[numpy.argmin(dots)]
         return numpy.asarray([x0,x1,x2])
-
-    def tag(self,
-            sbu      : ase.Atoms,
-            fragment : ase.Atoms) -> None:
-        """Tranfer tags from the fragment to the closest dummies in the sbu"""
-        logger.debug("\tTagging dummies.")
-        # we keep a record of used tags.
-        unused = [x.index for x in sbu if x.symbol=="X"]
-        for atom in fragment:
-            ids = [s.index for s in sbu if s.index in unused]
-            pf = atom.position
-            ps = sbu.positions[unused]
-            d  = numpy.linalg.norm(ps-pf,axis=1)
-            si = ids[numpy.argmin(d)]
-            sbu[si].tag = atom.tag
-            unused.remove(si)
-        return None
 
     def list_available_topologies(self,
                                   sbu_names  : list = [],

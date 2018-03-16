@@ -165,7 +165,21 @@ class SBU(object):
         self.mmtypes  = mmtypes
         return None
 
-
+    def transfer_tags(self,
+                      fragment : ase.Atoms) -> None:
+        """Transfer tags between an aligned fragment and the SBU"""
+        logger.debug("\tTagging dummies in SBU {n}.".format(n=self.name))
+        # we keep a record of used tags.
+        unused = [x.index for x in self.atoms if x.symbol=="X"]
+        for atom in fragment:
+            ids = [s.index for s in self.atoms if s.index in unused]
+            pf = atom.position
+            ps = self.atoms.positions[unused]
+            d  = numpy.linalg.norm(ps-pf,axis=1)
+            si = ids[numpy.argmin(d)]
+            self.atoms[si].tag = atom.tag
+            unused.remove(si)
+        return None
 
 def read_sbu_database(update : bool = False,
                       path   : str  = None):

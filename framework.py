@@ -22,6 +22,7 @@ from collections import defaultdict
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.topologies import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
+from autografs.utils.topologies import Topology
 
 logger = logging.getLogger(__name__) 
 
@@ -122,27 +123,37 @@ class Framework(object):
     def get_supercell(self,
                       m : tuple = (2,2,2)) -> object:
         """Return a framework supercell usin m as multiplier"""
+        # TODO !!! [CRITICAL] correct tagging needed!!!.
         if isinstance(m,int):
             m = (m,m,m)
         logger.info("Creating supercell {0}x{1}x{2}.".format(*m))
         # get the offset direction ranges
-        x = list(range(0,m[0]+1,1))
-        y = list(range(0,m[1]+1,1))
-        z = list(range(0,m[2]+1,1)) 
+        x = list(range(0,m[0],1))
+        y = list(range(0,m[1],1))
+        z = list(range(0,m[2],1)) 
         # new framework object
         supercell = self.copy()
         ocell = supercell.topology.get_cell()
         otopo = supercell.topology.copy()
-        cellfactor = numpy.asarray([x[-1],y[-1],z[-1]],dtype=float)
+        cellfactor = numpy.asarray([x[-1]+1,y[-1]+1,z[-1]+1],dtype=float)
         newcell = ocell.dot(numpy.eye(3)*cellfactor)
         supercell.topology.set_cell(newcell,scale_atoms=False)
+        # we need a topology object to correctly tag.
+        supertopo = Topology(name="supercell",atoms=otopo*m)
         noff  = 0
         L     = len(otopo)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
             # central cell, ignore
             if offset==(0,0,0):
-                continue
+                for atom in otopo.copy():
+                    if atom.symbol=="X":
+                        continue
+                    if atom.index not in supercell.SBU.keys():
+                        continue
+                    # directly tranfer new tags
+                    sbu = supercell[atom.index]
+                    sbu.transfer_tags(supertopo.fragments[atom.index])           
             else:
                 noff += 1 
                 coffset = ocell.dot(offset)
@@ -156,14 +167,13 @@ class Framework(object):
                     if atom.index not in supercell.SBU.keys():
                         continue
                     sbu = supercell[atom.index].copy()
-                    tags = sbu.atoms.get_tags()
-                    tags[tags>0] += L*noff
-                    sbu.atoms.set_tags(tags)
                     sbu.atoms.positions += coffset
+                    sbu.transfer_tags(supertopo.fragments[newidx])
                     supercell.append(index = newidx,
                                      sbu   = sbu,
                                      update= False)
                     supercell._todel[newidx] = list(supercell._todel[atom.index])
+        # redo the tagging
         return supercell
 
     def append(self,
@@ -220,7 +230,7 @@ class Framework(object):
         sbu.
         alpha -- scaling factor
         """
-        logger.debug("Scaling framework by {0}x{1}x{2}.".format(*alpha))
+        logger.debug("Scaling framework by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
         # get the scaled cell, normalized
         I    = numpy.eye(3)*alpha
         cell = self.topology.get_cell()
@@ -243,7 +253,7 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-        def MSE(x : numpy.ndarray) -> float:
+        def MSE(x : float) -> float:
             """Return cost of scaling as MSE of distances."""
             # scale with this parameter
             x = x*alpha0
@@ -259,7 +269,7 @@ class Framework(object):
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.mean(d**2)
-            logger.info("\tScaling error = {e}".format(e=mse))
+            logger.info("\tScaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
@@ -276,7 +286,7 @@ class Framework(object):
                                                           "xatol" : 1e-02})
         # scale with result
         alpha = result.x*alpha0
-        logger.info("Best scaling achieved by {0}x{1}x{2}.".format(*alpha))
+        logger.info("Best scaling achieved by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
         self.scale(alpha=alpha)
         return None
 
