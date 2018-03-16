@@ -106,7 +106,7 @@ class Autografs(object):
                                                                 s11=sbu.shape[1]))
         # carry on
         for idx,sbu in sbu_dict.items():
-            logger.info("Treating slot number {idx}".format(idx=idx))
+            logger.debug("Treating slot number {idx}".format(idx=idx))
             fragment_atoms = topology.fragments[idx]
             sbu_atoms      = sbu.atoms
             logger.debug("Aligning SBU {name}".format(name=sbu.name))
@@ -195,6 +195,7 @@ class Autografs(object):
         size_sbu      = numpy.linalg.norm(sbu[sbu_Xis].positions,axis=1)
         size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
         alpha         = numpy.mean(size_sbu/size_fragment)
+        # TODO check initial scaling: it goes up too much with unit cell
         ncop          = numpy.linalg.norm(fragment_cop)
         if ncop<1e-6:
             direction  = numpy.ones(3,dtype=numpy.float32)
@@ -203,7 +204,7 @@ class Autografs(object):
             direction = fragment_cop / ncop
         # scaling for better alignment
         fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
-        alpha *= direction
+        # alpha *= direction
         # getting the rotation matrix
         X0  = sbu[sbu_Xis].get_positions()
         X1  = fragment.get_positions()

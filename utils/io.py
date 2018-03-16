@@ -22,7 +22,6 @@ from ase.neighborlist import NeighborList
 
 
 from scipy.cluster.hierarchy import fclusterdata as cluster
-from progress.bar            import Bar
 
 import warnings
 
@@ -53,9 +52,7 @@ def read_cgd() -> dict:
         topologies_raw = [t.strip().strip("CRYSTAL") for t in text.split("END")]
         topologies_len = len(topologies_raw)
         print("{0:<5} topologies before treatment".format(topologies_len))
-        bar = Bar('Processing', max=topologies_len)
         for topology_raw in topologies_raw:
-            bar.next()
             # read from the template.
             # the edges are easier to comprehend by edge center
             try:
@@ -134,7 +131,6 @@ def read_cgd() -> dict:
                     topologies[name] = topology
             except Exception as expt:
                 continue
-        bar.finish()
     return topologies
 
 

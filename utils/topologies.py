@@ -22,7 +22,6 @@ from ase.neighborlist import NeighborList
 from collections import Counter
 
 from scipy.cluster.hierarchy import fclusterdata as cluster
-from progress.bar            import Bar
 
 import warnings
 
