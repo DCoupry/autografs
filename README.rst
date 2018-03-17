@@ -26,11 +26,11 @@ Examples:
 ---------
 
 Clone this repository and add it to you pythonpath:
-```
+`
 cd $HOME
 git clone https://github.com/DCoupry/autografs.git
 export PYTHONPATH=$HOME/autografs:$PYTHONPATH
-```
+`
 
 then from any python script or command line:
 ```
