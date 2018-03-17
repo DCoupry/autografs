@@ -1,7 +1,9 @@
 AuToGraFS
 =========
 
-[Automatic Topological Generator for Framework Structures](http://pubs.acs.org/doi/abs/10.1021/jp507643v "Original publication")
+Original publication: "Automatic Topological Generator for Framework Structures".
+link here_.
+.. _here: http://pubs.acs.org/doi/abs/10.1021/jp507643v 
 
 *This is a beta version*. Bug hunting is very much going on, and there are still some old funtionalities that are not yet reimplemented.
 
