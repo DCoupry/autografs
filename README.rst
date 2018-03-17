@@ -31,11 +31,15 @@ Examples:
 
 Clone this repository and add it to you pythonpath:
 
-:code:`cd $HOME
-git clone https://github.com/DCoupry/autografs.git
-export PYTHONPATH=$HOME/autografs:$PYTHONPATH`
+.. highlight:: bash
+
+$ cd $HOME
+$ git clone https://github.com/DCoupry/autografs.git
+$ export PYTHONPATH=$HOME/autografs:$PYTHONPATH`
 
 then from any python script or command line:
+
+.. highlight:: python
 
 >>> from autografs import Autografs
 >>> mofgen = Autografs()
