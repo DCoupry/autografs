@@ -17,8 +17,9 @@ URL = 'https://github.com/DCoupry/autografs'
 EMAIL = 'damien.coupry@uni-leipzig.de'
 AUTHOR = 'Damien Coupry'
 REQUIRES_PYTHON = '>=3.6.0'
-VERSION = '2.0.2-beta1'
+VERSION = '2.0.3-beta'
 REQUIRED = [ "ase","scipy","numpy"]
+DATA = ["data/sbu/DEFAULTS.xyz","data/topologies/HermannMauguin.dat","data/topologies/nets.cgd","data/uff/rappe.csv","data/uff/uff4mof.csv"]
 
 here = os.path.abspath(os.path.dirname(__file__))
 
@@ -84,6 +85,7 @@ setup(
     python_requires=REQUIRES_PYTHON,
     url=URL,
     packages=find_packages(exclude=('tests',)),
+    package_data={NAME: DATA,},
     # If your package is a single module, use this instead of 'packages':
     # py_modules=['mypackage'],
 
