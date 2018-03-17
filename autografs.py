@@ -47,7 +47,7 @@ class Autografs(object):
 
     def make(self,
              topology_name : str,
-             sbu_names     : str   = None,
+             sbu_names     : list  = None,
              sbu_dict      : dict  = None,
              supercell     : tuple = (1,1,1)) -> ase.Atoms :
         """Create a framework using given topology and sbu.
@@ -83,27 +83,27 @@ class Autografs(object):
         alpha    = 0.0
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
-        if sbu_dict is None:
-            sbu_dict = self.get_sbu_dict(topology=topology,
-                                         sbu_names=sbu_names)
-        else:
-            # the sbu_dict has been passed. if not SBU object, create them
-            for k,v in sbu_dict.items():
-                if not isinstance(v,SBU):
-                    assert isinstance(v,ase.Atoms)
-                    if "name" in v.info.keys():
-                        name = v.info["name"]
-                    else:
-                        name = str(k)
-                    sbu_dict[k] = SBU(name=name,atoms=v)
+        try:
+            if sbu_dict is None and sbu_names is not None:
+                sbu_dict = self.get_sbu_dict(topology=topology,
+                                             sbu_names=sbu_names)
+            elif sbu_dict is not None:
+                # the sbu_dict has been passed. if not SBU object, create them
+                for k,v in sbu_dict.items():
+                    if not isinstance(v,SBU):
+                        assert isinstance(v,ase.Atoms)
+                        if "name" in v.info.keys():
+                            name = v.info["name"]
+                        else:
+                            name = str(k)
+                        sbu_dict[k] = SBU(name=name,atoms=v)
+            else:
+                raise RuntimeError("Either supply sbu_names or sbu_dict.")
+        except RuntimeError as exc:
+            logger.error("Slot to SBU mappping interrupted.")
+            logger.error("{exc}".format(exc))
         # some logging
-        for idx,sbu in sbu_dict.items():
-            logging.info("Slot {sl}, {s00} {s01}".format(sl=idx,
-                                                         s00=topology.shapes[idx][0],
-                                                         s01=topology.shapes[idx][1]))
-            logging.info("\t|-->SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
-                                                                s10=sbu.shape[0],
-                                                                s11=sbu.shape[1]))
+        self.log_sbu_dict(sbu_dict=sbu_dict)
         # carry on
         for idx,sbu in sbu_dict.items():
             logger.debug("Treating slot number {idx}".format(idx=idx))
@@ -116,6 +116,28 @@ class Autografs(object):
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
+
+    def log_sbu_dict(self,
+                     sbu_dict : dict = None) -> None:
+        """Does some logging on the chosen SBU mapping."""
+        for idx,sbu in sbu_dict.items():
+            s00 = topology.shapes[idx][0]
+            s01 = topology.shapes[idx][1]
+            s10 = sbu.shape[0]
+            s11 = sbu.shape[1]
+            logging.info("Slot {sl}, {s00} {s01}".format(sl=idx,
+                                                         s00=s00,
+                                                         s01=s01))
+            logging.info("\t|-->SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
+                                                                s10=s10,
+                                                                s11=s11))
+        return None
+
+    def get_topology(self, 
+                     topology_name : str = None) -> object:
+        """Generates and return a Topology object"""
+        topology_atoms = self.topologies[topology_name]
+        return Topology(name=topology_name, atoms=topology_atoms)
 
     def get_sbu_dict(self,
                      topology  : object,
