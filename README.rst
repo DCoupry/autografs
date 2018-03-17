@@ -2,7 +2,9 @@ AuToGraFS
 =========
 
 Original publication: `"Automatic Topological Generator for Framework Structures"`__.
+
 .. _here: http://pubs.acs.org/doi/abs/10.1021/jp507643v 
+
 __ here_
 
 *This is a beta version*. Bug hunting is very much going on, and there are still some old funtionalities that are not yet reimplemented.
@@ -29,10 +31,11 @@ Examples:
 
 Clone this repository and add it to you pythonpath:
 
->>> cd $HOME
->>> git clone https://github.com/DCoupry/autografs.git
->>> export PYTHONPATH=$HOME/autografs:$PYTHONPATH
-
+`
+cd $HOME
+git clone https://github.com/DCoupry/autografs.git
+export PYTHONPATH=$HOME/autografs:$PYTHONPATH
+`
 
 then from any python script or command line:
 
