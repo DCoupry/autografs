@@ -32,7 +32,9 @@ Examples:
 Clone this repository and add it to you pythonpath:
 
 :code:`cd $HOME`
+
 :code:`git clone https://github.com/DCoupry/autografs.git`
+
 :code:`export PYTHONPATH=$HOME/autografs:$PYTHONPATH`
 
 then from any python script or command line:
