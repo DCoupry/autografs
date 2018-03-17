@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.0.3'
+__version__ = '2.0.4'
 __status__  = "beta"
 
 import os
@@ -103,7 +103,7 @@ class Autografs(object):
             logger.error("Slot to SBU mappping interrupted.")
             logger.error("{exc}".format(exc))
         # some logging
-        self.log_sbu_dict(sbu_dict=sbu_dict)
+        self.log_sbu_dict(sbu_dict=sbu_dict,topology=topology)
         # carry on
         for idx,sbu in sbu_dict.items():
             logger.debug("Treating slot number {idx}".format(idx=idx))
@@ -118,6 +118,7 @@ class Autografs(object):
         return aligned
 
     def log_sbu_dict(self,
+                     topology : object,
                      sbu_dict : dict = None) -> None:
         """Does some logging on the chosen SBU mapping."""
         for idx,sbu in sbu_dict.items():
@@ -178,8 +179,6 @@ class Autografs(object):
             # here, should accept weights also
             p = weights[shape]
             p /= numpy.sum(p)
-            print(shape)
-            print(p)
             sbu_chosen = numpy.random.choice(by_shape[shape],
                                                   p=p).copy()
             logger.debug("Slot {sl}: {sb} chosen with p={p}.".format(sl=index,
@@ -302,7 +301,6 @@ class Autografs(object):
                                 atoms=self.topologies[topology_name])
             topops = topology.get_unique_operations()
             shapes = topology.get_unique_shapes()
-            print(shapes)
             # filter according to coordination first
             for sbuk,sbuv in self.sbu.items():
                 c = len([x for x in sbuv if x.symbol=="X"])

@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.0.3'
+__version__ = '2.0.4'
 __status__  = "beta"
 
 import os

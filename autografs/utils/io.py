@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.0.3'
+__version__ = '2.0.4'
 __status__  = "beta"
 
 import os
@@ -27,6 +27,10 @@ import warnings
 
 from autografs.utils.pointgroup import PointGroup
 from autografs.utils           import __data__
+
+import logging
+logger = logging.getLogger(__name__)
+
 
 def read_cgd() -> dict:
     """Return a dictionary of topologies as ASE Atoms objects
@@ -51,7 +55,7 @@ def read_cgd() -> dict:
         # split the file by topology
         topologies_raw = [t.strip().strip("CRYSTAL") for t in text.split("END")]
         topologies_len = len(topologies_raw)
-        print("{0:<5} topologies before treatment".format(topologies_len))
+        logger.info("{0:<5} topologies before treatment".format(topologies_len))
         for topology_raw in topologies_raw:
             # read from the template.
             # the edges are easier to comprehend by edge center
