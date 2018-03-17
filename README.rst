@@ -20,22 +20,29 @@ TODO:
   + precomputing sbu-topologies correspondance
   + list of paths to custom databases...
 
-Dependencies to install first:
-------------------------------
+Install:
+--------
+
+.. highlight:: bash
+
+$ pip install --user --upgrade AuToGraFS
+
+
+For a manual install, first install the dependencies,
 
 1. python 3.6
 2. ase, scipy, numpy
 
-Examples:
----------
 
-.. highlight:: bash
-
-Clone this repository and add it to you pythonpath::
+then clone this repository and add it to you pythonpath::
 
 	$ cd $HOME
 	$ git clone https://github.com/DCoupry/autografs.git
 	$ export PYTHONPATH=$HOME/autografs:$PYTHONPATH`
+
+
+Examples:
+---------
 
 then from any python script or command line:
 

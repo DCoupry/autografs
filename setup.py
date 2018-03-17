@@ -17,7 +17,7 @@ URL = 'https://github.com/DCoupry/autografs'
 EMAIL = 'damien.coupry@uni-leipzig.de'
 AUTHOR = 'Damien Coupry'
 REQUIRES_PYTHON = '>=3.6.0'
-VERSION = '2.0.2-beta'
+VERSION = '2.0.2-beta1'
 REQUIRED = [ "ase","scipy","numpy"]
 
 here = os.path.abspath(os.path.dirname(__file__))
