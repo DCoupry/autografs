@@ -239,13 +239,21 @@ class Autografs(object):
     def get_vector_space(self,
                          X : numpy.ndarray) -> numpy.ndarray:
         """Returns a vector space as three points."""
+        # initialize
         x0 = X[0]
-        dots = [x0.dot(x)for x in X]
-        x1 = X[numpy.argmin(dots)]
-        # dots = [x1.dot(x)for x in X[1:]]
-        # x2 = X[numpy.argmin(dots)]
-        x2 = numpy.cross(x0,x1)
-        return numpy.asarray([x0,x1,x2])
+        # find the point most orthogonal
+        dots = [x.dot(x0)for x in X]
+        i1 = numpy.argmin(dots)
+        x1 = X[i1]
+        # the second point maximizes the same with x1
+        dots = [x.dot(x1) for x in X[1:]]
+        i2 = numpy.argmin(dots)+1
+        x2 = X[i2]
+        # we find a third point
+        dots = [x.dot(x1)+x.dot(x0)+x.dot(x2) for x in X]
+        i3 = numpy.argmin(dots)
+        x3 = X[i3]
+        return numpy.asarray([x0,x1,x2,x3])
 
     def list_available_topologies(self,
                                   sbu_names  : list = [],

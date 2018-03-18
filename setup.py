@@ -17,7 +17,7 @@ URL = 'https://github.com/DCoupry/autografs'
 EMAIL = 'damien.coupry@uni-leipzig.de'
 AUTHOR = 'Damien Coupry'
 REQUIRES_PYTHON = '>=3.6.0'
-VERSION = '2.0.3-beta'
+VERSION = '2.0.4-beta'
 REQUIRED = [ "ase","scipy","numpy"]
 DATA = ["data/sbu/DEFAULTS.xyz","data/topologies/HermannMauguin.dat","data/topologies/nets.cgd","data/uff/rappe.csv","data/uff/uff4mof.csv"]
 
