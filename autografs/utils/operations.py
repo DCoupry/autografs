@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -11,8 +11,8 @@ __status__  = "beta"
 
 import numpy
 
-def inertia(xyz : numpy.ndarray,
-            W   : numpy.ndarray) -> numpy.ndarray:
+def inertia(xyz,
+            W  ):
     """Return the inertia matrix of coordinates, weighted"""
     x = xyz[:,0]
     y = xyz[:,1]
@@ -31,8 +31,8 @@ def inertia(xyz : numpy.ndarray,
                      [Ixz,Iyz,Izz]],dtype=numpy.float32)
     return I
     
-def rotation(axis  : numpy.ndarray,
-             order : float) -> numpy.ndarray:
+def rotation(axis ,
+             order):
     """Return a rotation matrix around the axis"""
     M = numpy.eye(3)
     axis /= numpy.linalg.norm(axis)
@@ -54,7 +54,7 @@ def rotation(axis  : numpy.ndarray,
     return M
     
     
-def reflection(axis : numpy.ndarray) -> numpy.ndarray:
+def reflection(axis):
     """Return a reflection matrix around the axis"""
     M = numpy.eye(3)
     axis /= numpy.linalg.norm(axis)
@@ -73,9 +73,9 @@ def reflection(axis : numpy.ndarray) -> numpy.ndarray:
     return M
 
 
-def procrustes(X : numpy.ndarray,
-               Y : numpy.ndarray,
-               method : str = "Q") -> (numpy.ndarray,float):
+def procrustes(X,
+               Y,
+               method = "Q"):
     """Return the optimal rotation between two sets of coordinates"""
     X = numpy.array(X,dtype=float)
     Y = numpy.array(Y,dtype=float)

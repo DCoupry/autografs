@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -38,8 +38,8 @@ class Topology(object):
     """Contener class for the topology information"""
 
     def __init__(self,
-                 name  : str,
-                 atoms : ase.Atoms) -> None:
+                 name ,
+                 atoms):
         """Constructor for a topology, from an ASE Atoms."""
         logger.debug("Creating Topology {0}".format(name))
         self.name  = name
@@ -54,12 +54,12 @@ class Topology(object):
         self._analyze()
         return None
 
-    def get_atoms(self) -> ase.Atoms:
+    def get_atoms(self):
         """Return a copy of the topology as ASE Atoms."""
         logger.debug("Topology {0}: returning atoms.".format(self.name))
         return self.atoms.copy()
 
-    def get_fragments(self) -> ase.Atoms:
+    def get_fragments(self):
         """Return a concatenated version of the fragments."""
         logger.debug("Topology {0}: returning fragments.".format(self.name))
         frags = ase.Atoms(cell=self.atoms.get_cell(),
@@ -70,12 +70,12 @@ class Topology(object):
             frags+=frag
         return frags
 
-    def get_unique_shapes(self) -> set:
+    def get_unique_shapes(self):
         """Return all unique shapes in the topology."""
         logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name))
         return set(self.shapes.values())
 
-    def get_unique_operations(self) -> dict:
+    def get_unique_operations(self):
         """Return all unique symmetry operations in the topology."""
         logger.debug("Topology {0}: listing symmetry operations.".format(self.name))
         ops = {}
@@ -98,7 +98,7 @@ class Topology(object):
         return ops
 
     def has_compatible_slot(self,
-                            sbu : object) -> (bool,tuple):
+                            sbu ):
         """Return (True,shape) for a slot compatible with the SBU"""
         compatible = False
         slot      = None
@@ -119,8 +119,8 @@ class Topology(object):
         return compatible,slot
 
     def _get_cutoffs(self,
-                     Xis : numpy.ndarray,
-                     Ais : numpy.ndarray) -> numpy.ndarray:
+                     Xis ,
+                     Ais ):
         """Return the cutoffs leading to the desired connectivity"""
         # initialize cutoffs to small non-zero skin partameter
         # TODO check on coordination
@@ -147,19 +147,20 @@ class Topology(object):
                 for cluster_index in set(clusters):
                     # check this cluster distances
                     indices   = numpy.where(clusters==cluster_index)[0]
-                    L = len(indices)
-                    if L>coord:
-                        eps*=0.75
-                    elif L<coord:
-                        eps*=1.5
                     cutoff_tmp = dists[indices].mean() 
                     if cutoff_tmp<cutoff :
                         # if better score, replace the cutoff
                         cutoff = cutoff_tmp
+                        L = len(indices)
+                        if L!=coord:
+                            diff = coord/(L-coord)
+                            eps*=diff
+                            logger.debug("Coordination with cutoff {c}={l}, goal is {r}".format(c=cutoff,l=L,r=coord))
+                            logger.debug("\tEpsilon => {eps}".format(eps=eps))
             cutoffs[other_index] = cutoff
         return cutoffs
 
-    def _analyze(self) -> None:
+    def _analyze(self):
         """Analyze the topology to cut the fragments out."""
         # separate the dummies from the rest
         logger.debug("Analyzing fragments of topology {0}.".format(self.name))
@@ -201,7 +202,7 @@ class Topology(object):
 
 
 
-def download_topologies() -> None:
+def download_topologies():
     """Downloads the topology file from the RCSR website"""
     import requests
     import shutil
@@ -216,8 +217,8 @@ def download_topologies() -> None:
             shutil.copyfileobj(resp.raw, outpt)        
     return
 
-def read_topologies_database(update_db     : bool = False,
-                             update_source : bool = False) -> dict:
+def read_topologies_database(update_db    ,
+                             update_source):
     """Return a dictionary of topologies as ASE Atoms."""
     from autografs.utils.io import read_cgd
     root     = os.path.join(__data__,"topologies")

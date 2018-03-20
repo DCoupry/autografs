@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -22,7 +22,7 @@ from ase.visualize import view
 
 from autografs.utils import __data__
 
-def is_metal(symbols : list) -> bool:
+def is_metal(symbols):
     """Check wether symbols in a list are metals"""
     symbols = numpy.array([symbols]).flatten()
     metals = ['Li','Be','Al','Sc','Ti','V','Cr','Mn','Fe','Co','Ni','Cu','Zn',
@@ -34,14 +34,14 @@ def is_metal(symbols : list) -> bool:
               'Mt','Ds','Rg','Cn','Nh','Fl','Mc','Lv','Ts','Og']
     return numpy.isin(symbols,metals)
 
-def is_alkali(symbols : list) -> bool:
+def is_alkali(symbols):
     """Check wether symbols in a list are alkali"""
     symbols = numpy.array([symbols]).flatten()
     alkali = ['Li','Be','Na','Mg','K','Ca','Rb','Sr','Cs','Ba']
     return numpy.isin(symbols,alkali)
 
 
-def read_uff_library(library : str = "uff4mof") -> numpy.ndarray:
+def read_uff_library(library = "uff4mof"):
     """Return the UFF library as a numpy array"""
     uff_file = os.path.join(__data__,"uff/{0}.csv".format(library))
     with open(uff_file,"r") as lib:
@@ -50,7 +50,7 @@ def read_uff_library(library : str = "uff4mof") -> numpy.ndarray:
         ufflib   = {s:numpy.array([r,a,c],dtype=numpy.float32) for s,r,a,c in lines}
     return ufflib
 
-def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
+def get_bond_matrix(sbu):
     """Guesses the bond order in neighbourlist based on covalent radii 
     the radii for BO > 1 are extrapolated by removing 0.1 Angstroms by order 
     see Beatriz Cordero, Veronica Gomez, Ana E. Platero-Prats, Marc Reves, Jorge Echeverria,
@@ -171,16 +171,16 @@ def get_bond_matrix(sbu : ase.Atoms) -> numpy.ndarray:
     # TODO
     return bonds
 
-def uff_symbol(atom : ase.Atoms) -> str:
+def uff_symbol(atom):
     """Returns the first twol letters of a UFF parameters"""
     sym  = atom.symbol
     if len(sym) == 1 :
         sym =''.join([sym,'_']) 
     return sym
 
-def best_angle(a       : int,
-               sbu     : ase.Atoms,
-               indices : numpy.ndarray) -> float:
+def best_angle(a      ,
+               sbu    ,
+               indices):
     """Calculates the most common angle around an atom"""
     # linear case
     if len(indices)<=1:
@@ -198,10 +198,10 @@ def best_angle(a       : int,
             da = angles[0,0]
     return da
 
-def best_radius(a       : int,
-                sbu     : ase.Atoms,
-                indices : numpy.ndarray,
-                ufflib  : numpy.ndarray) -> float:
+def best_radius(a      ,
+                sbu    ,
+                indices,
+                ufflib ):
     """Return the radius, according to the neighbors of an atom"""
     if len(indices)==0:
         d1 = 0.7
@@ -218,11 +218,11 @@ def best_radius(a       : int,
     dx  = d0-d1 
     return dx
 
-def best_type(dx     : float,
-              da     : float,
-              dc     : int  ,
-              ufflib : numpy.ndarray,
-              types  : list) -> str:
+def best_type(dx     ,
+              da     ,
+              dc     ,
+              ufflib ,
+              types  ):
     """Chooses the best UFF type according to neighborhood."""
     mincost = 1000.0
     mintyp  = None 
@@ -237,7 +237,7 @@ def best_type(dx     : float,
             mincost= cost
     return mintyp
 
-def analyze_mm(sbu : ase.Atoms) -> (numpy.ndarray,numpy.ndarray):
+def analyze_mm(sbu):
     """Returns the UFF types and bond matrix for an ASE Atoms."""
     ufflib  = read_uff_library(library="uff4mof")
     bonds   = get_bond_matrix(sbu)

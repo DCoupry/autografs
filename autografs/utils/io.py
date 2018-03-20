@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -32,7 +32,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def read_cgd() -> dict:
+def read_cgd():
     """Return a dictionary of topologies as ASE Atoms objects
     
     The format CGD is used mainly by the Systre software
@@ -138,8 +138,8 @@ def read_cgd() -> dict:
     return topologies
 
 
-def read_sbu(path    : None = None,
-             formats : list =["xyz"]) -> dict:
+def read_sbu(path    = None,
+             formats = ["xyz"]):
     """Return a dictionary of Atoms objects.
 
     If the path is not specified, use the default library.

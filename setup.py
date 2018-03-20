@@ -18,7 +18,7 @@ EMAIL = 'damien.coupry@uni-leipzig.de'
 AUTHOR = 'Damien Coupry'
 REQUIRES_PYTHON = '>=3.6.0'
 VERSION = '2.0.4-beta'
-REQUIRED = [ "ase","scipy","numpy"]
+REQUIRED = [ "ase","scipy>=0.15.0","numpy"]
 DATA = ["data/sbu/DEFAULTS.xyz","data/topologies/HermannMauguin.dat","data/topologies/nets.cgd","data/uff/rappe.csv","data/uff/uff4mof.csv"]
 
 here = os.path.abspath(os.path.dirname(__file__))

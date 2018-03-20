@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -42,10 +42,10 @@ class Framework(object):
     """
 
     def __init__(self,
-                 topology : ase.Atoms = None,
-                 SBU      : dict      = {},
-                 mmtypes  : numpy.ndarray = [],
-                 bonds    : numpy.ndarray = []) -> None:
+                 topology = None,
+                 SBU      = {},
+                 mmtypes  = None,
+                 bonds    = []):
         """Constructor for the Framework class.
 
         Can be initialized empty and filled consecutively.
@@ -66,7 +66,7 @@ class Framework(object):
         return None
 
     def __contains__(self, 
-                     obj : object) -> None:
+                     obj):
         """Iterable intrinsic"""
         r = False
         if hasattr(obj, 'atoms'):
@@ -74,21 +74,21 @@ class Framework(object):
         return r
 
     def __delitem__(self,
-                    key : str) -> None:
+                    key):
         """Indexable intrinsic"""
         del self.SBU[key]
         return None
 
     def __setitem__(self,
-                    key : str,
-                    obj : object) -> None:
+                    key ,
+                    obj):
         """Indexable intrinsic"""
         if hasattr(obj, 'atoms'):
             self.SBU[key] = object
         return None
 
     def __getitem__(self,
-                    key : str) -> None:
+                    key ):
         """Indexable intrinsic"""
         return self.SBU[key]
 
@@ -100,7 +100,7 @@ class Framework(object):
         """Iterable intrinsic"""
         return iter(self.SBU.items())
 
-    def copy(self) -> object:
+    def copy(self):
         """Return a copy of itself as a new instance"""
         new = self.__class__(topology=self.get_topology(),
                              SBU = self.SBU.copy(),
@@ -110,20 +110,19 @@ class Framework(object):
         return new
 
     def set_topology(self,
-                     topology : ase.Atoms) -> None:
+                     topology):
         """Set the topology attribute with an ASE Atoms object."""
         logger.debug("Setting topology.")
         self.topology = topology.copy()
         return None
 
-    def get_topology(self) -> ase.Atoms:
+    def get_topology(self):
         """Return a copy of the topology attribute as an ASE Atoms object."""
         return self.topology.copy()
 
     def get_supercell(self,
-                      m : tuple = (2,2,2)) -> object:
+                      m = (2,2,2)):
         """Return a framework supercell usin m as multiplier"""
-        # TODO !!! [CRITICAL] correct tagging needed!!!.
         if isinstance(m,int):
             m = (m,m,m)
         logger.info("Creating supercell {0}x{1}x{2}.".format(*m))
@@ -177,9 +176,9 @@ class Framework(object):
         return supercell
 
     def append(self,
-               index   : int,
-               sbu     : ase.Atoms,
-               update  : bool = False) -> None:
+               index,
+               sbu,
+               update = False):
         """Append all data releted to a building unit in the framework.
 
         This includes the ASE Atoms object, the bonding matrix, and the 
@@ -200,7 +199,7 @@ class Framework(object):
             self.mmtypes = self.get_mmtypes()
         return None
 
-    def get_bonds(self) -> numpy.ndarray:
+    def get_bonds(self):
         """Return and update the current bond matrix"""
         logger.debug("Updating framework bond matrix.")
         bonds = []
@@ -210,7 +209,7 @@ class Framework(object):
         self.bonds = bonds
         return bonds
 
-    def get_mmtypes(self) -> numpy.ndarray:
+    def get_mmtypes(self):
         """Return and update the current bond matrix"""
         logger.debug("Updating framework MM types.")
         mmtypes = []
@@ -221,7 +220,7 @@ class Framework(object):
         return numpy.copy(self.mmtypes)
 
     def scale(self,
-              alpha  : numpy.ndarray) -> None:
+              alpha):
         """Scale the building units positions by a factor alpha.
 
         This uses the correspondance between the atoms in the topology
@@ -235,7 +234,7 @@ class Framework(object):
         I     = numpy.eye(3)*alpha
         cell  = self.topology.get_cell()
         ncell = numpy.linalg.norm(cell,axis=0)
-        cell  = cell.dot(I*1.73/ncell)
+        cell  = cell.dot(I/ncell)
         self.topology.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:
@@ -245,7 +244,7 @@ class Framework(object):
         return None
 
     def refine(self,
-               alpha0 : numpy.ndarray = [1.0,1.0,1.0]) -> None:
+               alpha0 = [1.0,1.0,1.0]):
         """Refine cell scaling to minimize distances between dummies.
 
         We already have tagged the corresponding dummies during alignment,
@@ -281,7 +280,8 @@ class Framework(object):
         if numpy.amin(low*alpha0)<2.0:
             low   = 1.5/numpy.amin(alpha0)
             high *= 0.1/low
-        # optimize
+        # optimize isotropically
+        # minimize arrays is buggy in python3. TODO when fixed
         result = scipy.optimize.minimize_scalar(fun    = MSE,
                                                 bounds = (low,high),
                                                 method = "Bounded",
@@ -294,8 +294,8 @@ class Framework(object):
         return None
 
     def rotate(self,
-               index : int,
-               angle : float) -> None:
+               index,
+               angle):
         """Rotate the SBU at index around a Cinf symmetry axis"""
         if self[index].shape[1]==2:
             logger.info("Rotating {idx} by {a}.".format(idx=index,a=angle))
@@ -307,7 +307,7 @@ class Framework(object):
         return None
 
     def flip(self,
-             index : int) -> None:
+             index):
         """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
         logger.info("Flipping {idx}".format(idx=index))
         if self[index].shape[1]==2:
@@ -326,7 +326,8 @@ class Framework(object):
                 self[index].atoms.set_positions(pos)
         return None
 
-    def list_functionalizable_sites(self,symbol=None) -> list:
+    def list_functionalizable_sites(self,
+                                    symbol=None):
         """Return a list of tuple for functionalizable sites"""
         if symbol is not None:
             logger.info("Listing available functionalizable {s}".format(symbol))
@@ -350,8 +351,8 @@ class Framework(object):
         return sites
 
     def functionalize(self,
-                      where : tuple,
-                      fg    : ase.Atoms) -> None:
+                      where,
+                      fg   ):
         """Modify a valid slot atom to become a functional group.
         
         The specified slot index and atom index within the slot
@@ -416,7 +417,7 @@ class Framework(object):
         return None
 
     def get_atoms(self,
-                  dummies : bool = False) -> ase.Atoms:
+                  dummies = False):
         """Return the concatenated Atoms objects.
 
         The concatenation can either remove the dummies and
@@ -488,8 +489,8 @@ class Framework(object):
         return structure, bonds, mmtypes
 
     def write(self,
-              f   : str = "./mof",
-              ext : str = "gin") -> None:
+              f   = "./mof",
+              ext = "gin"):
         """Write a chemical information file to disk in selected format"""
         atoms,bonds,mmtypes = self.get_atoms(dummies=False)
         path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))

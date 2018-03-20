@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 
@@ -46,10 +46,10 @@ class Autografs(object):
 
 
     def make(self,
-             topology_name : str,
-             sbu_names     : list  = None,
-             sbu_dict      : dict  = None,
-             supercell     : tuple = (1,1,1)) -> ase.Atoms :
+             topology_name,
+             sbu_names = None,
+             sbu_dict  = None,
+             supercell = (1,1,1)) :
         """Create a framework using given topology and sbu.
 
         Main funtion of Autografs. The sbu names and topology's
@@ -118,8 +118,8 @@ class Autografs(object):
         return aligned
 
     def log_sbu_dict(self,
-                     topology : object,
-                     sbu_dict : dict = None) -> None:
+                     topology,
+                     sbu_dict = None):
         """Does some logging on the chosen SBU mapping."""
         for idx,sbu in sbu_dict.items():
             s00 = topology.shapes[idx][0]
@@ -135,14 +135,14 @@ class Autografs(object):
         return None
 
     def get_topology(self, 
-                     topology_name : str = None) -> object:
+                     topology_name = None):
         """Generates and return a Topology object"""
         topology_atoms = self.topologies[topology_name]
         return Topology(name=topology_name, atoms=topology_atoms)
 
     def get_sbu_dict(self,
-                     topology  : object,
-                     sbu_names : list) -> dict:
+                     topology ,
+                     sbu_names):
         """Return a dictionary of SBU by corresponding fragment.
 
         This stage get a one to one correspondance between
@@ -188,8 +188,8 @@ class Autografs(object):
         return sbu_dict
 
     def align(self,
-              fragment : ase.Atoms,
-              sbu      : object) -> (ase.Atoms, float):
+              fragment,
+              sbu     ):
         """Return an aligned SBU.
 
         The SBU is rotated on top of the fragment
@@ -210,7 +210,7 @@ class Autografs(object):
         # get the scaling factor
         size_sbu      = numpy.linalg.norm(sbu.atoms[sbu_Xis].positions,axis=1)
         size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
-        alpha         = numpy.mean(size_sbu/size_fragment)
+        alpha         = size_sbu.mean()/size_fragment.mean()
         # TODO check initial scaling: it goes up too much with unit cell
         ncop = numpy.linalg.norm(fragment_cop)
         if ncop<1e-6:
@@ -220,7 +220,7 @@ class Autografs(object):
             direction = fragment_cop / ncop
         # scaling for better alignment
         fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
-        alpha *= direction
+        alpha *= direction/2.0
         # getting the rotation matrix
         X0  = sbu.atoms[sbu_Xis].get_positions()
         X1  = fragment.get_positions()
@@ -237,7 +237,7 @@ class Autografs(object):
         return sbu,alpha
 
     def get_vector_space(self,
-                         X : numpy.ndarray) -> numpy.ndarray:
+                         X   ):
         """Returns a vector space as three points."""
         # initialize
         x0 = X[0]
@@ -256,8 +256,8 @@ class Autografs(object):
         return numpy.asarray([x0,x1,x2,x3])
 
     def list_available_topologies(self,
-                                  sbu_names  : list = [],
-                                  full       : bool = True) -> list:
+                                  sbu_names = [],
+                                  full      = True):
         """Return a list of topologies compatible with the SBUs
 
         For each sbu in the list given in input, refines first by coordination
@@ -294,7 +294,7 @@ class Autografs(object):
         return topologies
 
     def list_available_sbu(self,
-                           topology_name : str  = None) -> dict:
+                           topology_name = None):
         """Return the dictionary of compatible SBU.
         
         Filters the existing SBU by shape until only
