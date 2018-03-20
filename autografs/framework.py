@@ -132,15 +132,13 @@ class Framework(object):
         z = list(range(0,m[2],1)) 
         # new framework object
         supercell = self.copy()
-        ocell = supercell.topology.get_cell()
+        ocell = supercell.topology.atoms.get_cell()
         otopo = supercell.topology.copy()
         cellfactor = numpy.asarray([x[-1]+1,y[-1]+1,z[-1]+1],dtype=float)
         newcell = ocell.dot(numpy.eye(3)*cellfactor)
-        supercell.topology.set_cell(newcell,scale_atoms=False)
-        # we need a topology object to correctly tag.
-        supertopo = Topology(name="supercell",atoms=otopo*m)
+        supercell.topology.atoms.set_cell(newcell,scale_atoms=False)
         noff  = 0
-        L     = len(otopo)
+        L     = len(otopo.atoms)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
             # central cell, ignore
@@ -158,10 +156,10 @@ class Framework(object):
                 coffset = ocell.dot(offset)
                 for atom in otopo.copy():
                     atom.position += coffset
-                    supercell.topology.append(atom)
+                    supercell.topology.atoms.append(atom)
                     if atom.symbol=="X":
                         continue
-                    newidx = len(supercell.topology)-1
+                    newidx = len(supercell.topology.atoms)-1
                     # check that the SBU was not deleted before
                     if atom.index not in supercell.SBU.keys():
                         continue
@@ -232,13 +230,13 @@ class Framework(object):
         logger.debug("Scaling framework by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
         # get the scaled cell, normalized
         I     = numpy.eye(3)*alpha
-        cell  = self.topology.get_cell()
+        cell  = self.topology.atoms.get_cell()
         ncell = numpy.linalg.norm(cell,axis=0)
         cell  = cell.dot(I/ncell)
-        self.topology.set_cell(cell,scale_atoms=True)
+        self.topology.atoms.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:
-            center = self.topology[i]
+            center = self.topology.atoms[i]
             cop    = sbu.atoms.positions.mean(axis=0)
             sbu.atoms.positions += center.position - cop
         return None
@@ -295,10 +293,14 @@ class Framework(object):
 
     def rotate(self,
                index,
-               angle):
+               angle,
+               axis = None):
         """Rotate the SBU at index around a Cinf symmetry axis"""
-        if self[index].shape[1]==2:
-            logger.info("Rotating {idx} by {a}.".format(idx=index,a=angle))
+        logger.info("Rotating {idx} by {a}.".format(idx=index,a=angle))
+        if axis is not None:
+            self[index].atoms.rotate(v=axis,a=angle)
+            self[index].transfer_tags(self.topology.fragments[index])
+        elif self[index].shape[1]==2:
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
             axis = numpy.asarray(axis)
@@ -307,10 +309,14 @@ class Framework(object):
         return None
 
     def flip(self,
-             index):
+             index,
+             plane=None):
         """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
         logger.info("Flipping {idx}".format(idx=index))
-        if self[index].shape[1]==2:
+        if plane is not None:
+            self[index].atoms.rotate(v=plane,a=180.0)
+            self[index].transfer_tags(self.topology.fragments[index])
+        elif self[index].shape[1]==2:
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
             axis = numpy.asarray(axis)
@@ -324,6 +330,15 @@ class Framework(object):
                 pos = sbu.atoms.positions - cop
                 pos = pos.dot(sigmav[0])  + cop
                 self[index].atoms.set_positions(pos)
+        return None
+
+    def apply(self,
+              index,
+              M    ):
+        """Apply a transformation matrix to the SBU at index"""
+        self[index].atoms.positions = self[index].atoms.positions.dot(M)
+        fragment = self.topology.fragments[index]
+        self[index].transfer_tags(fragment=fragment)
         return None
 
     def list_functionalizable_sites(self,
@@ -432,8 +447,8 @@ class Framework(object):
             logger.debug("\tDummies will be removed during connection.")
         # concatenate every sbu into one Atoms object
         framework = self.copy()
-        cell = framework.topology.get_cell()
-        pbc  = framework.topology.get_pbc()
+        cell = framework.topology.atoms.get_cell()
+        pbc  = framework.topology.atoms.get_pbc()
         structure = ase.Atoms(cell=cell,pbc=pbc)
         for idx,sbu in framework:
             atoms = sbu.atoms

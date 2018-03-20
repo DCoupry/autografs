@@ -39,7 +39,8 @@ class Topology(object):
 
     def __init__(self,
                  name ,
-                 atoms):
+                 atoms,
+                 analyze=True):
         """Constructor for a topology, from an ASE Atoms."""
         logger.debug("Creating Topology {0}".format(name))
         self.name  = name
@@ -53,6 +54,16 @@ class Topology(object):
         # fill it in
         self._analyze()
         return None
+
+    def copy(self):
+        """Return a copy of itself as a new instance"""
+        new = self.__class__(name  = str(self.name),
+                             atoms = self.atoms.copy(),
+                             analyze=False)
+        new.fragments = self.fragments.copy()
+        new.shapes    = self.shapes.copy()
+        new.symmops   = self.symmops.copy()
+        return new
 
     def get_atoms(self):
         """Return a copy of the topology as ASE Atoms."""
@@ -97,6 +108,21 @@ class Topology(object):
             ops[shape] = {o:these_ops.count(o) for o in set(these_ops)}
         return ops
 
+    def get_max_symmetry_orders(self):
+        """Return  the orders of the main symmetry axes."""
+        orders = {}
+        for idx,shape in self.shapes.items():
+            if shape in orders.keys():
+                continue
+            symmops = self.symmops[idx]
+            these_orders = [o[0] for o in symmops["C"]]
+            if these_orders:
+                order = numpy.amax(these_orders)
+            else:
+                order = 0
+            orders[shape] = order
+        return orders
+
     def has_compatible_slot(self,
                             sbu ):
         """Return (True,shape) for a slot compatible with the SBU"""
@@ -106,13 +132,14 @@ class Topology(object):
             compatible = True
             slot       = sbu.shape
         else:
-            symmops = self.get_unique_operations()
-            for shape,ops in symmops.items():
+            orders = self.get_max_symmetry_orders()
+            logger.debug(orders)
+            for shape,order in orders.items():
                 if shape[1]!=sbu.shape[1]:
                     compatible = False
                     slot      = None
                     break
-                elif sbu.is_compatible(ops):
+                elif sbu.is_compatible(order):
                     compatible = True
                     slot       = shape
                     break
@@ -217,8 +244,8 @@ def download_topologies():
             shutil.copyfileobj(resp.raw, outpt)        
     return
 
-def read_topologies_database(update_db    ,
-                             update_source):
+def read_topologies_database(update_db     = False,
+                             update_source = False):
     """Return a dictionary of topologies as ASE Atoms."""
     from autografs.utils.io import read_cgd
     root     = os.path.join(__data__,"topologies")

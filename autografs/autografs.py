@@ -40,9 +40,9 @@ class Autografs(object):
         """Constructor for the Autografs framework maker.
         """
         logger.info("Reading the topology database.")
-        self.topologies : dict = read_topologies_database()
+        self.topologies = read_topologies_database()
         logger.info("Reading the building units database.")
-        self.sbu        : dict = read_sbu_database()
+        self.sbu        = read_sbu_database()
 
 
     def make(self,
@@ -77,9 +77,11 @@ class Autografs(object):
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
+        logger.debug("UNique shapes of topology = ")
+        logger.debug("{} ".format(topology.get_unique_shapes()))
         # container for the aligned SBUs
         aligned  = Framework()
-        aligned.set_topology(topology=topology_atoms)
+        aligned.set_topology(topology=topology)
         alpha    = 0.0
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
@@ -288,6 +290,8 @@ class Autografs(object):
                 elif allsbu and not full:
                     logger.info("\tTopology {tk} partially available.".format(tk=tk))
                     topologies.append(tk)
+                else:
+                    logger.info("\tNo available slot in topology {tk}.".format(tk=tk))
         else:
             logger.info("Listing full database of topologies.")
             topologies = list(self.topologies.keys())

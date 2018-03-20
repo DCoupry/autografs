@@ -53,7 +53,7 @@ class SBU(object):
         logger.debug("{self}".format(self=self.__str__()))
         return None
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         """Return representation full printing"""
         strings = []
         strings.append("\nSBU: {name}\n".format(name=self.name))
@@ -82,13 +82,13 @@ class SBU(object):
                 strings.append(s)
         return "".join(strings)
 
-    def __str__(self) -> str:
+    def __str__(self):
         """Uses repr to print the string.TODO=distinct."""
         return self.__repr__()
 
     def set_atoms(self,
-                  atoms   : ase.Atoms,
-                  analyze : bool = False) -> None:
+                  atoms,
+                  analyze = False):
         """Set new Atoms object and reanalyze"""
         logger.debug("Resetting Atoms in SBU {0}".format(self.name))
         self.atoms = atoms
@@ -97,7 +97,7 @@ class SBU(object):
             self._analyze()
         return None
 
-    def copy(self) -> object:
+    def copy(self):
         """Return a copy of the object"""
         logger.debug("SBU {0}: creating copy.".format(self.name))
         new = SBU(name=str(self.name))
@@ -108,7 +108,7 @@ class SBU(object):
         new.shape   = (self.shape[0],self.shape[1])
         return new
 
-    def get_unique_operations(self) -> dict:
+    def get_unique_operations(self):
         """Return all unique symmetry operations in the topology."""
         logger.debug("SBU {0}: listing symmetry operations.".format(self.name))
         these_ops = []
@@ -125,8 +125,14 @@ class SBU(object):
         ops = {o:these_ops.count(o) for o in set(these_ops)}
         return ops
 
+    def get_max_symmetry_order(self):
+        """Return the order of the main symmetry axis."""
+        logger.debug("SBU {0}: listing symmetry operations.".format(self.name))
+        order = numpy.amax([o[0] for o in self.symmops["C"]])
+        return order
+
     def is_compatible(self,
-                      symmops : list ) -> bool:
+                      symmorder):
         """Return True if symmetry compatible with symmops.
         
         For an SBU to be compatible for alignment with a topology slot
@@ -136,23 +142,17 @@ class SBU(object):
         """
         logger.debug("SBU {0}: checking compatibility with slot.".format(self.name))
         compatible = True
-        sbuops = self.get_unique_operations()
-        for s,o in symmops.items():
-            if s not in sbuops.keys():
-                compatible = False
-            elif o>sbuops[s]:
-                 compatible = False
-            if not compatible:
-                break
+        sbuorder = self.get_max_symmetry_order()
+        compatible = (sbuorder==symmorder)
         logger.debug("\tCompatibility = {cmp}.".format(cmp=compatible))
         return compatible
 
-    def get_atoms(self) -> ase.Atoms:
+    def get_atoms(self):
         """Return a copy of the topology as ASE Atoms."""
         logger.debug("SBU {0}: returning atoms.".format(self.name))
         return self.atoms.copy()
 
-    def _analyze(self) -> None:
+    def _analyze(self):
         """Guesses the mmtypes, bonds and pointgroup"""
         logger.debug("SBU {0}: analyze bonding and symmetry.".format(self.name))
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
@@ -166,7 +166,7 @@ class SBU(object):
         return None
 
     def transfer_tags(self,
-                      fragment : ase.Atoms) -> None:
+                      fragment):
         """Transfer tags between an aligned fragment and the SBU"""
         logger.debug("\tTagging dummies in SBU {n}.".format(n=self.name))
         # we keep a record of used tags.
@@ -181,8 +181,8 @@ class SBU(object):
             unused.remove(si)
         return None
 
-def read_sbu_database(update : bool = False,
-                      path   : str  = None):
+def read_sbu_database(update = False,
+                      path   = None):
     """Return a dictionnary of ASE Atoms as SBUs"""
     from autografs.utils.io import read_sbu
     db_file = os.path.join(__data__,"sbu/sbu.pkl")
