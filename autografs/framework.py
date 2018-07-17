@@ -122,7 +122,7 @@ class Framework(object):
 
     def get_supercell(self,
                       m = (2,2,2)):
-        """Return a framework supercell usin m as multiplier"""
+        """Return a framework supercell using m as multiplier"""
         if isinstance(m,int):
             m = (m,m,m)
         logger.info("Creating supercell {0}x{1}x{2}.".format(*m))
@@ -143,7 +143,7 @@ class Framework(object):
         for offset in itertools.product(x,y,z):
             # central cell, ignore
             if offset==(0,0,0):
-                for atom in otopo.copy():
+                for atom in otopo.atoms.copy():
                     if atom.symbol=="X":
                         continue
                     if atom.index not in supercell.SBU.keys():
@@ -273,11 +273,11 @@ class Framework(object):
         # minimum cell of a mof should be over 2.0 Ang.
         # and directions with no pbc should be 1.0
         alpha0[alpha0<1e-6] = 20.0
-        low  = 0.1
-        high = 1.5
-        if numpy.amin(low*alpha0)<2.0:
-            low   = 1.5/numpy.amin(alpha0)
-            high *= 0.1/low
+        low  = 0.5
+        high = 2.0
+        # if numpy.amin(low*alpha0)<2.0:
+            # low   = 1.5/numpy.amin(alpha0)
+            # high *= 0.1/low
         # optimize isotropically
         # minimize arrays is buggy in python3. TODO when fixed
         result = scipy.optimize.minimize_scalar(fun    = MSE,
@@ -386,7 +386,7 @@ class Framework(object):
         fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
         logger.info("Functionalization of atom {1} in slot {0}.".format(*where))
         try:
-            logger.info("\t|--> replace by {f}.".format(fg_name))
+            logger.info("\t|--> replace by {f}.".format(f=fg_name))
             fg = SBU(name=fg_name,atoms=fg)
             # center the positions
             fg_cop = fg.atoms.positions.mean(axis=0)
@@ -428,7 +428,7 @@ class Framework(object):
                                                   fg.mmtypes])
         except Exception as exc:
             logger.error("\t|--> ERROR WHILE FUNCTIONALIZING.")
-            logger.error("\t|--> {exc}".format(exc))
+            logger.error("\t|--> {exc}".format(exc=exc))
         return None
 
     def get_atoms(self,

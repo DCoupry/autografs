@@ -70,7 +70,7 @@ def get_bond_matrix(sbu):
     nl1 = NeighborList(cutoffs=BO1,bothways=True,self_interaction=False,skin=0.1)
     nl2 = NeighborList(cutoffs=BO2,bothways=True,self_interaction=False,skin=0.1)
     nl3 = NeighborList(cutoffs=BO3,bothways=True,self_interaction=False,skin=0.1)
-    nl1.build(sbu); nl2.build(sbu); nl3.build(sbu)
+    nl1.update(sbu); nl2.update(sbu); nl3.update(sbu)
     for atom in sbu:
         i1, _ = nl1.get_neighbors(atom.index)
         i2, _ = nl2.get_neighbors(atom.index)

@@ -17,7 +17,7 @@ import _pickle as pickle
 
 import ase
 from ase.spacegroup   import crystal
-from ase.visualize    import view
+# from ase.visualize    import view
 from ase.data         import chemical_symbols
 from ase.neighborlist import NeighborList
 
@@ -59,8 +59,7 @@ class SBU(object):
         # catch for empty object
         if self.atoms is None:
             return "".join(strings)
-        strings.append("Point group : {sc}\n".format(sc=self.shape[0]))
-        strings.append("Coordination: {co}\n".format(co=self.shape[1]))
+        strings.append("Coordination: {co}\n".format(co=self.shape[-1]))
         for atom in self.atoms:
             p0,p1,p2 = atom.position
             sy = atom.symbol
@@ -120,10 +119,11 @@ class SBU(object):
         compatible = False
         # test for compatible multiplicity  
         mult = (self.shape[-1] ==  shape[-1])
-        # the sbu has at least as many symmetry axes
-        symm = (self.shape[:-1]-shape[:-1]>=0).all()
-        if mult and symm:
-            compatible = True
+        if mult:
+            # the sbu has at least as many symmetry axes
+            symm = (self.shape[:-1]-shape[:-1]>=0).all()
+            if symm:
+                compatible = True
         logger.debug("\tCompatibility = {cmp}.".format(cmp=compatible))
         return compatible
 
@@ -136,10 +136,12 @@ class SBU(object):
         """Guesses the mmtypes, bonds and pointgroup"""
         logger.debug("SBU {0}: analyze bonding and symmetry.".format(self.name))
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
+        # ase.visualize.view(dummies)
         if len(dummies)>0:
-            max_order = max(8,len(dummies))
-            shape = symmetry.get_symmetry_elements(mol=dummies,
+            max_order = min(8,len(dummies))
+            shape = symmetry.get_symmetry_elements(mol=dummies.copy(),
                                                    max_order=max_order)
+            self.shape = shape
         bonds,mmtypes = analyze_mm(self.get_atoms())
         self.bonds    = bonds
         self.mmtypes  = mmtypes

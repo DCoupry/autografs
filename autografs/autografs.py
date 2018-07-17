@@ -69,10 +69,10 @@ class Autografs(object):
         if isinstance(supercell,int):
             supercell = (supercell,supercell,supercell)
         topology_atoms  = self.topologies[topology_name]
-        ase.visualize.view(topology_atoms)
         if supercell!=(1,1,1):
             logger.info("{0}x{1}x{2} supercell of the topology is used.".format(*supercell))
             topology_atoms *= supercell
+        ase.visualize.view(topology_atoms)
         # make the Topology object
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
@@ -115,6 +115,7 @@ class Autografs(object):
                                      sbu=sbu)
             alpha += f
             aligned.append(index=idx,sbu=sbu)
+        print(alpha)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
@@ -179,10 +180,12 @@ class Autografs(object):
         sbu_dict = {}
         for index,shape in topology.shapes.items():       
             # here, should accept weights also
+            shape = tuple(shape)
             p = weights[shape]
+            # no weights means same proba
             p /= numpy.sum(p)
             sbu_chosen = numpy.random.choice(by_shape[shape],
-                                                  p=p).copy()
+                                             p=p).copy()
             logger.debug("Slot {sl}: {sb} chosen with p={p}.".format(sl=index,
                                                                      sb=sbu_chosen.name,
                                                                      p=p))

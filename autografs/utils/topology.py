@@ -93,11 +93,13 @@ class Topology(object):
         for shape in shapes:
             # test for compatible multiplicity  
             mult = (sbu.shape[-1] ==  shape[-1])
+            if not mult:
+                continue
             # the sbu has at least as many symmetry axes
             symm = (sbu.shape[:-1]-shape[:-1]>=0).all()
             if mult and symm:
                 compatible = True
-                slot       = sbu.shape
+                slot       = shape
                 break
         return compatible,slot
 
@@ -162,7 +164,7 @@ class Topology(object):
                                     bothways=True,
                                     self_interaction=False,
                                     skin=0.0)
-        neighborlist.build(self.atoms)
+        neighborlist.update(self.atoms)
         # iterate over non-dummies to find dummy neighbors
         for ai in Ais:
             # get indices and offsets of dummies only!
@@ -175,8 +177,9 @@ class Topology(object):
             positions = self.atoms.positions[ni] + no.dot(self.atoms.cell)
             # create the Atoms object
             fragment = Atoms("X"*len(ni),positions,tags=tags[ni]) 
+            print(fragment)
             # calculate the point group properties
-            max_order = max(8,len(ni))
+            max_order = min(8,len(ni))
             shape = symmetry.get_symmetry_elements(mol=fragment.copy(),
                                                    max_order=max_order)
             # save that info
