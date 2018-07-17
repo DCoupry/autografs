@@ -25,8 +25,8 @@ from scipy.cluster.hierarchy import fclusterdata as cluster
 
 import warnings
 
-from autografs.utils.pointgroup import PointGroup
-from autografs.utils           import __data__
+from autografs.utils import symmetry
+from autografs.utils import __data__
 
 import logging
 logger = logging.getLogger(__name__)
@@ -50,7 +50,6 @@ class Topology(object):
         # corresponding SBUs.
         self.fragments = {}
         self.shapes    = {}
-        self.symmops   = {}
         # fill it in
         self._analyze()
         return None
@@ -62,7 +61,6 @@ class Topology(object):
                              analyze=False)
         new.fragments = self.fragments.copy()
         new.shapes    = self.shapes.copy()
-        new.symmops   = self.symmops.copy()
         return new
 
     def get_atoms(self):
@@ -83,66 +81,24 @@ class Topology(object):
 
     def get_unique_shapes(self):
         """Return all unique shapes in the topology."""
-        logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name))
-        return set(self.shapes.values())
-
-    def get_unique_operations(self):
-        """Return all unique symmetry operations in the topology."""
-        logger.debug("Topology {0}: listing symmetry operations.".format(self.name))
-        ops = {}
-        for idx,shape in self.shapes.items():
-            if shape in ops.keys():
-                continue
-            symmops = self.symmops[idx]
-            these_ops = []
-            for s,o in symmops.items():
-                if o is None:
-                    continue
-                elif len(o)>0 and s not in ["I","-I"]:
-                    sym = ["{0}{1}".format(s,this_o[0]) for this_o in o]
-                elif len(o)>0 and o is not None:
-                    sym = [s,]
-                else:
-                    sym = []
-                these_ops += sym
-            ops[shape] = {o:these_ops.count(o) for o in set(these_ops)}
-        return ops
-
-    def get_max_symmetry_orders(self):
-        """Return  the orders of the main symmetry axes."""
-        orders = {}
-        for idx,shape in self.shapes.items():
-            if shape in orders.keys():
-                continue
-            symmops = self.symmops[idx]
-            these_orders = [o[0] for o in symmops["C"]]
-            if these_orders:
-                order = numpy.amax(these_orders)
-            else:
-                order = 0
-            orders[shape] = order
-        return orders
+        logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name)) 
+        return set([tuple(shape) for shape in self.shapes.values()])
 
     def has_compatible_slot(self,
                             sbu ):
         """Return (True,shape) for a slot compatible with the SBU"""
         compatible = False
-        slot      = None
-        if sbu.shape in self.get_unique_shapes():
-            compatible = True
-            slot       = sbu.shape
-        else:
-            orders = self.get_max_symmetry_orders()
-            logger.debug(orders)
-            for shape,order in orders.items():
-                if shape[1]!=sbu.shape[1]:
-                    compatible = False
-                    slot      = None
-                    break
-                elif sbu.is_compatible(order):
-                    compatible = True
-                    slot       = shape
-                    break
+        slot = None
+        shapes = self.get_unique_shapes()
+        for shape in shapes:
+            # test for compatible multiplicity  
+            mult = (sbu.shape[-1] ==  shape[-1])
+            # the sbu has at least as many symmetry axes
+            symm = (sbu.shape[:-1]-shape[:-1]>=0).all()
+            if mult and symm:
+                compatible = True
+                slot       = sbu.shape
+                break
         return compatible,slot
 
     def _get_cutoffs(self,
@@ -220,11 +176,12 @@ class Topology(object):
             # create the Atoms object
             fragment = Atoms("X"*len(ni),positions,tags=tags[ni]) 
             # calculate the point group properties
-            pg       = PointGroup(fragment.copy(),cutoffs.mean())
+            max_order = max(8,len(ni))
+            shape = symmetry.get_symmetry_elements(mol=fragment.copy(),
+                                                   max_order=max_order)
             # save that info
             self.fragments[ai] = fragment
-            self.shapes[ai]    = (pg.schoenflies,self.atoms[ai].number)
-            self.symmops[ai]   = pg.symmops
+            self.shapes[ai]    = shape
         return None
 
 

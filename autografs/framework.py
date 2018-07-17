@@ -102,10 +102,10 @@ class Framework(object):
 
     def copy(self):
         """Return a copy of itself as a new instance"""
-        new = self.__class__(topology=self.get_topology(),
+        new = self.__class__(topology = self.get_topology(),
                              SBU = self.SBU.copy(),
-                             mmtypes= self.get_mmtypes(),
-                             bonds=self.get_bonds())
+                             mmtypes = self.get_mmtypes(),
+                             bonds = self.get_bonds())
         new._todel = self._todel.copy()
         return new
 

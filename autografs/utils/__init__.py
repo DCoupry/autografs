@@ -11,5 +11,5 @@ __status__  = "beta"
 
 import os
 
-__all__     = ["pointgroup","topology","sbu","operations","mmanalysis","io"]
+__all__     = ["pointgroup","topology","sbu","operations","mmanalysis","io","symmetry"]
 __data__    = os.path.join("/".join(os.path.dirname(__file__).split("/")[:-1]),"data")

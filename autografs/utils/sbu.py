@@ -27,7 +27,7 @@ from scipy.cluster.hierarchy import fclusterdata as cluster
 import warnings
 
 
-from autografs.utils.pointgroup import PointGroup
+from autografs.utils            import symmetry
 from autografs.utils.mmanalysis import analyze_mm 
 from autografs.utils            import __data__
 
@@ -44,10 +44,9 @@ class SBU(object):
         logger.debug("New instance of SBU {0}".format(name))
         self.name  = name
         self.atoms = atoms 
-        self.symmops = {}
         self.mmtypes = []
         self.bonds   = []
-        self.shape = ("C1",0)
+        self.shape = []
         if self.atoms is not None:
             self._analyze()
         logger.debug("{self}".format(self=self.__str__()))
@@ -102,48 +101,29 @@ class SBU(object):
         logger.debug("SBU {0}: creating copy.".format(self.name))
         new = SBU(name=str(self.name))
         new.set_atoms(atoms=self.get_atoms(),analyze=False)
-        new.symmops = self.symmops.copy()
         new.mmtypes = numpy.copy(self.mmtypes)
         new.bonds   = numpy.copy(self.bonds)
-        new.shape   = (self.shape[0],self.shape[1])
+        new.shape   = list(self.shape)
         return new
 
-    def get_unique_operations(self):
-        """Return all unique symmetry operations in the topology."""
-        logger.debug("SBU {0}: listing symmetry operations.".format(self.name))
-        these_ops = []
-        for s,o in self.symmops.items():
-            if o is None:
-                continue
-            elif len(o)>0 and s not in ["I","-I"]:
-                sym = ["{0}{1}".format(s,this_o[0]) for this_o in o]
-            elif len(o)>0 and o is not None:
-                sym = [s,]
-            else:
-                sym = []
-            these_ops += sym
-        ops = {o:these_ops.count(o) for o in set(these_ops)}
-        return ops
-
-    def get_max_symmetry_order(self):
-        """Return the order of the main symmetry axis."""
-        logger.debug("SBU {0}: listing symmetry operations.".format(self.name))
-        order = numpy.amax([o[0] for o in self.symmops["C"]])
-        return order
-
     def is_compatible(self,
-                      symmorder):
+                      shape):
         """Return True if symmetry compatible with symmops.
         
         For an SBU to be compatible for alignment with a topology slot
         it has to have at least as many symmetry operators as the slot for
         each type of symmetry. We assume the coordination is checked elsewhere.
-        symmops -- (op type, count). e.g: ("C2",5) means 5 C2 in the slot.
+        shape -- array of counts for symmetry axes. 
+                 last element is the multiplicity
         """
         logger.debug("SBU {0}: checking compatibility with slot.".format(self.name))
-        compatible = True
-        sbuorder = self.get_max_symmetry_order()
-        compatible = (sbuorder==symmorder)
+        compatible = False
+        # test for compatible multiplicity  
+        mult = (self.shape[-1] ==  shape[-1])
+        # the sbu has at least as many symmetry axes
+        symm = (self.shape[:-1]-shape[:-1]>=0).all()
+        if mult and symm:
+            compatible = True
         logger.debug("\tCompatibility = {cmp}.".format(cmp=compatible))
         return compatible
 
@@ -157,9 +137,9 @@ class SBU(object):
         logger.debug("SBU {0}: analyze bonding and symmetry.".format(self.name))
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
         if len(dummies)>0:
-            pg = PointGroup(dummies,0.1)
-            self.shape    = (pg.schoenflies,len(dummies))
-            self.symmops  = pg.symmops
+            max_order = max(8,len(dummies))
+            shape = symmetry.get_symmetry_elements(mol=dummies,
+                                                   max_order=max_order)
         bonds,mmtypes = analyze_mm(self.get_atoms())
         self.bonds    = bonds
         self.mmtypes  = mmtypes

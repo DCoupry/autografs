@@ -77,12 +77,12 @@ class Autografs(object):
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
-        logger.debug("UNique shapes of topology = ")
+        logger.debug("Unique shapes of topology = ")
         logger.debug("{} ".format(topology.get_unique_shapes()))
         # container for the aligned SBUs
-        aligned  = Framework()
+        aligned = Framework()
         aligned.set_topology(topology=topology)
-        alpha    = 0.0
+        alpha = 0.0
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
         try:
@@ -240,7 +240,7 @@ class Autografs(object):
 
     def get_vector_space(self,
                          X   ):
-        """Returns a vector space as three points."""
+        """Returns a vector space as four points."""
         # initialize
         x0 = X[0]
         # find the point most orthogonal
