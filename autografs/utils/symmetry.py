@@ -19,7 +19,9 @@ from autografs.utils.operations import rotation, reflection, inertia
 import logging
 logger = logging.getLogger(__name__)
 
-def is_valid_op(mol,symmop):
+def is_valid_op(mol,
+                symmop,
+                epsilon=0.1):
     """Return True if the symmop is a valid symmetry 
     operation for mol.
     mol -- ASE Atoms object
@@ -35,7 +37,7 @@ def is_valid_op(mol,symmop):
         dist = workmol.get_distances(atom_index,other_indices,mic=False)
         distances.append(numpy.amin(dist))
     distances = numpy.array(distances)
-    return (distances<0.1).all()
+    return (distances<epsilon).all()
 
 def get_potential_axes(mol):
     """Return all potential symmetry axes.
@@ -89,7 +91,7 @@ def get_potential_axes(mol):
     axes = unique_axes(potential_axes)
     return axes
 
-def unique_axes(potential_axes):
+def unique_axes(potential_axes,epsilon=0.1):
     """Return non colinear potential_axes only"""
     axes = [potential_axes[0],]
     indices = []
@@ -97,14 +99,16 @@ def unique_axes(potential_axes):
         colinear = False
         for seen_axis in axes:
             dot = abs(seen_axis.dot(axis))
-            if dot>0.9:
+            if dot>1.0-epsilon:
                 colinear = True
                 break
         if not colinear:
             axes.append(axis)
     return numpy.asarray(axes)
 
-def get_symmetry_elements(mol, max_order=8):
+def get_symmetry_elements(mol, 
+                          max_order=8,
+                          epsilon=0.1):
     """Return an array counting the found symmetries
     of the object, up to axes of order max_order.
     Enables fast comparison of compatibility between objects:
@@ -137,6 +141,8 @@ def get_symmetry_elements(mol, max_order=8):
         for order in range(2,max_order+1):
             rot = rotation(axis,order)
             has_rot = is_valid_op(mol,rot)
+            if has_rot:
+                print("axis",axis, "has rotation",has_rot)
             symmetries[order-1]+=int(has_rot)
             if has_rot:
                 logger.debug("Detected: C{order}".format(order=order))
@@ -148,20 +154,22 @@ def get_symmetry_elements(mol, max_order=8):
                 principal_axes.append(axis)
     # planes
     for axis in axes:
-        print("axis",axis)
         ref = reflection(axis)
         has_ref = is_valid_op(mol,ref)
         if has_ref:
+            print("axis",axis, "has reflection",has_ref)
             dots = [abs(axis.dot(max_axis)) 
                     for max_axis in principal_axes]
             print(dots)
+            if not dots:
+                continue
             mindot = numpy.amin(dots)
             maxdot = numpy.amax(dots)
-            if maxdot>0.9:
+            if maxdot>1.0-epsilon:
                 #sigma h
                 symmetries[-2]+=1
                 logger.debug("Detected: sigma h")
-            elif mindot<0.1:
+            elif mindot<epsilon:
                 #sigma vd
                 symmetries[-3]+=1
                 logger.debug("Detected: sigma vd")

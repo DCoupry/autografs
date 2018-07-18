@@ -122,7 +122,10 @@ class Framework(object):
 
     def get_supercell(self,
                       m = (2,2,2)):
-        """Return a framework supercell using m as multiplier"""
+        """Return a framework supercell using m as multiplier.
+        Setup this way to keep the whole modifications that could
+        have been made to the framework.
+        """
         if isinstance(m,int):
             m = (m,m,m)
         logger.info("Creating supercell {0}x{1}x{2}.".format(*m))
@@ -137,8 +140,6 @@ class Framework(object):
         cellfactor = numpy.asarray([x[-1]+1,y[-1]+1,z[-1]+1],dtype=float)
         newcell = ocell.dot(numpy.eye(3)*cellfactor)
         supercell.topology.atoms.set_cell(newcell,scale_atoms=False)
-        noff  = 0
-        L     = len(otopo.atoms)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
             # central cell, ignore
@@ -150,22 +151,25 @@ class Framework(object):
                         continue
                     # directly tranfer new tags
                     sbu = supercell[atom.index]
-                    sbu.transfer_tags(supertopo.fragments[atom.index])           
+                    sbu.transfer_tags(supercell.topology.fragments[atom.index])           
             else:
-                noff += 1 
                 coffset = ocell.dot(offset)
-                for atom in otopo.copy():
+                for atom in otopo.atoms.copy():
                     atom.position += coffset
                     supercell.topology.atoms.append(atom)
                     if atom.symbol=="X":
                         continue
+                    # check the new idx of the SBU
                     newidx = len(supercell.topology.atoms)-1
                     # check that the SBU was not deleted before
                     if atom.index not in supercell.SBU.keys():
                         continue
                     sbu = supercell[atom.index].copy()
                     sbu.atoms.positions += coffset
-                    sbu.transfer_tags(supertopo.fragments[newidx])
+                    print(len(supercell.topology.fragments))
+                    print(newidx,atom.index)
+                    print(supercell.topology.atoms)
+                    sbu.transfer_tags(supercell.topology.fragments[atom.index])
                     supercell.append(index = newidx,
                                      sbu   = sbu,
                                      update= False)
@@ -396,7 +400,7 @@ class Framework(object):
             assert len(xidx)==1
             xidx  = xidx[0]
             # center the sbu
-            sbu   = self.SBU[sidx].atoms
+            sbu = self.SBU[sidx].atoms
             sbu_name = self.SBU[sidx].name
             sbu_cop = sbu.positions.mean(axis=0)
             sbu.positions -= sbu_cop
@@ -457,6 +461,7 @@ class Framework(object):
                 del atoms[todel]
             framework[idx].set_atoms(atoms,analyze=True)
             structure += atoms
+        ase.visualize.view(structure)
         bonds   = framework.get_bonds()
         mmtypes = framework.get_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())
@@ -465,8 +470,8 @@ class Framework(object):
             xis   = [x.index for x in structure if x.symbol=="X"]
             tags  = structure.get_tags()
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags[xis])]
-            # raise
             for pair in pairs:
+                print(pair)
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
                     xi0 = pair[0]
