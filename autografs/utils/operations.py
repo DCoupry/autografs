@@ -35,7 +35,10 @@ def rotation(axis ,
              order):
     """Return a rotation matrix around the axis"""
     M = numpy.eye(3)
-    axis /= numpy.linalg.norm(axis)
+    norm = numpy.linalg.norm(axis)
+    if norm<1e-3:
+        norm = 1.0
+    axis /= norm
     v0      = axis[0]
     v1      = axis[1]
     v2      = axis[2]
@@ -56,8 +59,11 @@ def rotation(axis ,
     
 def reflection(axis):
     """Return a reflection matrix around the axis"""
-    M = numpy.eye(3)
-    axis /= numpy.linalg.norm(axis)
+    M = numpy.eye(3)    
+    norm = numpy.linalg.norm(axis)
+    if norm<1e-3:
+        norm = 1.0
+    axis /= norm
     v0      = axis[0]
     v1      = axis[1]
     v2      = axis[2]

@@ -72,11 +72,11 @@ class Autografs(object):
         if supercell!=(1,1,1):
             logger.info("{0}x{1}x{2} supercell of the topology is used.".format(*supercell))
             topology_atoms *= supercell
-        ase.visualize.view(topology_atoms)
         # make the Topology object
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
+        ase.visualize.view(topology.atoms)
         logger.debug("Unique shapes of topology = ")
         logger.debug("{} ".format(topology.get_unique_shapes()))
         # container for the aligned SBUs
@@ -115,7 +115,6 @@ class Autografs(object):
                                      sbu=sbu)
             alpha += f
             aligned.append(index=idx,sbu=sbu)
-        print(alpha)
         # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
@@ -171,11 +170,12 @@ class Autografs(object):
                 p = 1.0
             # create the SBU object
             sbu = SBU(name=name,atoms=self.sbu[name])
-            comp, slot = topology.has_compatible_slot(sbu=sbu)
-            if not comp:
+            slots = topology.has_compatible_slots(sbu=sbu)
+            if not slots:
                 continue
-            weights[slot].append(p)
-            by_shape[slot].append(sbu)
+            for slot in slots:
+                weights[slot].append(p)
+                by_shape[slot].append(sbu)
         # now fill the choices
         sbu_dict = {}
         for index,shape in topology.shapes.items():       

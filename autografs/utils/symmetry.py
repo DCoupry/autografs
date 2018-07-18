@@ -84,6 +84,7 @@ def get_potential_axes(mol):
             potential_axes.append(axis)     
     potential_axes = numpy.array(potential_axes)
     norm = numpy.linalg.norm(potential_axes,axis=1)
+    norm[norm<1e-3] = 1.0
     potential_axes /= norm[:,None]
     # remove zero norms
     mask = numpy.isnan(potential_axes).any(axis=1)
@@ -141,8 +142,6 @@ def get_symmetry_elements(mol,
         for order in range(2,max_order+1):
             rot = rotation(axis,order)
             has_rot = is_valid_op(mol,rot)
-            if has_rot:
-                print("axis",axis, "has rotation",has_rot)
             symmetries[order-1]+=int(has_rot)
             if has_rot:
                 logger.debug("Detected: C{order}".format(order=order))
@@ -157,10 +156,8 @@ def get_symmetry_elements(mol,
         ref = reflection(axis)
         has_ref = is_valid_op(mol,ref)
         if has_ref:
-            print("axis",axis, "has reflection",has_ref)
             dots = [abs(axis.dot(max_axis)) 
                     for max_axis in principal_axes]
-            print(dots)
             if not dots:
                 continue
             mindot = numpy.amin(dots)

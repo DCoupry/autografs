@@ -140,6 +140,11 @@ class Framework(object):
         cellfactor = numpy.asarray([x[-1]+1,y[-1]+1,z[-1]+1],dtype=float)
         newcell = ocell.dot(numpy.eye(3)*cellfactor)
         supercell.topology.atoms.set_cell(newcell,scale_atoms=False)
+        L = len(otopo.atoms)
+        mcount = 0
+        # for the correct tagging analysis
+        superatoms = otopo.atoms.copy() * m
+        supertopo  = Topology(name="supertopo.tmp",atoms=superatoms)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
             # central cell, ignore
@@ -151,8 +156,9 @@ class Framework(object):
                         continue
                     # directly tranfer new tags
                     sbu = supercell[atom.index]
-                    sbu.transfer_tags(supercell.topology.fragments[atom.index])           
+                    sbu.transfer_tags(supertopo.fragments[atom.index])           
             else:
+                mcount += 1
                 coffset = ocell.dot(offset)
                 for atom in otopo.atoms.copy():
                     atom.position += coffset
@@ -166,15 +172,11 @@ class Framework(object):
                         continue
                     sbu = supercell[atom.index].copy()
                     sbu.atoms.positions += coffset
-                    print(len(supercell.topology.fragments))
-                    print(newidx,atom.index)
-                    print(supercell.topology.atoms)
-                    sbu.transfer_tags(supercell.topology.fragments[atom.index])
+                    sbu.transfer_tags(supertopo.fragments[newidx])
                     supercell.append(index = newidx,
                                      sbu   = sbu,
                                      update= False)
                     supercell._todel[newidx] = list(supercell._todel[atom.index])
-        # redo the tagging
         return supercell
 
     def append(self,
@@ -277,8 +279,8 @@ class Framework(object):
         # minimum cell of a mof should be over 2.0 Ang.
         # and directions with no pbc should be 1.0
         alpha0[alpha0<1e-6] = 20.0
-        low  = 0.5
-        high = 2.0
+        low  = 0.25
+        high = 1.75
         # if numpy.amin(low*alpha0)<2.0:
             # low   = 1.5/numpy.amin(alpha0)
             # high *= 0.1/low
@@ -286,9 +288,7 @@ class Framework(object):
         # minimize arrays is buggy in python3. TODO when fixed
         result = scipy.optimize.minimize_scalar(fun    = MSE,
                                                 bounds = (low,high),
-                                                method = "Bounded",
-                                                options= {"disp"  : True,
-                                                          "xatol" : 1e-02})
+                                                method = "Bounded")
         # scale with result
         alpha = result.x*alpha0
         logger.info("Best scaling achieved by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
@@ -461,7 +461,7 @@ class Framework(object):
                 del atoms[todel]
             framework[idx].set_atoms(atoms,analyze=True)
             structure += atoms
-        ase.visualize.view(structure)
+        # ase.visualize.view(structure)
         bonds   = framework.get_bonds()
         mmtypes = framework.get_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())
@@ -471,7 +471,6 @@ class Framework(object):
             tags  = structure.get_tags()
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags[xis])]
             for pair in pairs:
-                print(pair)
                 # if lone dummy, cap with hydrogen
                 if len(pair)==1:
                     xi0 = pair[0]

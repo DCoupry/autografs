@@ -84,11 +84,10 @@ class Topology(object):
         logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name)) 
         return set([tuple(shape) for shape in self.shapes.values()])
 
-    def has_compatible_slot(self,
+    def has_compatible_slots(self,
                             sbu ):
-        """Return (True,shape) for a slot compatible with the SBU"""
-        compatible = False
-        slot = None
+        """Return [shapes...] for the slots compatible with the SBU"""
+        slots = []
         shapes = self.get_unique_shapes()
         for shape in shapes:
             # test for compatible multiplicity  
@@ -98,10 +97,8 @@ class Topology(object):
             # the sbu has at least as many symmetry axes
             symm = (sbu.shape[:-1]-shape[:-1]>=0).all()
             if mult and symm:
-                compatible = True
-                slot       = shape
-                break
-        return compatible,slot
+                slots.append(shape)
+        return slots
 
     def _get_cutoffs(self,
                      Xis ,
@@ -177,7 +174,6 @@ class Topology(object):
             positions = self.atoms.positions[ni] + no.dot(self.atoms.cell)
             # create the Atoms object
             fragment = Atoms("X"*len(ni),positions,tags=tags[ni]) 
-            print(fragment)
             # calculate the point group properties
             max_order = min(8,len(ni))
             shape = symmetry.get_symmetry_elements(mol=fragment.copy(),
