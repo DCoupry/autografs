@@ -115,6 +115,10 @@ def get_symmetry_elements(mol,
     Enables fast comparison of compatibility between objects:
     if array1 - array2 > 0, that means object1 fits the slot2 
     """
+    if len(mol)==1:
+        logger.debug("Point-symmetry detected.")
+        symmetries = numpy.array([0,0,0,0,0,1])
+        return symmetries
     if len(mol)==2:
         logger.debug("Linear connectivity detected.")
         # simplest, linear case

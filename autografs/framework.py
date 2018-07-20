@@ -23,6 +23,8 @@ from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.topology   import read_topologies_database
 from autografs.utils.mmanalysis import analyze_mm 
 from autografs.utils.topology   import Topology
+import autografs.utils.sbu
+
 
 logger = logging.getLogger(__name__) 
 
@@ -384,14 +386,13 @@ class Framework(object):
         fg    -- ASE Atoms to replace the atom in where by.
         TODO : move the SBU import to toplevel
         """
-        from autografs.utils.sbu import SBU
         sidx, aidx = where
         # create the SBU object for the functional group
         fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
         logger.info("Functionalization of atom {1} in slot {0}.".format(*where))
         try:
             logger.info("\t|--> replace by {f}.".format(f=fg_name))
-            fg = SBU(name=fg_name,atoms=fg)
+            fg = autografs.utils.sbu.SBU(name=fg_name,atoms=fg)
             # center the positions
             fg_cop = fg.atoms.positions.mean(axis=0)
             fg.atoms.positions -= fg_cop
