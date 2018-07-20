@@ -319,29 +319,20 @@ class Autografs(object):
         """
         av_sbu = defaultdict(list)
         if topology_name is not None:
-            logger.info("Checking SBU compatibility.")
+            logger.info("List of compatible SBU with topology {t}:".format(t=topology_name))
             topology = Topology(name=topology_name,
                                 atoms=self.topologies[topology_name])
-            topops = topology.get_unique_operations()
             shapes = topology.get_unique_shapes()
-            # filter according to coordination first
             for sbuk,sbuv in self.sbu.items():
-                c = len([x for x in sbuv if x.symbol=="X"])
+                try:
+                    sbu = SBU(name=sbuk,
+                              atoms=sbuv)
+                except Exception as exc:
+                    logger.debug("SBU {k} not loaded: {exc}".format(k=sbuk,exc=exc))
                 for shape in shapes:
-                    # first condition is coordination
-                    if c==shape[1]:
-                        # now check symmops
-                        try:
-                            sbu = SBU(name=sbuk,
-                                      atoms=sbuv)
-                        except Exception as exc:
-                            log.error("SBU {k} not loaded: {exc}".format(k=sbuk,exc=exc))
-                        if sbu.shape == shape:
-                            logger.info("SBU {k} is compatible by shape.".format(k=sbuk))
-                            av_sbu[shape].append(sbuk)
-                        elif sbu.is_compatible(topops[shape]):
-                            logger.info("SBU {k} is compatible by symmetry.".format(k=sbuk))
-                            av_sbu[shape].append(sbuk)
+                    if sbu.is_compatible(shape):
+                        logger.info("\t{k}".format(k=sbuk))
+                        av_sbu[shape].append(sbuk)
         else:
             logger.info("Listing full database of SBU.")
             av_sbu = list(self.sbu.keys())
