@@ -51,7 +51,8 @@ class Topology(object):
         self.fragments = {}
         self.shapes    = {}
         # fill it in
-        self._analyze()
+        if analyze:
+            self._analyze()
         return None
 
     def copy(self):
@@ -124,7 +125,12 @@ class Topology(object):
             # we nee to coerce the cutoffs to have 
             # the good amount of dummies. 
             # in theory, should loop only once
+            breaker = 0
             while L!=coord:
+                breaker+=1
+                if breaker > 5:
+                    logger.debug("No correct coordination was found. exiting...")
+                    raise RuntimeError("Infinite loop in cutoff determination.")
                 clusters = cluster(dists, eps, criterion='distance')
                 for cluster_index in set(clusters):
                     # check this cluster distances

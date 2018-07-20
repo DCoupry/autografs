@@ -76,7 +76,7 @@ class Autografs(object):
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
-        ase.visualize.view(topology.atoms)
+        # ase.visualize.view(topology.atoms)
         logger.debug("Unique shapes of topology = ")
         logger.debug("{} ".format(topology.get_unique_shapes()))
         # container for the aligned SBUs
@@ -262,7 +262,8 @@ class Autografs(object):
 
     def list_available_topologies(self,
                                   sbu_names = [],
-                                  full      = True):
+                                  full      = True,
+                                  max_size  = 100):
         """Return a list of topologies compatible with the SBUs
 
         For each sbu in the list given in input, refines first by coordination
@@ -276,25 +277,32 @@ class Autografs(object):
             topologies = []
             sbu = [SBU(name=n,atoms=self.sbu[n]) for n in sbu_names]
             for tk,tv in self.topologies.items():
+                if len(tv)>max_size:
+                    logger.debug("\tTopology {tk} to big : size = {s}.".format(tk=tk,s=len(tv)))
+                    continue
                 try:
                     topology = Topology(name=tk,atoms=tv)
                 except Exception as exc:
-                    logger.error("Topology {tk} not loaded: {exc}".format(tk=tk,exc=exc))
+                    logger.debug("Topology {tk} not loaded: {exc}".format(tk=tk,exc=exc))
                     continue
                 filled = {shape:False for shape in topology.get_unique_shapes()}
                 allsbu = True
-                comps  = [topology.has_compatible_slot(s) for s in sbu]
-                for comp,shape in comps:
-                    filled[shape] = comp
-                    allsbu = (comp&allsbu)
-                if full and allsbu and all(filled.values()):
+                slots_full  = [topology.has_compatible_slots(s) for s in sbu]
+                for slots in slots_full:
+                    if not slots:
+                        allsbu = False
+                    else:
+                        for slot in slots:
+                            filled[slot] = True
+                    allsbu = (True&allsbu)
+                if all(filled.values()):
                     logger.info("\tTopology {tk} fully available.".format(tk=tk))
                     topologies.append(tk)
-                elif allsbu and not full:
+                elif any(filled.values()) and not full:
                     logger.info("\tTopology {tk} partially available.".format(tk=tk))
                     topologies.append(tk)
                 else:
-                    logger.info("\tNo available slot in topology {tk}.".format(tk=tk))
+                    logger.debug("\tTopology {tk} not available.".format(tk=tk))
         else:
             logger.info("Listing full database of topologies.")
             topologies = list(self.topologies.keys())

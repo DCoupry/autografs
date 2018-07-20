@@ -104,7 +104,7 @@ class Framework(object):
 
     def copy(self):
         """Return a copy of itself as a new instance"""
-        new = self.__class__(topology = self.get_topology(),
+        new = self.__class__(topology = self.topology.copy(),
                              SBU = self.SBU.copy(),
                              mmtypes = self.get_mmtypes(),
                              bonds = self.get_bonds())
@@ -259,10 +259,15 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-        def MSE(x : float) -> float:
-            """Return cost of scaling as MSE of distances."""
+        def MSE(x, mode=0):
+            """Return cost of scaling as MSE of distances.
+            Mode 0 means isotropic (abc directions)
+            Mode 1 means bc directions only
+            Mode 2 means c direction only
+            """
             # scale with this parameter
             x = x*alpha0
+            x[:mode] = 1.0
             self.scale(alpha=x)
             atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
@@ -275,7 +280,7 @@ class Framework(object):
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.mean(d**2)
-            logger.info("\tScaling error = {e:>5.3f}".format(e=mse))
+            logger.info("\t\t\\->Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
         # minimum cell of a mof should be over 2.0 Ang.
@@ -287,8 +292,20 @@ class Framework(object):
             # low   = 1.5/numpy.amin(alpha0)
             # high *= 0.1/low
         # optimize isotropically
+        abc = lambda x : MSE(x,mode=0)
+        bc  = lambda x : MSE(x,mode=1)
+        c   = lambda x : MSE(x,mode=2)
         # minimize arrays is buggy in python3. TODO when fixed
-        result = scipy.optimize.minimize_scalar(fun    = MSE,
+        logger.info("\tScaling isotropically.")
+        result = scipy.optimize.minimize_scalar(fun    = abc,
+                                                bounds = (low,high),
+                                                method = "Bounded")
+        logger.info("\tScaling along b and c.")
+        result = scipy.optimize.minimize_scalar(fun    = bc,
+                                                bounds = (low,high),
+                                                method = "Bounded")
+        logger.info("\tScaling along c.")
+        result = scipy.optimize.minimize_scalar(fun    = c,
                                                 bounds = (low,high),
                                                 method = "Bounded")
         # scale with result
