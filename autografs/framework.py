@@ -304,7 +304,7 @@ class Framework(object):
         if axis is not None:
             self[index].atoms.rotate(v=axis,a=angle)
             self[index].transfer_tags(self.topology.fragments[index])
-        elif self[index].shape[1]==2:
+        elif self[index].shape[-1]==2:
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
             axis = numpy.asarray(axis)
@@ -320,7 +320,7 @@ class Framework(object):
         if plane is not None:
             self[index].atoms.rotate(v=plane,a=180.0)
             self[index].transfer_tags(self.topology.fragments[index])
-        elif self[index].shape[1]==2:
+        elif self[index].shape[-1]==2:
             axis = [x.position for x in self[index].atoms 
                                if x.symbol=="X"]
             axis = numpy.asarray(axis)
