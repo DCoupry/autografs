@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # PointGroup Heavily adapted from the pymatgen library
 
@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat","Shyue Ping Ong"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.1.0'
+__version__ = '2.1.1'
 __status__  = "production"
 
 import scipy.spatial
