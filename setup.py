@@ -1,4 +1,4 @@
-#!/usr/bin/env python3.6
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Note: To use the 'upload' functionality of this file, you must:
@@ -16,9 +16,9 @@ DESCRIPTION = 'Generator for topological frameworks and chemical structures.'
 URL = 'https://github.com/DCoupry/autografs'
 EMAIL = 'damien.coupry@uni-leipzig.de'
 AUTHOR = 'Damien Coupry'
-REQUIRES_PYTHON = '>=3.6.0'
-VERSION = '2.0.4-beta'
-REQUIRED = [ "ase","scipy>=0.15.0","numpy"]
+REQUIRES_PYTHON = '>=3.4.0'
+VERSION = '2.1.0'
+REQUIRED = [ "ase","scipy>=0.15.0","numpy<1.15.0"]
 DATA = ["data/sbu/DEFAULTS.xyz","data/topologies/HermannMauguin.dat","data/topologies/nets.cgd","data/uff/rappe.csv","data/uff/uff4mof.csv"]
 
 here = os.path.abspath(os.path.dirname(__file__))
@@ -101,9 +101,7 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.6',
         'Programming Language :: Python :: Implementation :: CPython',
-        'Programming Language :: Python :: Implementation :: PyPy'
     ],
     # $ setup.py publish support.
     cmdclass={

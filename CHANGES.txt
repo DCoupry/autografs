@@ -1,1 +1,2 @@
 v2.0.1-beta, 17/03/2018 -- Initial release.
+v2.1.0, 25/08/2018 -- first functional release with 90 % of the desired functionality

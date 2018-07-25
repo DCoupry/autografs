@@ -6,10 +6,11 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.0.4'
-__status__  = "beta"
+__version__ = '2.1.0'
+__status__  = "production"
+
 
 import os
 
-__all__     = ["pointgroup","topology","sbu","operations","mmanalysis","io","symmetry"]
+__all__     = ["topology","sbu","operations","mmanalysis","io","symmetry"]
 __data__    = os.path.join("/".join(os.path.dirname(__file__).split("/")[:-1]),"data")

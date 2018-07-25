@@ -7,15 +7,19 @@ Original publication: `"Automatic Topological Generator for Framework Structures
 
 __ here_
 
-*This is a beta version*. Bug hunting is very much going on, and there are still some old funtionalities that are not yet reimplemented.
+*This version is under active development*. Bug hunting is very much going on, and there are still some old funtionalities that are not yet reimplemented.
 
 TODO:
 -----
+
 Medium priority:
+
 - the symmetry axes detection has trouble with planar shapes
 - implement pillaring by using custom alignement rules
 - more robust mmanalysis module
+
 Low priority:
+
 - unit testing coverage is non-existant
 - documentation writing
 - better handling of the databases:
@@ -32,8 +36,8 @@ $ pip install --user --upgrade AuToGraFS
 
 For a manual install, first install the dependencies,
 
-1. python 3.6
-2. ase, scipy, numpy
+1. python >=3.4
+2. ase, scipy, numpy<1.15.0
 
 
 then clone this repository and add it to you pythonpath::
