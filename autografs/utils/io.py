@@ -26,7 +26,6 @@ from scipy.cluster.hierarchy import fclusterdata as cluster
 
 import warnings
 
-from autografs.utils.pointgroup import PointGroup
 from autografs.utils           import __data__
 
 import logging
