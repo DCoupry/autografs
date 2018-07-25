@@ -28,6 +28,7 @@ import warnings
 from autografs.utils import symmetry
 from autografs.utils import __data__
 
+
 import logging
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class Topology(object):
         # corresponding SBUs.
         self.fragments = {}
         self.shapes    = {}
+        self.pointgroups = {}
         # fill it in
         if analyze:
             self._analyze()
@@ -85,20 +87,30 @@ class Topology(object):
         logger.debug("Topology {0}: listing unique fragment shapes.".format(self.name)) 
         return set([tuple(shape) for shape in self.shapes.values()])
 
+    def get_unique_pointgroups(self):
+        """Return all unique shapes in the topology."""
+        logger.debug("Topology {0}: listing unique fragment point groups.".format(self.name)) 
+        return set(self.pointgroups.values())
+
     def has_compatible_slots(self,
-                            sbu ):
+                             sbu):
         """Return [shapes...] for the slots compatible with the SBU"""
         slots = []
-        shapes = self.get_unique_shapes()
-        for shape in shapes:
+        complist = [(self.shapes[ai],self.pointgroups[ai]) 
+                    for ai in self.fragments.keys()]
+        for shape, pg in complist:
             # test for compatible multiplicity  
             mult = (sbu.shape[-1] ==  shape[-1])
             if not mult:
                 continue
+            # pointgroups are more powerful identifiers
+            if pg==sbu.pg:
+                slots.append(tuple(shape))
+                continue
             # the sbu has at least as many symmetry axes
             symm = (sbu.shape[:-1]-shape[:-1]>=0).all()
-            if mult and symm:
-                slots.append(shape)
+            if symm:
+                slots.append(tuple(shape))
         return slots
 
     def _get_cutoffs(self,
@@ -184,9 +196,12 @@ class Topology(object):
             max_order = min(8,len(ni))
             shape = symmetry.get_symmetry_elements(mol=fragment.copy(),
                                                    max_order=max_order)
+            pg = symmetry.PointGroup(mol=fragment.copy(),
+                                       tol=0.1)
             # save that info
             self.fragments[ai] = fragment
-            self.shapes[ai]    = shape
+            self.shapes[ai] = shape
+            self.pointgroups[ai] = pg.schoenflies
         return None
 
 

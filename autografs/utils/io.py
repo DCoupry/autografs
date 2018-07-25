@@ -50,12 +50,18 @@ def read_cgd():
     # read the rcsr topology data
     topology_file = os.path.join(root,"nets.cgd")
     # the script as such starts here
+    error_counter = 0
     with open(topology_file,"rb") as tpf:
         text = tpf.read().decode("utf8")
         # split the file by topology
         topologies_raw = [t.strip().strip("CRYSTAL") for t in text.split("END")]
         topologies_len = len(topologies_raw)
         logger.info("{0:<5} topologies before treatment".format(topologies_len))
+        # long operation
+        logger.info("This might take a few minutes. Time for coffee!")
+        logger.info("(")
+        logger.info(" )")
+        logger.info("[_])")
         for topology_raw in topologies_raw:
             # read from the template.
             # the edges are easier to comprehend by edge center
@@ -106,6 +112,7 @@ def read_cgd():
                     # node coordinates also need to be padded
                     nodes = numpy.pad(nodes, ((0,0),(0,1)), 'constant', constant_values=0.0)
                 elif len(cell)<3:
+                    error_counter += 1
                     continue
                 else:
                     pbc = True
@@ -120,6 +127,7 @@ def read_cgd():
                         setting = 1
                 # ASE does not have all the spacegroups implemented yet
                 if group not in groups.keys():
+                    error_counter += 1
                     continue
                 else:
                     # generate the crystal
@@ -133,8 +141,10 @@ def read_cgd():
                                         primitive_cell=False,
                                         onduplicates="keep")
                     topologies[name] = topology
-            except Exception as expt:
+            except Exception:
+                error_counter += 1
                 continue
+    logger.info("Topologies read with {err} errors.".format(err=error_counter))
     return topologies
 
 

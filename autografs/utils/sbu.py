@@ -29,6 +29,7 @@ import warnings
 
 from autografs.utils            import symmetry
 from autografs.utils.mmanalysis import analyze_mm 
+
 from autografs.utils            import __data__
 
 logger = logging.getLogger(__name__) 
@@ -38,15 +39,16 @@ class SBU(object):
     """Container class for a building unit information"""
 
     def __init__(self,
-                 name  : str,
-                 atoms : ase.Atoms = None) -> None:
+                 name,
+                 atoms=None):
         """Constructor for a building unit, from an ASE Atoms."""
         logger.debug("New instance of SBU {0}".format(name))
-        self.name  = name
+        self.name = name
         self.atoms = atoms 
         self.mmtypes = []
-        self.bonds   = []
+        self.bonds = []
         self.shape = []
+        self.pg = None
         if self.atoms is not None:
             self._analyze()
         logger.debug("{self}".format(self=self.__str__()))
@@ -60,6 +62,8 @@ class SBU(object):
         if self.atoms is None:
             return "".join(strings)
         strings.append("Coordination: {co}\n".format(co=self.shape[-1]))
+        if self.pg is not None:
+            strings.append("Detected Point Group: {pg}\n".format(pg=self.pg))
         for atom in self.atoms:
             p0,p1,p2 = atom.position
             sy = atom.symbol
@@ -98,7 +102,7 @@ class SBU(object):
     def copy(self):
         """Return a copy of the object"""
         logger.debug("SBU {0}: creating copy.".format(self.name))
-        new = SBU(name=str(self.name))
+        new = SBU(name=str(self.name),atoms=None)
         new.set_atoms(atoms=self.get_atoms(),analyze=False)
         new.mmtypes = numpy.copy(self.mmtypes)
         new.bonds   = numpy.copy(self.bonds)
@@ -106,7 +110,8 @@ class SBU(object):
         return new
 
     def is_compatible(self,
-                      shape):
+                      shape,
+                      point_group = None):
         """Return True if symmetry compatible with symmops.
         
         For an SBU to be compatible for alignment with a topology slot
@@ -120,6 +125,9 @@ class SBU(object):
         # test for compatible multiplicity  
         mult = (self.shape[-1] ==  shape[-1])
         if mult:
+            # use point group as first test
+            if point_group is not None:
+                compatible = (point_group==self.pg)
             # the sbu has at least as many symmetry axes
             symm = (self.shape[:-1]-shape[:-1]>=0).all()
             if symm:
@@ -136,12 +144,13 @@ class SBU(object):
         """Guesses the mmtypes, bonds and pointgroup"""
         logger.debug("SBU {0}: analyze bonding and symmetry.".format(self.name))
         dummies = ase.Atoms([x for x in self.atoms if x.symbol=="X"])
-        # ase.visualize.view(dummies)
         if len(dummies)>0:
+            pg = symmetry.PointGroup(mol=dummies.copy(),tol=0.1)
             max_order = min(8,len(dummies))
             shape = symmetry.get_symmetry_elements(mol=dummies.copy(),
                                                    max_order=max_order)
             self.shape = shape
+            self.pg = pg.schoenflies
         bonds,mmtypes = analyze_mm(self.get_atoms())
         self.bonds    = bonds
         self.mmtypes  = mmtypes

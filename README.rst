@@ -11,12 +11,14 @@ __ here_
 
 TODO:
 -----
-- implement pillaring
+Medium priority:
+- the symmetry axes detection has trouble with planar shapes
+- implement pillaring by using custom alignement rules
 - more robust mmanalysis module
+Low priority:
 - unit testing coverage is non-existant
 - documentation writing
 - better handling of the databases:
-  + sql for faster selecting using ase.db module
   + precomputing sbu-topologies correspondance
   + list of paths to custom databases...
 
@@ -61,7 +63,7 @@ This weight defaults to 1.0/(number of similar sbu).
 >>>                   sbu_names=["Zn_mof5_octahedral", ("Benzene_linear",2.0),("Acetylene_linear",0.5)])
 >>> mof.write()
 
-This is particularly helpful in combination with an initial supercell for statistically introduce defects.
+This is particularly helpful in combination with an initial supercell for statistically introducing defects.
 
 >>> mof = mofgen.make(topology_name="pcu", 
 >>>                   sbu_names=[("Zn_mof5_octahedral",2.0),("defect_octahedral",0.5), "Benzene_linear"],

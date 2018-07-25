@@ -10,15 +10,13 @@ __version__ = '2.0.4'
 __status__  = "beta"
 
 import numpy
-import os
-from scipy.sparse import csgraph
-
-from ase.data import covalent_radii
-from ase.neighborlist import NeighborList
-from ase import Atom
 import ase
-from itertools import combinations
-from ase.visualize import view
+import os
+
+from scipy.sparse     import csgraph
+from ase.data         import covalent_radii
+from ase.neighborlist import NeighborList
+from itertools        import combinations
 
 from autografs.utils import __data__
 
@@ -128,7 +126,7 @@ def get_bond_matrix(sbu):
     rings = []
     # first, use the compressed sparse graph object
     # we only care about organic bonds and not hydrogens
-    graph_bonds = numpy.array(bonds>=1.0,dtype=float)
+    graph_bonds = numpy.array(bonds>0.99,dtype=float)
     graph_bonds[hydrogens,:] = 0.0
     graph_bonds[:,hydrogens] = 0.0
     graph = csgraph.csgraph_from_dense(graph_bonds)

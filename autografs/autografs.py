@@ -43,6 +43,8 @@ class Autografs(object):
         self.topologies = read_topologies_database()
         logger.info("Reading the building units database.")
         self.sbu        = read_sbu_database()
+        #container for current sbu mapping
+        self.sbudict    = None
 
 
     def make(self,
@@ -62,6 +64,7 @@ class Autografs(object):
         sbu_names     -- list of names of the sbu to use
         sbu_dict -- (optional) one to one sbu to slot correspondance
                     in the shape {index of slot : 'name of sbu'}
+        supercell -- (optional) creates a supercell pre-treatment
         """
         # ase.visualize.view(self.topologies[topology_name])
         logger.info("Starting the MOF generation.")
@@ -93,8 +96,10 @@ class Autografs(object):
                 # the sbu_dict has been passed. if not SBU object, create them
                 for k,v in sbu_dict.items():
                     if not isinstance(v,SBU):
-                        assert isinstance(v,ase.Atoms)
-                        if "name" in v.info.keys():
+                        if not isinstance(v,ase.Atoms):
+                            name = str(v)
+                            v = self.sbu[name].copy()
+                        elif "name" in v.info.keys():
                             name = v.info["name"]
                         else:
                             name = str(k)
@@ -103,9 +108,13 @@ class Autografs(object):
                 raise RuntimeError("Either supply sbu_names or sbu_dict.")
         except RuntimeError as exc:
             logger.error("Slot to SBU mappping interrupted.")
-            logger.error("{exc}".format(exc))
+            logger.error("{exc}".format(exc=exc))
+            logger.info("No valid framework was generated. Please check your input.")
+            logger.info("You can coerce sbu assignment by directly passing a slot to sbu dictionary.")
+            return
         # some logging
         self.log_sbu_dict(sbu_dict=sbu_dict,topology=topology)
+        self.sbudict = sbu_dict
         # carry on
         for idx,sbu in sbu_dict.items():
             logger.debug("Treating slot number {idx}".format(idx=idx))
@@ -115,7 +124,6 @@ class Autografs(object):
                                      sbu=sbu)
             alpha += f
             aligned.append(index=idx,sbu=sbu)
-        # refine the cell scaling using a good starting point
         aligned.refine(alpha0=alpha)
         return aligned
 
@@ -149,11 +157,6 @@ class Autografs(object):
 
         This stage get a one to one correspondance between
         each topology slot and an available SBU from the list of names.
-        TODO: For now, we take the first available if more are given,
-        but we should be able to pass this directly to the class,
-        or a dictionary of probabilities for the different SBU.
-        We also need to implement a check on symmetry operators,
-        to catch stuff like 'squares cannot fit in a rectangle slot'.
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
         """
@@ -172,6 +175,7 @@ class Autografs(object):
             sbu = SBU(name=name,atoms=self.sbu[name])
             slots = topology.has_compatible_slots(sbu=sbu)
             if not slots:
+                logger.debug("SBU {s} has no compatible slot in topology {t}".format(s=name,t=topology.name))
                 continue
             for slot in slots:
                 weights[slot].append(p)
@@ -181,6 +185,8 @@ class Autografs(object):
         for index,shape in topology.shapes.items():       
             # here, should accept weights also
             shape = tuple(shape)
+            if shape not in by_shape.keys():
+                raise RuntimeError("Unfilled slot at index {idx}".format(idx=index))
             p = weights[shape]
             # no weights means same proba
             p /= numpy.sum(p)

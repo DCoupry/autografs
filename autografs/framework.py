@@ -300,14 +300,16 @@ class Framework(object):
         result = scipy.optimize.minimize_scalar(fun    = abc,
                                                 bounds = (low,high),
                                                 method = "Bounded")
-        logger.info("\tScaling along b and c.")
-        result = scipy.optimize.minimize_scalar(fun    = bc,
-                                                bounds = (low,high),
-                                                method = "Bounded")
-        logger.info("\tScaling along c.")
-        result = scipy.optimize.minimize_scalar(fun    = c,
-                                                bounds = (low,high),
-                                                method = "Bounded")
+        if result.fun>0.1:
+            logger.info("\tScaling along b and c.")
+            result = scipy.optimize.minimize_scalar(fun    = bc,
+                                                    bounds = (low,high),
+                                                    method = "Bounded")
+            if result.fun>0.1:
+                logger.info("\tScaling along c.")
+                result = scipy.optimize.minimize_scalar(fun    = c,
+                                                        bounds = (low,high),
+                                                        method = "Bounded")
         # scale with result
         alpha = result.x*alpha0
         logger.info("Best scaling achieved by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))

@@ -110,3 +110,25 @@ def procrustes(X,
     else:
         raise NotImplementedError("Unknown method. Implemented are SVD or Q")
     return R, scale
+
+def is_valid_op(mol,  
+                symmop,
+                epsilon = 0.1):
+    """Check if a particular symmetry operation is a valid symmetry operation
+    for a molecule, i.e., the operation maps all atoms to another
+    equivalent atom.
+        -- mol : ASE Atoms object. subject of symmop
+        -- symmop: Symmetry operation to test.
+        -- epsilon : numerical tolerance of the
+    """
+    distances = []
+    mol0 = mol.copy()
+    mol1 = mol.copy()
+    mol1.positions = mol1.positions.dot(symmop)
+    workmol = mol0+mol1
+    other_indices = list(range(len(mol0),len(workmol),1))
+    for atom_index in range(0,len(mol0),1):
+        dist = workmol.get_distances(atom_index,other_indices,mic=False)
+        distances.append(numpy.amin(dist))
+    distances = numpy.array(distances)
+    return (distances<epsilon).all()
