@@ -51,7 +51,8 @@ class Autografs(object):
              topology_name,
              sbu_names = None,
              sbu_dict  = None,
-             supercell = (1,1,1)) :
+             supercell = (1,1,1),
+             coercion  = False) :
         """Create a framework using given topology and sbu.
 
         Main funtion of Autografs. The sbu names and topology's
@@ -65,9 +66,11 @@ class Autografs(object):
         sbu_dict -- (optional) one to one sbu to slot correspondance
                     in the shape {index of slot : 'name of sbu'}
         supercell -- (optional) creates a supercell pre-treatment
+        coercion -- (optional) force the compatibility to only consider
+                    the multiplicity of SBU
         """
-        # ase.visualize.view(self.topologies[topology_name])
         logger.info("Starting the MOF generation.")
+        self.sbudict = None
         # make the supercell prior to alignment
         if isinstance(supercell,int):
             supercell = (supercell,supercell,supercell)
@@ -85,13 +88,13 @@ class Autografs(object):
         # container for the aligned SBUs
         aligned = Framework()
         aligned.set_topology(topology=topology)
-        alpha = 0.0
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
         try:
             if sbu_dict is None and sbu_names is not None:
-                sbu_dict = self.get_sbu_dict(topology=topology,
-                                             sbu_names=sbu_names)
+                self.sbu_dict = self.get_sbu_dict(topology=topology,
+                                                  sbu_names=sbu_names,
+                                                  coercion=coercion)
             elif sbu_dict is not None:
                 # the sbu_dict has been passed. if not SBU object, create them
                 for k,v in sbu_dict.items():
@@ -104,6 +107,7 @@ class Autografs(object):
                         else:
                             name = str(k)
                         sbu_dict[k] = SBU(name=name,atoms=v)
+                self.sbudict = sbu_dict
             else:
                 raise RuntimeError("Either supply sbu_names or sbu_dict.")
         except RuntimeError as exc:
@@ -113,10 +117,10 @@ class Autografs(object):
             logger.info("You can coerce sbu assignment by directly passing a slot to sbu dictionary.")
             return
         # some logging
-        self.log_sbu_dict(sbu_dict=sbu_dict,topology=topology)
-        self.sbudict = sbu_dict
+        self.log_sbu_dict(sbu_dict=self.sbu_dict,topology=topology)
         # carry on
-        for idx,sbu in sbu_dict.items():
+        alpha = 0.0
+        for idx,sbu in self.sbu_dict.items():
             logger.debug("Treating slot number {idx}".format(idx=idx))
             logger.debug("\t|-->Aligning SBU {name}".format(name=sbu.name))
             # now align and get the scaling factor
@@ -152,13 +156,15 @@ class Autografs(object):
 
     def get_sbu_dict(self,
                      topology ,
-                     sbu_names):
+                     sbu_names,
+                     coercion=False):
         """Return a dictionary of SBU by corresponding fragment.
 
         This stage get a one to one correspondance between
         each topology slot and an available SBU from the list of names.
         topology  -- the Topology object
         sbu_names -- the list of SBU names as strings
+        coercion -- wether to force compatibility by coordination alone
         """
         logger.debug("Generating slot to SBU map.")
         weights  = defaultdict(list)
@@ -173,7 +179,7 @@ class Autografs(object):
                 p = 1.0
             # create the SBU object
             sbu = SBU(name=name,atoms=self.sbu[name])
-            slots = topology.has_compatible_slots(sbu=sbu)
+            slots = topology.has_compatible_slots(sbu=sbu,coercion=coercion)
             if not slots:
                 logger.debug("SBU {s} has no compatible slot in topology {t}".format(s=name,t=topology.name))
                 continue
@@ -186,7 +192,7 @@ class Autografs(object):
             # here, should accept weights also
             shape = tuple(shape)
             if shape not in by_shape.keys():
-                raise RuntimeError("Unfilled slot at index {idx}".format(idx=index))
+                logger.info("Unfilled slot at index {idx}".format(idx=index))
             p = weights[shape]
             # no weights means same proba
             p /= numpy.sum(p)
@@ -269,7 +275,9 @@ class Autografs(object):
     def list_available_topologies(self,
                                   sbu_names = [],
                                   full      = True,
-                                  max_size  = 100):
+                                  max_size  = 100,
+                                  from_list = [],
+                                  pbc       = "all"):
         """Return a list of topologies compatible with the SBUs
 
         For each sbu in the list given in input, refines first by coordination
@@ -277,13 +285,29 @@ class Autografs(object):
         every topology.
         sbu  -- list of sbu names
         full -- wether the topology is entirely represented by the sbu
+        max_size -- maximum size of in SBU numbers of topologies to consider
+        from list -- only consider topologies from this list
         """
+        these_topologies_names = self.topologies.keys()
+        if max_size is None:
+            max_size = 999999   
+        if from_list:
+            these_topologies_names = from_list
+        if pbc == "2D":
+            logger.info("only considering 2D periodic topologies.")
+            these_topologies_names = [tk for tk,tv in self.topologies.items() if sum(tv.pbc)==2]
+        elif pbc == "3D":
+            logger.info("only considering 3D periodic topologies.")
+            these_topologies_names = [tk for tk,tv in self.topologies.items() if sum(tv.pbc)==3]
+        elif pbc != "all":
+            logger.info("pbc keyword has to be '2D','3D' or 'all'. Assumed 'all'.")
         if sbu_names:
             logger.info("Checking topology compatibility.")
             topologies = []
             sbu = [SBU(name=n,atoms=self.sbu[n]) for n in sbu_names]
-            for tk,tv in self.topologies.items():
-                if len(tv)>max_size:
+            for tk in these_topologies_names:
+                tv = self.topologies[tk]
+                if max_size is None or len(tv)>max_size:
                     logger.debug("\tTopology {tk} to big : size = {s}.".format(tk=tk,s=len(tv)))
                     continue
                 try:
@@ -292,15 +316,10 @@ class Autografs(object):
                     logger.debug("Topology {tk} not loaded: {exc}".format(tk=tk,exc=exc))
                     continue
                 filled = {shape:False for shape in topology.get_unique_shapes()}
-                allsbu = True
                 slots_full  = [topology.has_compatible_slots(s) for s in sbu]
                 for slots in slots_full:
-                    if not slots:
-                        allsbu = False
-                    else:
-                        for slot in slots:
-                            filled[slot] = True
-                    allsbu = (True&allsbu)
+                    for slot in slots:
+                        filled[slot] = True
                 if all(filled.values()):
                     logger.info("\tTopology {tk} fully available.".format(tk=tk))
                     topologies.append(tk)

@@ -17,7 +17,7 @@ import _pickle as pickle
 
 import ase
 from ase              import Atom, Atoms
-from ase.spacegroup   import crystal
+from ase.spacegroup   import crystal, Spacegroup
 from ase.data         import chemical_symbols
 from ase.neighborlist import NeighborList
 
@@ -140,6 +140,8 @@ def read_cgd():
                                         pbc=pbc,
                                         primitive_cell=False,
                                         onduplicates="keep")
+                    # TODO !!! find a way to use equivalent positions for 
+                    # the multiple components frameworks !!!
                     topologies[name] = topology
             except Exception:
                 error_counter += 1
@@ -180,7 +182,7 @@ def write_gin(path,
               mmtypes):
     """Write an GULP input file to disc"""
     with open(path,"w") as fileobj:
-        fileobj.write('opti conp molmec cartesian noautobond\n')
+        fileobj.write('opti conp molmec cartesian noautobond conjugate\n')
         pbc = atoms.get_pbc()
         if pbc.any():
             cell = atoms.get_cell().tolist()

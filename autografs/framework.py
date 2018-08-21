@@ -259,7 +259,7 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-        def MSE(x, mode=0):
+        def MSE(x, mode=0, alpha0=alpha0):
             """Return cost of scaling as MSE of distances.
             Mode 0 means isotropic (abc directions)
             Mode 1 means bc directions only
@@ -291,23 +291,24 @@ class Framework(object):
         # if numpy.amin(low*alpha0)<2.0:
             # low   = 1.5/numpy.amin(alpha0)
             # high *= 0.1/low
+        pbc = sum(self.topology.atoms.pbc)
         # optimize isotropically
-        abc = lambda x : MSE(x,mode=0)
-        bc  = lambda x : MSE(x,mode=1)
-        c   = lambda x : MSE(x,mode=2)
         # minimize arrays is buggy in python3. TODO when fixed
         logger.info("\tScaling isotropically.")
-        result = scipy.optimize.minimize_scalar(fun    = abc,
+        fun = lambda x : MSE(x,mode=0,alpha0=alpha0)
+        result = scipy.optimize.minimize_scalar(fun    = fun,
                                                 bounds = (low,high),
                                                 method = "Bounded")
-        if result.fun>0.1:
+        if result.fun>0.1 and pbc>=2:
             logger.info("\tScaling along b and c.")
-            result = scipy.optimize.minimize_scalar(fun    = bc,
+            fun = lambda x : MSE(x,mode=1,alpha0=result.x*alpha0)
+            result = scipy.optimize.minimize_scalar(fun    = fun,
                                                     bounds = (low,high),
                                                     method = "Bounded")
-            if result.fun>0.1:
+            if result.fun>0.1 and pbc==3:
                 logger.info("\tScaling along c.")
-                result = scipy.optimize.minimize_scalar(fun    = c,
+                fun = lambda x : MSE(x,mode=2,alpha0=result.x*alpha0)
+                result = scipy.optimize.minimize_scalar(fun    = fun,
                                                         bounds = (low,high),
                                                         method = "Bounded")
         # scale with result
@@ -532,10 +533,21 @@ class Framework(object):
               ext = "gin"):
         """Write a chemical information file to disk in selected format"""
         atoms,bonds,mmtypes = self.get_atoms(dummies=False)
+        # add a numerical artifact for optimization in z direction
+        if sum(atoms.pbc)==2:
+            atoms.positions[:,2] += numpy.random.rand(len(atoms))*0.01
+            atoms.pbc = True
         path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))
-        logger.info("Framework saved to disk at {p}.".format(p=path))
+        logger.info("Framework saved to disk at {p}".format(p=path))
         if ext=="gin":
             from autografs.utils.io import write_gin
             write_gin(path,atoms,bonds,mmtypes)
         else:
             ase.io.write(path,atoms)
+        return
+
+    def view(self):
+        """Use ASE gui for visualization"""
+        atoms,_,_ = self.get_atoms(dummies=False)
+        ase.visualize.view(atoms)
+        return

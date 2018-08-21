@@ -94,7 +94,8 @@ class Topology(object):
         return set(self.pointgroups.values())
 
     def has_compatible_slots(self,
-                             sbu):
+                             sbu,
+                             coercion=False):
         """Return [shapes...] for the slots compatible with the SBU"""
         slots = []
         complist = [(self.shapes[ai],self.pointgroups[ai]) 
@@ -103,6 +104,11 @@ class Topology(object):
             # test for compatible multiplicity  
             mult = (sbu.shape[-1] ==  shape[-1])
             if not mult:
+                continue
+            elif coercion:
+                # takes objects of corresponding
+                # multiplicity as compatible.
+                slots.append(tuple(shape))
                 continue
             # pointgroups are more powerful identifiers
             if pg==sbu.pg:
