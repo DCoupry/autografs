@@ -226,7 +226,7 @@ class Framework(object):
         return numpy.copy(self.mmtypes)
 
     def scale(self,
-              alpha):
+              cellpar):
         """Scale the building units positions by a factor alpha.
 
         This uses the correspondance between the atoms in the topology
@@ -235,12 +235,7 @@ class Framework(object):
         sbu.
         alpha -- scaling factor
         """
-        logger.debug("Scaling framework by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
-        # get the scaled cell, normalized
-        I     = numpy.eye(3)*alpha
-        cell  = self.topology.atoms.get_cell()
-        ncell = numpy.linalg.norm(cell,axis=0)
-        cell  = cell.dot(I/ncell)
+        cell = ase.geometry.cellpar_to_cell(cellpar)
         self.topology.atoms.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
         for i,sbu in self:
@@ -259,62 +254,46 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-        def MSE(x, mode=0, alpha0=alpha0):
-            """Return cost of scaling as MSE of distances.
-            Mode 0 means isotropic (abc directions)
-            Mode 1 means bc directions only
-            Mode 2 means c direction only
-            """
+        alpha0[alpha0<1e-6] = 20.0
+        # get the scaled cell, normalized
+        I     = numpy.eye(3)*alpha0
+        cell0 = self.topology.atoms.get_cell()
+        cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
+        cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
+        # define the cost function
+        def MSE(x):
+            """Return cost of scaling as MSE of distances"""
             # scale with this parameter
-            x = x*alpha0
-            x[:mode] = 1.0
-            self.scale(alpha=x)
+            self.scale(cellpar=x)
             atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
             # reinitialize stuff
-            self.scale(alpha=1.0/x)
+            self.scale(cellpar=cellpar0)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
             pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
-            mse = numpy.mean(d**2)
+            mse = numpy.sum(d**2)
             logger.info("\t\t\\->Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
-        # minimum cell of a mof should be over 2.0 Ang.
-        # and directions with no pbc should be 1.0
-        alpha0[alpha0<1e-6] = 20.0
-        low  = 0.25
-        high = 1.75
-        # if numpy.amin(low*alpha0)<2.0:
-            # low   = 1.5/numpy.amin(alpha0)
-            # high *= 0.1/low
-        pbc = sum(self.topology.atoms.pbc)
-        # optimize isotropically
-        # minimize arrays is buggy in python3. TODO when fixed
-        logger.info("\tScaling isotropically.")
-        fun = lambda x : MSE(x,mode=0,alpha0=alpha0)
-        result = scipy.optimize.minimize_scalar(fun    = fun,
-                                                bounds = (low,high),
-                                                method = "Bounded")
-        if result.fun>0.1 and pbc>=2:
-            logger.info("\tScaling along b and c.")
-            fun = lambda x : MSE(x,mode=1,alpha0=result.x*alpha0)
-            result = scipy.optimize.minimize_scalar(fun    = fun,
-                                                    bounds = (low,high),
-                                                    method = "Bounded")
-            if result.fun>0.1 and pbc==3:
-                logger.info("\tScaling along c.")
-                fun = lambda x : MSE(x,mode=2,alpha0=result.x*alpha0)
-                result = scipy.optimize.minimize_scalar(fun    = fun,
-                                                        bounds = (low,high),
-                                                        method = "Bounded")
-        # scale with result
-        alpha = result.x*alpha0
-        logger.info("Best scaling achieved by {0:.3f}x{1:.3f}x{2:.3f}.".format(*alpha))
-        self.scale(alpha=alpha)
+        bounds = list(zip(0.25*cellpar0, 1.5*cellpar0))
+        result = scipy.optimize.minimize(fun = MSE, 
+                                         x0 = cellpar0, 
+                                         method = "L-BFGS-B", 
+                                         bounds = bounds, 
+                                         tol=0.05, 
+                                         options={"eps":0.1})
+        self.scale(cellpar=result.x)
+        logger.info("Best cell parameters found:")
+        logger.info("\ta = {a:<.1f}".format(a=result.x[0]))
+        logger.info("\tb = {b:<.1f}".format(b=result.x[1]))
+        logger.info("\tc = {c:<.1f}".format(c=result.x[2]))
+        logger.info("\talpha = {alpha:<.1f}".format(alpha=result.x[3]))
+        logger.info("\tbeta  = {beta:<.1f}".format(beta=result.x[4]))
+        logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[2]))
         return None
 
     def rotate(self,
@@ -536,7 +515,6 @@ class Framework(object):
         # add a numerical artifact for optimization in z direction
         if sum(atoms.pbc)==2:
             atoms.positions[:,2] += numpy.random.rand(len(atoms))*0.01
-            atoms.pbc = True
         path = os.path.abspath("{path}.{ext}".format(path=f,ext=ext))
         logger.info("Framework saved to disk at {p}".format(p=path))
         if ext=="gin":

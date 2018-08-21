@@ -69,7 +69,8 @@ class Autografs(object):
         coercion -- (optional) force the compatibility to only consider
                     the multiplicity of SBU
         """
-        logger.info("Starting the MOF generation.")
+        logger.info("Starting the MOF generation...")
+        logger.info("Topology --> {topo}".format(topo=topology_name.super()))
         self.sbudict = None
         # make the supercell prior to alignment
         if isinstance(supercell,int):
@@ -136,16 +137,8 @@ class Autografs(object):
                      sbu_dict = None):
         """Does some logging on the chosen SBU mapping."""
         for idx,sbu in sbu_dict.items():
-            s00 = topology.shapes[idx][0]
-            s01 = topology.shapes[idx][1]
-            s10 = sbu.shape[0]
-            s11 = sbu.shape[1]
-            logging.info("Slot {sl}, {s00} {s01}".format(sl=idx,
-                                                         s00=s00,
-                                                         s01=s01))
-            logging.info("\t|-->SBU {sbn} {s10} {s11}.".format(sbn=sbu.name,
-                                                                s10=s10,
-                                                                s11=s11))
+            logging.info("Slot {sl}".format(sl=idx))
+            logging.info("\t|-->SBU {sbn}".format(sbn=sbu.name))
         return None
 
     def get_topology(self, 

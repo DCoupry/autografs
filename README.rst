@@ -11,6 +11,10 @@ __ here_
 
 TODO:
 -----
+High priority:
+
+- the topologies should have a list of equivalent positions for realistic multiple components framework generation
+- BUGFIX for looping with the same Autografs object to generate different MOFs: weird scaling behavior results
 
 Medium priority:
 
