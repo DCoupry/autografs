@@ -83,12 +83,11 @@ class Autografs(object):
         logger.info("Analysis of the topology.")
         topology = Topology(name  = topology_name,
                             atoms = topology_atoms)
-        # ase.visualize.view(topology.atoms)
         logger.debug("Unique shapes of topology = ")
         logger.debug("{} ".format(topology.get_unique_shapes()))
         # container for the aligned SBUs
-        aligned = Framework()
-        aligned.set_topology(topology=topology)
+        aligned = Framework(topology = topology)
+        # aligned.set_topology(topology=topology)
         # identify the corresponding SBU
         logger.info("Scheduling the SBU to slot alignment.")
         try:
@@ -364,6 +363,5 @@ if __name__ == "__main__":
     sbu_names      = ["Benzene_linear","Zn_mof5_octahedral"]
     topology_name  = "pcu"
     mof = molgen.make(topology_name=topology_name,sbu_names=sbu_names)
-    atoms,_,_ = mof.get_atoms()
-    ase.visualize.view(atoms)
+    mof.view()
 

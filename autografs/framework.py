@@ -45,22 +45,31 @@ class Framework(object):
 
     def __init__(self,
                  topology = None,
-                 SBU      = {},
-                 mmtypes  = None,
-                 bonds    = []):
+                 building_units = None,
+                 mmtypes = None,
+                 bonds = None):
         """Constructor for the Framework class.
 
         Can be initialized empty and filled consecutively.
-        topology -- ASE Atoms object.
+        topology -- Topology object.
         SBU      -- list of ASE Atoms objects.
         mmtypes  -- array of type names. e.g: 'C_R','O_3'...
         bonds    -- block-symmetric matrix of bond orders.
         """
         logger.debug("Creating Framework instance.")
         self.topology = topology
-        self.SBU      = SBU
-        self.mmtypes  = numpy.asarray(mmtypes)
-        self.bonds    = numpy.asarray(bonds)
+        if building_units is not None:
+            self.SBU = building_units
+        else:
+            self.SBU = {}
+        if mmtypes is not None:
+            self.mmtypes = numpy.asarray(mmtypes)
+        else:
+            self.mmtypes = []
+        if bonds is not None:
+            self.bonds = numpy.asarray(bonds)
+        else:
+            self.bonds = []
         # keep a dict of elements to delete in 
         # each SBU at connection time. Necessary for example
         # during iterative functionalization.
@@ -105,7 +114,7 @@ class Framework(object):
     def copy(self):
         """Return a copy of itself as a new instance"""
         new = self.__class__(topology = self.topology.copy(),
-                             SBU = self.SBU.copy(),
+                             building_units = self.SBU.copy(),
                              mmtypes = self.get_mmtypes(),
                              bonds = self.get_bonds())
         new._todel = self._todel.copy()
@@ -259,9 +268,6 @@ class Framework(object):
         I     = numpy.eye(3)*alpha0
         cell0 = self.topology.atoms.get_cell()
         pbc = sum(self.topology.atoms.pbc)
-        # TODO: only opti 3 params for 2D
-        if pbc==2:
-            cell0[2,2] = 100.0
         cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
         cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
         # define the cost function
@@ -279,13 +285,12 @@ class Framework(object):
             self.scale(cellpar=cellpar0)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
-            print(pairs)
-            # pairs = [p for p in pairs if len(p)==2]
+            pairs = [p for p in pairs if len(p)==2]
             pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
-            mse = numpy.sum(d**2)
+            mse = numpy.mean(d**2)
             logger.info("\t\\->Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
@@ -471,7 +476,6 @@ class Framework(object):
                 del atoms[todel]
             framework[idx].set_atoms(atoms,analyze=True)
             structure += atoms
-        # ase.visualize.view(structure)
         bonds   = framework.get_bonds()
         mmtypes = framework.get_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())

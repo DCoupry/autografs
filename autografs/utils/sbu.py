@@ -56,6 +56,10 @@ class SBU(object):
         return None
 
     def __repr__(self):
+        """Uses repr to print the string.TODO=distinct."""
+        return self.name
+
+    def __str__(self):
         """Return representation full printing"""
         strings = []
         strings.append("\nSBU: {name}\n".format(name=self.name))
@@ -84,10 +88,6 @@ class SBU(object):
                                                                             bo=b)
                 strings.append(s)
         return "".join(strings)
-
-    def __str__(self):
-        """Uses repr to print the string.TODO=distinct."""
-        return self.__repr__()
 
     def set_atoms(self,
                   atoms,
