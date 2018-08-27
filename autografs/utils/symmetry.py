@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat","Shyue Ping Ong"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.1.1'
+__version__ = '2.2.0'
 __status__  = "production"
 
 import scipy.spatial

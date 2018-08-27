@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.1.1'
+__version__ = '2.2.0'
 __status__  = "production"
 
 
@@ -53,6 +53,7 @@ class Topology(object):
         self.fragments = {}
         self.shapes    = {}
         self.pointgroups = {}
+        # self.equivalent_sites = []
         # fill it in
         if analyze:
             self._analyze()
@@ -209,6 +210,11 @@ class Topology(object):
             self.fragments[ai] = fragment
             self.shapes[ai] = shape
             self.pointgroups[ai] = pg.schoenflies
+        return None
+
+    def view(self):
+        """Viewer for the toology"""
+        ase.visualize.view(self.atoms)
         return None
 
 
