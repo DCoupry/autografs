@@ -70,7 +70,7 @@ class Autografs(object):
                     the multiplicity of SBU
         """
         logger.info("Starting the MOF generation...")
-        logger.info("Topology --> {topo}".format(topo=topology_name.super()))
+        logger.info("Topology --> {topo}".format(topo=topology_name.upper()))
         self.sbudict = None
         # make the supercell prior to alignment
         if isinstance(supercell,int):

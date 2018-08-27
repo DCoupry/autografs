@@ -142,6 +142,7 @@ def read_cgd():
                                         onduplicates="keep")
                     # TODO !!! find a way to use equivalent positions for 
                     # the multiple components frameworks !!!
+                    # use the info keyword to store it
                     topologies[name] = topology
             except Exception:
                 error_counter += 1

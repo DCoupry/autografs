@@ -254,16 +254,24 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-        alpha0[alpha0<1e-6] = 20.0
+            
         # get the scaled cell, normalized
         I     = numpy.eye(3)*alpha0
         cell0 = self.topology.atoms.get_cell()
+        pbc = sum(self.topology.atoms.pbc)
+        # TODO: only opti 3 params for 2D
+        if pbc==2:
+            cell0[2,2] = 100.0
         cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
         cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
         # define the cost function
         def MSE(x):
             """Return cost of scaling as MSE of distances"""
             # scale with this parameter
+            # TODO
+            # if len(x)==3:
+                # 2D case
+                # x = [x[0],x[1],100.0,90.0,90.0,x[2]]
             self.scale(cellpar=x)
             atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
@@ -271,12 +279,14 @@ class Framework(object):
             self.scale(cellpar=cellpar0)
             # find the pairs...
             pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
+            print(pairs)
+            # pairs = [p for p in pairs if len(p)==2]
             pairs =  numpy.asarray(pairs).reshape(-1,2)
             # ...and the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.sum(d**2)
-            logger.info("\t\t\\->Scaling error = {e:>5.3f}".format(e=mse))
+            logger.info("\t\\->Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
         bounds = list(zip(0.25*cellpar0, 1.5*cellpar0))
