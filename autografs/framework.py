@@ -244,6 +244,10 @@ class Framework(object):
         sbu.
         alpha -- scaling factor
         """
+        if len(cellpar)==3:
+            # 2D case
+            cellpar = [cellpar[0],cellpar[1],0.0,90.0,90.0,cellpar[2]]
+        # scale using topology as template
         cell = ase.geometry.cellpar_to_cell(cellpar)
         self.topology.atoms.set_cell(cell,scale_atoms=True)
         # then center the SBUs on this position
@@ -270,14 +274,14 @@ class Framework(object):
         pbc = sum(self.topology.atoms.pbc)
         cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
         cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
+        if pbc==2:
+            cellpar0 = [cellpar0[0],cellpar0[1],cellpar0[5]]
+            cellpar0 = numpy.array(cellpar0)
         # define the cost function
         def MSE(x):
             """Return cost of scaling as MSE of distances"""
             # scale with this parameter
             # TODO
-            # if len(x)==3:
-                # 2D case
-                # x = [x[0],x[1],100.0,90.0,90.0,x[2]]
             self.scale(cellpar=x)
             atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
@@ -305,10 +309,13 @@ class Framework(object):
         logger.info("Best cell parameters found:")
         logger.info("\ta = {a:<.1f}".format(a=result.x[0]))
         logger.info("\tb = {b:<.1f}".format(b=result.x[1]))
-        logger.info("\tc = {c:<.1f}".format(c=result.x[2]))
-        logger.info("\talpha = {alpha:<.1f}".format(alpha=result.x[3]))
-        logger.info("\tbeta  = {beta:<.1f}".format(beta=result.x[4]))
-        logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[2]))
+        if pbc == 2:
+            logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[2]))
+        else:
+            logger.info("\tc = {c:<.1f}".format(c=result.x[2]))
+            logger.info("\talpha = {alpha:<.1f}".format(alpha=result.x[3]))
+            logger.info("\tbeta  = {beta:<.1f}".format(beta=result.x[4]))
+            logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[5]))
         return None
 
     def rotate(self,
@@ -331,7 +338,9 @@ class Framework(object):
     def flip(self,
              index,
              plane=None):
-        """Flip the SBU at index around a C* symmetry axis or Sigmav plane"""
+        """Flip the SBU at index around a C* symmetry axis or Sigmav plane
+        TODO: use symmetry operation for sigma v finding
+        """
         logger.info("Flipping {idx}".format(idx=index))
         if plane is not None:
             self[index].atoms.rotate(v=plane,a=180.0)
@@ -343,13 +352,15 @@ class Framework(object):
             axis = axis[0]-axis[1]
             self[index].atoms.rotate(v=axis,a=180.0)
         else:
-            sigmav = [op[2] for op in self[index].symmops["sigma"]
-                            if op[0]=="v"]
-            if sigmav:
-                cop = sbu.atoms.positions.mean(axis=0)
-                pos = sbu.atoms.positions - cop
-                pos = pos.dot(sigmav[0])  + cop
-                self[index].atoms.set_positions(pos)
+            logger.info("No flippin axis found.")
+        # else:
+        #     sigmav = [op[2] for op in self[index].symmops["sigma"]
+        #                     if op[0]=="v"]
+        #     if sigmav:
+        #         cop = sbu.atoms.positions.mean(axis=0)
+        #         pos = sbu.atoms.positions - cop
+        #         pos = pos.dot(sigmav[0])  + cop
+        #         self[index].atoms.set_positions(pos)
         return None
 
     def apply(self,
@@ -398,7 +409,6 @@ class Framework(object):
         set the x-func distance at the C-H bond distance.
         where -- (slot index, atom index)
         fg    -- ASE Atoms to replace the atom in where by.
-        TODO : move the SBU import to toplevel
         """
         sidx, aidx = where
         # create the SBU object for the functional group

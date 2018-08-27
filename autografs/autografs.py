@@ -32,13 +32,19 @@ class Autografs(object):
     """Framework maker class to generate ASE Atoms objects from topologies.
 
     AuToGraFS: Automatic Topological Generator for Framework Structures.
-    Addicoat, M. a, Coupry, D. E., & Heine, T. (2014).
+    Addicoat, M., Coupry, D. E., & Heine, T. (2014).
     The Journal of Physical Chemistry. A, 118(40), 9607–14. 
     """
 
     def  __init__(self):
         """Constructor for the Autografs framework maker.
         """
+        logger.info("{0:*^64}".format("**"))
+        logger.info("* {0:^60} *".format("AuToGraFS"))
+        logger.info("* {0:^60} *".format("Automatic Topological Generator for Framework Structures"))
+        logger.info("* {0:^60} *".format("Addicoat, M., Coupry, D. E., & Heine, T. (2014)."))
+        logger.info("* {0:^60} *".format("The Journal of Physical Chemistry. A, 118(40), 9607–14."))
+        logger.info("{0:*^64}".format("**"))
         logger.info("Reading the topology database.")
         self.topologies = read_topologies_database()
         logger.info("Reading the building units database.")
@@ -69,7 +75,7 @@ class Autografs(object):
         coercion -- (optional) force the compatibility to only consider
                     the multiplicity of SBU
         """
-        logger.info("Starting the MOF generation...")
+        logger.info("{0:*^64}".format(" STARTING THE MOF GENERATION "))
         logger.info("Topology --> {topo}".format(topo=topology_name.upper()))
         self.sbudict = None
         # make the supercell prior to alignment
