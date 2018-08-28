@@ -281,7 +281,6 @@ class Framework(object):
         def MSE(x):
             """Return cost of scaling as MSE of distances"""
             # scale with this parameter
-            # TODO
             self.scale(cellpar=x)
             atoms,_,_    = self.get_atoms(dummies=True)
             tags         = atoms.get_tags()
@@ -295,7 +294,7 @@ class Framework(object):
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.mean(d**2)
-            logger.info("\t\\->Scaling error = {e:>5.3f}".format(e=mse))
+            logger.info("\t|--> Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
         bounds = list(zip(0.25*cellpar0, 1.5*cellpar0))
@@ -307,15 +306,15 @@ class Framework(object):
                                          options={"eps":0.1})
         self.scale(cellpar=result.x)
         logger.info("Best cell parameters found:")
-        logger.info("\ta = {a:<.1f}".format(a=result.x[0]))
-        logger.info("\tb = {b:<.1f}".format(b=result.x[1]))
+        logger.info("\ta = {a:<5.1f} Angstroms".format(a=result.x[0]))
+        logger.info("\tb = {b:<5.1f} Angstroms".format(b=result.x[1]))
         if pbc == 2:
-            logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[2]))
+            logger.info("\tgamma = {gamma:<3.1f} degrees".format(gamma=result.x[2]))
         else:
-            logger.info("\tc = {c:<.1f}".format(c=result.x[2]))
-            logger.info("\talpha = {alpha:<.1f}".format(alpha=result.x[3]))
-            logger.info("\tbeta  = {beta:<.1f}".format(beta=result.x[4]))
-            logger.info("\tgamma = {gamma:<.1f}".format(gamma=result.x[5]))
+            logger.info("\tc = {c:<5.1f} Angstroms".format(c=result.x[2]))
+            logger.info("\talpha = {alpha:<3.1f} degrees".format(alpha=result.x[3]))
+            logger.info("\tbeta  = {beta:<3.1f} degrees".format(beta=result.x[4]))
+            logger.info("\tgamma = {gamma:<3.1f} degrees".format(gamma=result.x[5]))
         return None
 
     def rotate(self,
