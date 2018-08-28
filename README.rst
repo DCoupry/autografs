@@ -11,9 +11,6 @@ __ here_
 
 TODO:
 -----
-High priority:
-
-- the topologies should have a list of equivalent positions for realistic multiple components framework generation
 
 Medium priority:
 
@@ -27,7 +24,7 @@ Low priority:
 - documentation writing
 - better handling of the databases:
   + precomputing sbu-topologies correspondance
-  + list of paths to custom databases...
+  + use better format than pickle
 
 Install:
 --------
@@ -53,7 +50,7 @@ then clone this repository and add it to you pythonpath::
 Examples:
 ---------
 
-then from any python script or command line:
+From any python script or command line:
 
 .. highlight:: python
 
@@ -62,6 +59,19 @@ then from any python script or command line:
 >>> mof = mofgen.make(topology_name="pcu", 
 >>>                   sbu_names=["Zn_mof5_octahedral", "Benzene_linear"])
 >>> mof.write()
+
+Custom databases can be accessed by passing the path during instanciation
+
+>>> mofgen = Autografs(topology_path="my_topo_path",sbu_path="my_sbu_path")
+>>> mof = mofgen.set_topology(topology_name=custom_topology_name,sbu_name=custom_sbu_names)
+
+When looping over both SBU and topologies, it is better to set the topology directly
+(here, my_topologies and my_sbu_names are appropriate dummy colletions)
+
+>>> for topologi_name in my_topology_names:
+>>>     mofgen.set_topology(topology_name=topology_name)
+>>>     for sbu_names in my_sbu_names:
+>>>          mof = mofgen.make(sbu_names=sbu_names)
 
 It is possible to pass more than one SBU of each shape, optionally with an associated probabilistic weight.
 This weight defaults to 1.0/(number of similar sbu).
@@ -145,6 +155,14 @@ Or using tools to find compatible objects:
 
 >>> sbu_list = mofgen.list_available_sbu(topology_name="pcu")
 >>> topology_list = mofgen.list_available_topologies(sbu_names=["Zn_mof5_octahedral", "Benzene_linear"])
+
+AAuToGraFS is also aware of topologically equivalent positions, and can generate multi components frameworks
+with minimal effort.
+
+>>> sbu_dicts = mofgen.list_available_frameworks()
+>>> for sbu_dict in sbu_dicts:
+>>>     mof = mofgen.make(sbu_dict=sbu_dict)
+>>>     mof.view()
 
 A useful utility is the Atom typer, which assigns bond orders and UFF atom types to a structure:
 
