@@ -296,7 +296,7 @@ class Framework(object):
             logger.info("\t|--> Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
-        bounds = list(zip(0.25*cellpar0, 1.5*cellpar0))
+        bounds = list(zip(0.75*cellpar0, 1.25*cellpar0))
         result = scipy.optimize.minimize(fun = MSE, 
                                          x0 = cellpar0, 
                                          method = "L-BFGS-B", 
