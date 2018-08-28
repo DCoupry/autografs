@@ -11,14 +11,14 @@ __status__  = "production"
 
 import os
 import sys
-import numpy
 import ase
-import logging
+import numpy
 import scipy
+import logging
+import itertools
 import scipy.optimize
 
 from collections import defaultdict
-
 
 from autografs.utils.sbu        import read_sbu_database
 from autografs.utils.sbu        import SBU
@@ -51,7 +51,7 @@ class Autografs(object):
         # container for current topology
         self.topology = None
         #container for current sbu mapping
-        self.sbudict    = None
+        self.sbu_dict    = None
         return None
 
     def set_topology(self,
@@ -105,14 +105,16 @@ class Autografs(object):
             self.set_topology(topology_name=topology_name,
                               supercell=supercell)
         # container for the aligned SBUs
-        aligned = Framework(topology=self.topology)
+        aligned = Framework()
+        aligned.set_topology(self.topology)
         # identify the corresponding SBU
-        logger.info("Scheduling the SBU to slot alignment.")
         try:
             if sbu_dict is None and sbu_names is not None:
+                logger.info("Scheduling the SBU to slot alignment.")
                 self.sbu_dict = self.get_sbu_dict(sbu_names=sbu_names,
                                                   coercion=coercion)
             elif sbu_dict is not None:
+                logger.info("SBU to slot alignment is user defined.")
                 # the sbu_dict has been passed. if not SBU object, create them
                 for k,v in sbu_dict.items():
                     if not isinstance(v,SBU):
@@ -125,7 +127,7 @@ class Autografs(object):
                             name = str(k)
                         sbu_dict[k] = SBU(name=name,
                                           atoms=v)
-                self.sbudict = sbu_dict
+                self.sbu_dict = sbu_dict
             else:
                 raise RuntimeError("Either supply sbu_names or sbu_dict.")
         except RuntimeError as exc:
@@ -284,6 +286,20 @@ class Autografs(object):
         x3 = X[i3]
         return numpy.asarray([x0,x1,x2,x3])
 
+    def list_available_frameworks(self,
+                                 topology_name = None,
+                                 from_list = []):
+        """Return a list of sbu_dict covering all the database"""
+        av_sbu = self.list_available_sbu(topology_name=topology_name,
+                                         from_list=from_list)
+        dicts = []
+        for product in itertools.product(*av_sbu.values()):
+            tmp_d = {}
+            for k,v in zip(av_sbu.keys(),product):
+                tmp_d.update({kk:v for kk in k})
+            dicts.append(tmp_d)
+        return dicts
+
     def list_available_topologies(self,
                                   sbu_names = [],
                                   full      = True,
@@ -298,7 +314,7 @@ class Autografs(object):
         sbu  -- list of sbu names
         full -- wether the topology is entirely represented by the sbu
         max_size -- maximum size of in SBU numbers of topologies to consider
-        from list -- only consider topologies from this list
+        from_list -- only consider topologies from this list
         """
         these_topologies_names = self.topologies.keys()
         if max_size is None:
@@ -346,21 +362,31 @@ class Autografs(object):
         return topologies
 
     def list_available_sbu(self,
-                           topology_name = None):
+                           topology_name = None,
+                           from_list = []):
         """Return the dictionary of compatible SBU.
         
         Filters the existing SBU by shape until only
         those compatible with a slot within the topology are left.
         topology -- name of the topology in the database
+        from_list -- only consider SBU from this list
         """
         av_sbu = defaultdict(list)
-        if topology_name is not None:
-            logger.info("List of compatible SBU with topology {t}:".format(t=topology_name))
-            topology = Topology(name=topology_name,
-                                atoms=self.topologies[topology_name])
+        if from_list:
+            sbu_names = from_list
+        else:
+            sbu_names = list( self.sbu.keys())
+        if topology_name is not None or self.topology is not None:
+            if topology_name is not None:
+                topology = Topology(name=topology_name,
+                                    atoms=self.topologies[topology_name])
+            else:
+                topology = self.topology
+            logger.info("List of compatible SBU with topology {t}:".format(t=topology.name))
             sbu_list = []
             logger.info("\tShape analysis of {} available SBU...".format(len(self.sbu)))
-            for sbuk,sbuv in self.sbu.items():
+            for sbuk in sbu_names:
+                sbuv = self.sbu[sbuk]
                 try:
                     sbu = SBU(name=sbuk,
                               atoms=sbuv)
@@ -378,7 +404,7 @@ class Autografs(object):
                         av_sbu[tuple(sites)].append(sbu.name)
         else:
             logger.info("Listing full database of SBU.")
-            av_sbu = list(self.sbu.keys())
+            av_sbu = list(self.sbu.keys())    
         return dict(av_sbu)
 
 

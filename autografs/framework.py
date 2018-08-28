@@ -267,11 +267,10 @@ class Framework(object):
         alpha0 -- starting point of the scaling search algorithm
         """
         logger.info("Refining unit cell.")
-            
         # get the scaled cell, normalized
         I     = numpy.eye(3)*alpha0
         cell0 = self.topology.atoms.get_cell()
-        pbc = sum(self.topology.atoms.pbc)
+        pbc = sum(self.topology.atoms.get_pbc())
         cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
         cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
         if pbc==2:
