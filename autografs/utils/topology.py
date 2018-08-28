@@ -17,7 +17,7 @@ import _pickle as pickle
 
 import ase
 from ase              import Atom, Atoms
-from ase.spacegroup   import crystal
+from ase.spacegroup   import crystal, Spacegroup
 from ase.data         import chemical_symbols
 from ase.neighborlist import NeighborList
 from collections import Counter
@@ -53,7 +53,7 @@ class Topology(object):
         self.fragments = {}
         self.shapes    = {}
         self.pointgroups = {}
-        # self.equivalent_sites = []
+        self.equivalent_sites = []
         # fill it in
         if analyze:
             self._analyze()
@@ -99,26 +99,32 @@ class Topology(object):
                              coercion=False):
         """Return [shapes...] for the slots compatible with the SBU"""
         slots = []
-        complist = [(self.shapes[ai],self.pointgroups[ai]) 
+        complist = [(ai, self.shapes[ai],self.pointgroups[ai]) 
                     for ai in self.fragments.keys()]
-        for shape, pg in complist:
+        seen_idx = []
+        for idx, shape, pg in complist:
+            if idx in seen_idx:
+                continue
+            eq_sites = [s for s in self.equivalent_sites if idx in s][0]
+            seen_idx += eq_sites
             # test for compatible multiplicity  
             mult = (sbu.shape[-1] ==  shape[-1])
             if not mult:
                 continue
-            elif coercion:
-                # takes objects of corresponding
-                # multiplicity as compatible.
-                slots.append(tuple(shape))
-                continue
             # pointgroups are more powerful identifiers
             if pg==sbu.pg:
-                slots.append(tuple(shape))
+                slots+=[tuple(c[1]) for c in complist if c[0] in eq_sites]
                 continue
             # the sbu has at least as many symmetry axes
             symm = (sbu.shape[:-1]-shape[:-1]>=0).all()
             if symm:
-                slots.append(tuple(shape))
+                slots+=[tuple(c[1]) for c in complist if c[0] in eq_sites]
+                continue
+            if coercion:
+                # takes objects of corresponding
+                # multiplicity as compatible.
+                slots+=[tuple(c[1]) for c in complist if c[0] in eq_sites]
+                continue
         return slots
 
     def _get_cutoffs(self,
@@ -210,6 +216,29 @@ class Topology(object):
             self.fragments[ai] = fragment
             self.shapes[ai] = shape
             self.pointgroups[ai] = pg.schoenflies
+        # now getting the equivalent sites using the Spacegroup object
+        sg = self.atoms.info["spacegroup"]
+        if not isinstance(sg,Spacegroup):
+            sg = Spacegroup(sg)
+        scaled_positions = self.atoms.get_scaled_positions()
+        seen_indices = []
+        symbols = numpy.array(self.atoms.get_chemical_symbols())
+        for ai in Ais:
+            if ai in seen_indices:
+                continue
+            sites, _ = sg.equivalent_sites(scaled_positions[ai])
+            these_indices = []
+            for site in sites:
+                norms = numpy.linalg.norm(scaled_positions-site,axis=1)
+                if norms.min()<1e-6:
+                    these_indices.append(norms.argmin())
+                # take pbc into account
+                norms = numpy.abs(norms-1.0)
+                if norms.min()<1e-6:
+                    these_indices.append(norms.argmin())
+            these_indices = [idx for idx in these_indices if idx in Ais]
+            seen_indices += these_indices
+            self.equivalent_sites.append(these_indices)
         return None
 
     def view(self):
