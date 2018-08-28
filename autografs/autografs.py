@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.2.0'
+__version__ = '2.3.0'
 __status__  = "production"
 
 import os
@@ -295,10 +295,12 @@ class Autografs(object):
 
     def list_available_frameworks(self,
                                  topology_name = None,
-                                 from_list = []):
+                                 from_list = [],
+                                 coercion = False):
         """Return a list of sbu_dict covering all the database"""
         av_sbu = self.list_available_sbu(topology_name=topology_name,
-                                         from_list=from_list)
+                                         from_list=from_list,
+                                         coercion = coercion)
         dicts = []
         for product in itertools.product(*av_sbu.values()):
             tmp_d = {}
@@ -312,7 +314,8 @@ class Autografs(object):
                                   full      = True,
                                   max_size  = 100,
                                   from_list = [],
-                                  pbc       = "all"):
+                                  pbc       = "all",
+                                  coercion = False):
         """Return a list of topologies compatible with the SBUs
 
         For each sbu in the list given in input, refines first by coordination
@@ -351,7 +354,7 @@ class Autografs(object):
                     logger.debug("Topology {tk} not loaded: {exc}".format(tk=tk,exc=exc))
                     continue
                 filled = {shape:False for shape in topology.get_unique_shapes()}
-                slots_full  = [topology.has_compatible_slots(s) for s in sbu]
+                slots_full  = [topology.has_compatible_slots(s,coercion=coercion) for s in sbu]
                 for slots in slots_full:
                     for slot in slots:
                         filled[slot] = True
@@ -370,7 +373,8 @@ class Autografs(object):
 
     def list_available_sbu(self,
                            topology_name = None,
-                           from_list = []):
+                           from_list = [],
+                           coercion = False):
         """Return the dictionary of compatible SBU.
         
         Filters the existing SBU by shape until only
@@ -405,7 +409,7 @@ class Autografs(object):
                 logger.info("\tSites considered : {}".format(", ".join([str(s) for s in sites])))
                 shape = topology.shapes[sites[0]]
                 for sbu in sbu_list:
-                    is_compatible = sbu.is_compatible(shape)
+                    is_compatible = sbu.is_compatible(shape, coercion=coercion)
                     if is_compatible:
                         logger.info("\t\t|--> {k}".format(k=sbu.name))
                         av_sbu[tuple(sites)].append(sbu.name)

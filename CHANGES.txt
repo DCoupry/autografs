@@ -1,3 +1,4 @@
 v2.0.1-beta, 17/03/2018 -- Initial release.
 v2.1.0, 25/07/2018 -- first functional release with 90 % of the desired functionality
 v2.2.0, 27/08/2018 -- better scaling implemented, faster for 2D objects
+v2.3.0, 28/08/2018 -- custom databases support, and easier multi-component generation

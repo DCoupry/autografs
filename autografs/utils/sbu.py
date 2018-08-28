@@ -6,7 +6,7 @@ __author__  = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = '2.2.0'
+__version__ = '2.3.0'
 __status__  = "production"
 
 
@@ -112,7 +112,8 @@ class SBU(object):
 
     def is_compatible(self,
                       shape,
-                      point_group = None):
+                      point_group = None,
+                      coercion = False):
         """Return True if symmetry compatible with symmops.
         
         For an SBU to be compatible for alignment with a topology slot
@@ -132,6 +133,8 @@ class SBU(object):
             # the sbu has at least as many symmetry axes
             symm = (self.shape[:-1]-shape[:-1]>=0).all()
             if symm:
+                compatible = True
+            if coercion:
                 compatible = True
         logger.debug("\tCompatibility = {cmp}.".format(cmp=compatible))
         return compatible
