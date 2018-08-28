@@ -32,7 +32,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def read_cgd():
+def read_cgd(path=None):
     """Return a dictionary of topologies as ASE Atoms objects
     
     The format CGD is used mainly by the Systre software
@@ -48,7 +48,10 @@ def read_cgd():
     groups = {l.split()[0]:l.split()[1] for l in grpf.read().decode("utf8").splitlines()}
     grpf.close()
     # read the rcsr topology data
-    topology_file = os.path.join(root,"nets.cgd")
+    if path is None:
+        topology_file = os.path.join(root,"nets.cgd")
+    else:
+        topology_file = os.path.abspath(path)
     # the script as such starts here
     error_counter = 0
     with open(topology_file,"rb") as tpf:

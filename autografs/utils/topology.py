@@ -264,21 +264,27 @@ def download_topologies():
             shutil.copyfileobj(resp.raw, outpt)        
     return
 
-def read_topologies_database(update_db     = False,
-                             update_source = False):
+def read_topologies_database(update = False,
+                             path = None,
+                             use_defaults = True):
     """Return a dictionary of topologies as ASE Atoms."""
     from autografs.utils.io import read_cgd
     root     = os.path.join(__data__,"topologies")
     db_file  = os.path.join(root,"topologies.pkl")
     cgd_file = os.path.join(root,"nets.cgd")
-    if ((not os.path.isfile(cgd_file)) or (update_source)):
-        logger.info("Downloading the topologies from RCSR.")
-        download_topologies()
-    else:
-        logger.info("Using saved nets from RCSR")
-    if ((not os.path.isfile(db_file)) or (update_db)):
-        logger.info("Reloading the topologies from scratch")
-        topologies     = read_cgd()
+    topologies = {}
+    if ((not os.path.isfile(db_file)) or (update)):
+        if (not os.path.isfile(cgd_file)) and use_defaults:
+            logger.info("Downloading the topologies from RCSR.")
+            download_topologies()
+        if use_defaults:
+            logger.info("Loading the topologies from RCSR default library")
+            topologies_tmp = read_cgd(path=None)
+            topologies.update(topologies_tmp)
+        if path is not None:
+            logger.info("Loading the topologies from {0}".format(path))
+            topologies_tmp = read_cgd(path=path)
+            topologies.update(topologies_tmp)
         topologies_len = len(topologies)
         logger.info("{0:<5} topologies saved".format(topologies_len))
         with open(db_file,"wb") as pkl:
@@ -295,6 +301,8 @@ def read_topologies_database(update_db     = False,
 
 
 if __name__ == "__main__":
-
-    topologies = read_topologies_database(update_db=True,update_source=True)
+    # update everything
+    topologies = read_topologies_database(update = True, 
+                                          path = None, 
+                                          use_defaults = True)
 

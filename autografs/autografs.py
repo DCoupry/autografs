@@ -36,18 +36,25 @@ class Autografs(object):
     The Journal of Physical Chemistry. A, 118(40), 9607–14. 
     """
 
-    def  __init__(self):
+    def  __init__(self,
+                  topology_path = None,
+                  sbu_path = None,
+                  use_defaults = True,
+                  update = False):
         """Constructor for the Autografs framework maker."""
         logger.info("{0:*^80}".format("*"))
         logger.info("* {0:^76} *".format("AuToGraFS"))
         logger.info("* {0:^76} *".format("Automatic Topological Generator for Framework Structures"))
         logger.info("* {0:^76} *".format("Addicoat, M., Coupry, D. E., & Heine, T. (2014)"))
-        logger.info("* {0:^75} *".format("The Journal of Physical Chemistry. A, 118(40), 9607–14"))
+        logger.info("* {0:^76} *".format("The Journal of Physical Chemistry. A, 118(40), 9607-14"))
         logger.info("{0:*^80}".format("*"))
         logger.info("Reading the topology database.")
-        self.topologies = read_topologies_database()
+        self.topologies = read_topologies_database(path=topology_path,
+                                                   use_defaults=use_defaults)
         logger.info("Reading the building units database.")
-        self.sbu        = read_sbu_database()
+        self.sbu        = read_sbu_database(path=sbu_path,
+                                            use_defaults=use_defaults,
+                                            update=update)
         # container for current topology
         self.topology = None
         #container for current sbu mapping

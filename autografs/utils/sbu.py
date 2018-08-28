@@ -174,17 +174,25 @@ class SBU(object):
         return None
 
 def read_sbu_database(update = False,
-                      path   = None):
+                      path   = None,
+                      use_defaults = True):
     """Return a dictionnary of ASE Atoms as SBUs"""
     from autografs.utils.io import read_sbu
     db_file = os.path.join(__data__,"sbu/sbu.pkl")
     user_db = (path is not None)
     no_dflt = (not os.path.isfile(db_file))
     if (user_db or update or no_dflt):
-        logger.info("Reloading the building units from scratch")
-        sbu = read_sbu(path=path)
+        sbu = {}
+        if use_defaults:
+            logger.info("Loading the building units from default library")
+            sbu_tmp = read_sbu(path=None)
+            sbu.update(sbu_tmp)
+        if path is not None:
+            logger.info("Loading the building units from {0}".format(path))
+            sbu_tmp = read_sbu(path=path)
+            sbu.update(sbu_tmp)
         sbu_len = len(sbu)
-        logger.info("{0:<5} sbu saved".format(sbu_len))
+        logger.info("{0:<5} sbu loaded.".format(sbu_len))
         with open(db_file,"wb") as pkl:
             pickle.dump(obj=sbu,file=pkl)
         return sbu
