@@ -26,20 +26,17 @@ class BasicTestSuite(unittest.TestCase):
 			assertions.append(R)
 		return all(R)
 
-	# TODO 
-	def test_rotation(self):
-		logger.debug("Testing rotation operation.")
-		return True
-
-	def test_reflection(self):
-		logger.debug("Testing reflection operation.")
-		return True
-
 	def test_mmanalysis(self):
 		logger.debug("Testing bonding and FF parametrization analysis.")
 		return True
 
-
+	def test_instanciation(self):
+		logger.debug("Testing autografs instanciation")
+		try:
+			_ = autografs.Autografs()
+			return True
+		except Exception:
+			return False
 
 if __name__ == '__main__':
 	unittest.main()
