@@ -372,14 +372,24 @@ class Framework(object):
         return None
 
     def list_functionalizable_sites(self,
-                                    symbol=None):
-        """Return a list of tuple for functionalizable sites"""
+                                    symbol=None,
+                                    sbu_names=[]):
+        """Return a list of tuple for functionalizable sites
+        symbol -- what type of atom we consider functionalizable.
+        sbu_names -- what SBU we consider
+        """
+        if sbu_names:
+            logger.info("Only considering the following SBU types for functionalization:")
+            for sbu_name in sbu_names:
+                logger.info("\t|--> {0}".format(sbu_name))
         if symbol is not None:
             logger.info("Listing available functionalizable {s}".format(symbol))
         else:
             logger.info("Listing all available functionalization sites")
         sites = []
         for idx,sbu in self:
+            if sbu_names and sbu.name not in sbu_names:
+                continue
             bonds = sbu.bonds
             for atom in sbu.atoms:
                 if symbol is not None and atom.symbol!=symbol:
