@@ -186,7 +186,8 @@ def write_gin(path,
               mmtypes):
     """Write an GULP input file to disc"""
     with open(path,"w") as fileobj:
-        fileobj.write('opti conp molmec cartesian noautobond conjugate\n')
+        fileobj.write('opti conp molmec noautobond conjugate\n')
+        fileobj.write('maxcyc 500\n')
         pbc = atoms.get_pbc()
         if pbc.any():
             cell = atoms.get_cell().tolist()

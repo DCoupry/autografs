@@ -15,6 +15,7 @@ import numpy
 import scipy
 import typing
 import ase
+import copy
 import itertools
 import logging
 from collections import defaultdict
@@ -113,11 +114,11 @@ class Framework(object):
 
     def copy(self):
         """Return a copy of itself as a new instance"""
-        new = self.__class__(topology = self.topology.copy(),
-                             building_units = self.SBU.copy(),
+        new = self.__class__(topology = self.get_topology(),
+                             building_units = copy.deepcopy(self.SBU),
                              mmtypes = self.get_mmtypes(),
                              bonds = self.get_bonds())
-        new._todel = self._todel.copy()
+        new._todel = copy.deepcopy(self._todel)
         return new
 
     def set_topology(self,
@@ -296,7 +297,7 @@ class Framework(object):
             logger.info("\t|--> Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
-        bounds = list(zip(0.75*cellpar0, 1.25*cellpar0))
+        bounds = list(zip(0.1*cellpar0, 2.0*cellpar0))
         result = scipy.optimize.minimize(fun = MSE, 
                                          x0 = cellpar0, 
                                          method = "L-BFGS-B", 
@@ -391,6 +392,10 @@ class Framework(object):
                 elif bonds[atom.index,bidx[0]]!=1.0:
                     continue
                 else:
+                    logger.info("\t|--> Available site: {0:<2}{1:<3} in {2} {3}".format(atom.symbol,
+                                                                         atom.index,
+                                                                         sbu.name,
+                                                                         idx))
                     sites.append((idx,atom.index))
         return sites
 
@@ -407,6 +412,7 @@ class Framework(object):
         set the x-func distance at the C-H bond distance.
         where -- (slot index, atom index)
         fg    -- ASE Atoms to replace the atom in where by.
+                 can also be a SBU in the database
         """
         sidx, aidx = where
         # create the SBU object for the functional group
@@ -478,7 +484,7 @@ class Framework(object):
         pbc  = framework.topology.atoms.get_pbc()
         structure = ase.Atoms(cell=cell,pbc=pbc)
         for idx,sbu in framework:
-            atoms = sbu.atoms
+            atoms = sbu.atoms.copy()
             todel = framework._todel[idx]
             if len(todel)>0:
                 del atoms[todel]

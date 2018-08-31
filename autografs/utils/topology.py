@@ -13,6 +13,7 @@ __status__  = "production"
 import os
 import sys
 import numpy
+import copy
 import _pickle as pickle
 
 import ase
@@ -64,8 +65,8 @@ class Topology(object):
         new = self.__class__(name  = str(self.name),
                              atoms = self.atoms.copy(),
                              analyze=False)
-        new.fragments = self.fragments.copy()
-        new.shapes    = self.shapes.copy()
+        new.fragments = copy.deepcopy(self.fragments)
+        new.shapes    = copy.deepcopy(self.shapes)
         return new
 
     def get_atoms(self):
