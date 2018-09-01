@@ -63,7 +63,7 @@ def get_bond_matrix(sbu):
     symbols   = numpy.array(sbu.get_chemical_symbols())
     numbers   = numpy.array(sbu.get_atomic_numbers())
     positions = numpy.array(sbu.get_positions())
-    BO1 = numpy.array([covalent_radii[n] if n>0 else 0.35 for n in numbers])
+    BO1 = numpy.array([covalent_radii[n] if n>0 else 0.7 for n in numbers])
     BO2 = BO1 - 0.15
     BO3 = BO2 - 0.15
     nl1 = NeighborList(cutoffs=BO1,bothways=True,self_interaction=False,skin=0.1)

@@ -186,8 +186,9 @@ def write_gin(path,
               mmtypes):
     """Write an GULP input file to disc"""
     with open(path,"w") as fileobj:
-        fileobj.write('opti conp molmec noautobond conjugate\n')
+        fileobj.write('opti conp molmec noautobond conjugate cartesian unit positive unfix\n')
         fileobj.write('maxcyc 500\n')
+        fileobj.write('switch bfgs gnorm 1.0\n')
         pbc = atoms.get_pbc()
         if pbc.any():
             cell = atoms.get_cell().tolist()
@@ -237,6 +238,7 @@ def write_gin(path,
         fileobj.write('\n')
         name = ".".join(path.split("/")[-1].split(".")[:-1])
         fileobj.write('output movie xyz {0}.xyz\n'.format(name))
-        if pbc.any():
+        fileobj.write('output gen {0}.gen\n'.format(name))
+        if sum(pbc)==3:
             fileobj.write('output cif {0}.cif\n'.format(name))
         return None

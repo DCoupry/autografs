@@ -323,15 +323,18 @@ class Framework(object):
                axis = None):
         """Rotate the SBU at index around a Cinf symmetry axis"""
         logger.info("Rotating {idx} by {a}.".format(idx=index,a=angle))
+        xs = [x.position for x in self[index].atoms 
+                               if x.symbol=="X"]
+        xs = numpy.asarray(xs)
+        center = xs.mean(axis=0)
         if axis is not None:
-            self[index].atoms.rotate(v=axis,a=angle)
+            axis /= numpy.linalg.norm(axis)
+            self[index].atoms.rotate(v=axis,a=angle,center=center)
             self[index].transfer_tags(self.topology.fragments[index])
         elif self[index].shape[-1]==2:
-            axis = [x.position for x in self[index].atoms 
-                               if x.symbol=="X"]
-            axis = numpy.asarray(axis)
-            axis = axis[0]-axis[1]
-            self[index].atoms.rotate(v=axis,a=angle)
+            axis = xs[0]-xs[1]
+            axis /= numpy.linalg.norm(axis)
+            self[index].atoms.rotate(v=axis,a=angle,center=center)
         return None
 
     def flip(self,
