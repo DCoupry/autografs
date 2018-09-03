@@ -15,7 +15,6 @@ TODO:
 Medium priority:
 
 - the symmetry axes detection has trouble with planar shapes
-- implement pillaring by using custom alignement rules
 - more robust mmanalysis module
 
 Low priority:
