@@ -156,7 +156,8 @@ class Framework(object):
         L = len(otopo.atoms)
         mcount = 0
         # for the correct tagging analysis
-        superatoms = otopo.atoms.copy() * m
+        superatoms = otopo.atoms.copy().repeat(rep=m)
+        ase.visualize.view(superatoms)
         supertopo  = Topology(name="supertopo.tmp",atoms=superatoms)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
@@ -172,7 +173,8 @@ class Framework(object):
                     sbu.transfer_tags(supertopo.fragments[atom.index])           
             else:
                 mcount += 1
-                coffset = ocell.dot(offset)
+                offset = numpy.asarray(offset)
+                coffset = offset.dot(ocell)
                 for atom in otopo.atoms.copy():
                     atom.position += coffset
                     supercell.topology.atoms.append(atom)

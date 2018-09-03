@@ -106,7 +106,7 @@ class Autografs(object):
                     the multiplicity of SBU
         """
         logger.info("")
-        logger.info("{0:*^80}".format(" STARTING THE MOF GENERATION "))
+        logger.info("{0:-^50}".format(" Starting Framework Generation "))
         self.sbudict = None
         # only set the topology if not already done
         if topology_name is not None:
@@ -158,8 +158,13 @@ class Autografs(object):
             alpha += f
             aligned.append(index=idx,
                            sbu=sbu)
+        logger.info("")
         aligned.refine(alpha0=alpha)
+        logger.info("")
         logger.info("Finished framework generation.")
+        logger.info("")
+        logger.info("{0:-^50}".format(" Post-treatment "))
+        logger.info("")
         return aligned
 
     def log_sbu_dict(self,
