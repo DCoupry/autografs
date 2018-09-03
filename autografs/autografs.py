@@ -420,10 +420,11 @@ class Autografs(object):
                     if is_compatible:
                         logger.info("\t\t|--> {k}".format(k=sbu.name))
                         av_sbu[tuple(sites)].append(sbu.name)
+            return dict(av_sbu)
         else:
             logger.info("Listing full database of SBU.")
             av_sbu = list(self.sbu.keys())    
-        return dict(av_sbu)
+            return av_sbu
 
 
 

@@ -240,7 +240,7 @@ class Topology(object):
             these_indices = [idx for idx in these_indices if idx in Ais]
             seen_indices += these_indices
             self.equivalent_sites.append(these_indices)
-        logger.info("{es} equivalent sites kinds.".format(es=len(self.equivalent_sites)))
+        logger.debug("{es} equivalent sites kinds.".format(es=len(self.equivalent_sites)))
         return None
 
     def view(self):
