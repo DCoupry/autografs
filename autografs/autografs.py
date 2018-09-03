@@ -60,13 +60,13 @@ class Autografs(object):
         self.topology = None
         #container for current sbu mapping
         self.sbu_dict    = None
+        logger.info("")
         return None
 
     def set_topology(self,
                      topology_name,
                      supercell = (1,1,1)):
         """Create and store the topology object"""
-        logger.info("")
         logger.info("Topology set to --> {topo}".format(topo=topology_name.upper()))
         # make the supercell prior to alignment
         if isinstance(supercell,int):
@@ -105,8 +105,8 @@ class Autografs(object):
         coercion -- (optional) force the compatibility to only consider
                     the multiplicity of SBU
         """
-        logger.info("")
         logger.info("{0:-^50}".format(" Starting Framework Generation "))
+        logger.info("")
         self.sbudict = None
         # only set the topology if not already done
         if topology_name is not None:

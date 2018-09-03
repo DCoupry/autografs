@@ -13,7 +13,7 @@ TODO:
 -----
 
 Medium priority:
-
+- offer an isotropic scaling option
 - the symmetry axes detection has trouble with planar shapes
 - more robust mmanalysis module
 

@@ -149,16 +149,21 @@ class Framework(object):
         # new framework object
         supercell = self.copy()
         ocell = supercell.topology.atoms.get_cell()
+        ocellpar = ase.geometry.cell_to_cellpar(ocell)
+        newcellpar = ocellpar.copy()
+        newcellpar[0] *= m[0]
+        newcellpar[1] *= m[1]
+        newcellpar[2] *= m[2]
+        newcell = ase.geometry.cellpar_to_cell(newcellpar)
         otopo = supercell.topology.copy()
-        cellfactor = numpy.asarray([x[-1]+1,y[-1]+1,z[-1]+1],dtype=float)
-        newcell = ocell.dot(numpy.eye(3)*cellfactor)
         supercell.topology.atoms.set_cell(newcell,scale_atoms=False)
         L = len(otopo.atoms)
-        mcount = 0
         # for the correct tagging analysis
         superatoms = otopo.atoms.copy().repeat(rep=m)
-        ase.visualize.view(superatoms)
-        supertopo  = Topology(name="supertopo.tmp",atoms=superatoms)
+        # ERROR PRONE! the scaling modifies the shape 
+        # in the topology, resulting in weird behaviour. 
+        # TODO: use otopo as basis
+        supertopo  = Topology(name="supertopo",atoms=superatoms, analyze=True)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
             # central cell, ignore
@@ -170,9 +175,8 @@ class Framework(object):
                         continue
                     # directly tranfer new tags
                     sbu = supercell[atom.index]
-                    sbu.transfer_tags(supertopo.fragments[atom.index])           
+                    sbu.transfer_tags(otopo.fragments[atom.index])           
             else:
-                mcount += 1
                 offset = numpy.asarray(offset)
                 coffset = offset.dot(ocell)
                 for atom in otopo.atoms.copy():
@@ -187,6 +191,7 @@ class Framework(object):
                         continue
                     sbu = supercell[atom.index].copy()
                     sbu.atoms.positions += coffset
+                    # print("++++")
                     sbu.transfer_tags(supertopo.fragments[newidx])
                     supercell.append(index = newidx,
                                      sbu   = sbu,
