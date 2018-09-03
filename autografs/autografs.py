@@ -67,8 +67,7 @@ class Autografs(object):
                      supercell = (1,1,1)):
         """Create and store the topology object"""
         logger.info("")
-        logger.info("{0:*^80}".format(" SETTING NEW TOPOLOGY "))
-        logger.info("Topology --> {topo}".format(topo=topology_name.upper()))
+        logger.info("Topology set to --> {topo}".format(topo=topology_name.upper()))
         # make the supercell prior to alignment
         if isinstance(supercell,int):
             supercell = (supercell,supercell,supercell)
@@ -80,9 +79,8 @@ class Autografs(object):
         logger.info("Analysis of the topology.")
         topology = Topology(name = topology_name,
                             atoms = topology_atoms)
-        logger.debug("Unique shapes of topology = ")
-        logger.debug("{} ".format(topology.get_unique_shapes()))
         self.topology = topology
+        logger.info("")
         return None
 
     def make(self,
@@ -169,8 +167,8 @@ class Autografs(object):
                      sbu_dict = None):
         """Does some logging on the chosen SBU mapping."""
         for idx,sbu in sbu_dict.items():
-            logging.info("Slot {sl}".format(sl=idx))
-            logging.info("\t|--> SBU {sbn}".format(sbn=sbu.name))
+            logging.info("\tSlot {sl}".format(sl=idx))
+            logging.info("\t   |--> SBU {sbn}".format(sbn=sbu.name))
         return None
 
     def get_topology(self, 

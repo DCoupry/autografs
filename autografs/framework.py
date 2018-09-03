@@ -88,6 +88,7 @@ class Framework(object):
     def __delitem__(self,
                     key):
         """Indexable intrinsic"""
+        logger.info("Deleting {0} {1}".format(self.SBU[key].name,key))
         del self.SBU[key]
         return None
 
@@ -431,50 +432,46 @@ class Framework(object):
         # create the SBU object for the functional group
         fg_name = "func:{0}".format(fg.get_chemical_formula(mode="hill"))
         logger.info("Functionalization of atom {1} in slot {0}.".format(*where))
-        try:
-            logger.info("\t|--> replace by {f}.".format(f=fg_name))
-            fg = autografs.utils.sbu.SBU(name=fg_name,atoms=fg)
-            # center the positions
-            fg_cop = fg.atoms.positions.mean(axis=0)
-            fg.atoms.positions -= fg_cop
-            # check that only one dummy exists
-            xidx = [x.index for x in fg.atoms if x.symbol=="X"]
-            assert len(xidx)==1
-            xidx  = xidx[0]
-            # center the sbu
-            sbu = self.SBU[sidx].atoms
-            sbu_name = self.SBU[sidx].name
-            sbu_cop = sbu.positions.mean(axis=0)
-            sbu.positions -= sbu_cop
-            # find the bonds
-            bonds = self.SBU[sidx].bonds
-            bidx  = numpy.where(bonds[aidx]>0.0)[0]
-            # check that only one bond exists
-            assert len(bidx)==1 and bonds[aidx,bidx[0]]==1.0
-            # now get vectors to align
-            fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
-            assert len(fgbidx)==1 and fg.bonds[xidx,fgbidx]==1.0
-            # func-x
-            v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
-            # where[1]-bonded atom
-            v1 = sbu.positions[aidx]-sbu.positions[bidx]
-            R,s = scipy.linalg.orthogonal_procrustes(v0,v1)
-            fg.atoms.positions = fg.atoms.positions.dot(R)
-            fg.atoms.positions -= fg.atoms.positions[xidx]
-            fg.atoms.positions += sbu.positions[bidx]
-            # create the new object
-            # keep note of what to delete.
-            self._todel[sidx] += [aidx,xidx+len(sbu)]
-            sbu += fg.atoms
-            sbu.positions += sbu_cop
-            self.SBU[sidx].set_atoms(sbu,analyze=False)
-            self.SBU[sidx].bonds = scipy.linalg.block_diag(bonds,
-                                                           fg.bonds)
-            self.SBU[sidx].mmtypes = numpy.hstack([self.SBU[sidx].mmtypes,
-                                                  fg.mmtypes])
-        except Exception as exc:
-            logger.error("\t|--> ERROR WHILE FUNCTIONALIZING.")
-            logger.error("\t|--> {exc}".format(exc=exc))
+        logger.info("\t|--> replace by {f}.".format(f=fg_name))
+        fg = autografs.utils.sbu.SBU(name=fg_name,atoms=fg)
+        # center the positions
+        fg_cop = fg.atoms.positions.mean(axis=0)
+        fg.atoms.positions -= fg_cop
+        # check that only one dummy exists
+        xidx = [x.index for x in fg.atoms if x.symbol=="X"]
+        assert len(xidx)==1
+        xidx  = xidx[0]
+        # center the sbu
+        sbu = self.SBU[sidx].atoms
+        sbu_name = self.SBU[sidx].name
+        sbu_cop = sbu.positions.mean(axis=0)
+        sbu.positions -= sbu_cop
+        # find the bonds
+        bonds = self.SBU[sidx].bonds
+        bidx  = numpy.where(bonds[aidx]>0.0)[0]
+        # check that only one bond exists
+        assert len(bidx)==1
+        # now get vectors to align
+        fgbidx = numpy.where(fg.bonds[xidx]>0.0)[0]
+        assert len(fgbidx)==1
+        # func-x
+        v0 = fg.atoms.positions[fgbidx]-fg.atoms.positions[xidx]
+        # where[1]-bonded atom
+        v1 = sbu.positions[aidx]-sbu.positions[bidx]
+        R,s = scipy.linalg.orthogonal_procrustes(v0,v1)
+        fg.atoms.positions = fg.atoms.positions.dot(R)
+        fg.atoms.positions -= fg.atoms.positions[xidx]
+        fg.atoms.positions += sbu.positions[bidx]
+        # create the new object
+        # keep note of what to delete.
+        self._todel[sidx] += [aidx,xidx+len(sbu)]
+        sbu += fg.atoms
+        sbu.positions += sbu_cop
+        self.SBU[sidx].set_atoms(sbu,analyze=False)
+        self.SBU[sidx].bonds = scipy.linalg.block_diag(bonds,
+                                                       fg.bonds)
+        self.SBU[sidx].mmtypes = numpy.hstack([self.SBU[sidx].mmtypes,
+                                              fg.mmtypes])
         return None
 
     def get_atoms(self,
