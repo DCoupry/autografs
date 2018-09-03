@@ -48,6 +48,7 @@ class Autografs(object):
         logger.info("* {0:^76} *".format("Addicoat, M., Coupry, D. E., & Heine, T. (2014)"))
         logger.info("* {0:^76} *".format("The Journal of Physical Chemistry. A, 118(40), 9607-14"))
         logger.info("{0:*^80}".format("*"))
+        logger.info("")
         logger.info("Reading the topology database.")
         self.topologies = read_topologies_database(path=topology_path,
                                                    use_defaults=use_defaults)
@@ -65,6 +66,7 @@ class Autografs(object):
                      topology_name,
                      supercell = (1,1,1)):
         """Create and store the topology object"""
+        logger.info("")
         logger.info("{0:*^80}".format(" SETTING NEW TOPOLOGY "))
         logger.info("Topology --> {topo}".format(topo=topology_name.upper()))
         # make the supercell prior to alignment
@@ -105,6 +107,7 @@ class Autografs(object):
         coercion -- (optional) force the compatibility to only consider
                     the multiplicity of SBU
         """
+        logger.info("")
         logger.info("{0:*^80}".format(" STARTING THE MOF GENERATION "))
         self.sbudict = None
         # only set the topology if not already done
@@ -158,6 +161,7 @@ class Autografs(object):
             aligned.append(index=idx,
                            sbu=sbu)
         aligned.refine(alpha0=alpha)
+        logger.info("Finished framework generation.")
         return aligned
 
     def log_sbu_dict(self,

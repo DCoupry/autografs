@@ -22,6 +22,6 @@ from autografs.framework import Framework
 
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
-logging.basicConfig(format='%(asctime)s in %(name)s %(levelname)s: %(message)s', 
+logging.basicConfig(format='%(asctime)s | %(message)s', 
 	                level=logging.INFO, 
 	                datefmt='%I:%M:%S')
