@@ -161,8 +161,8 @@ class Framework(object):
         # for the correct tagging analysis
         superatoms = otopo.atoms.copy().repeat(rep=m)
         # ERROR PRONE! the scaling modifies the shape 
-        # in the topology, resulting in weird behaviour. 
-        # TODO: use otopo as basis
+        # in the topology, resulting in weird behaviour in
+        # very deformed cells. 
         supertopo  = Topology(name="supertopo",atoms=superatoms, analyze=True)
         # iterate over offsets and add the corresponding objects
         for offset in itertools.product(x,y,z):
@@ -175,7 +175,7 @@ class Framework(object):
                         continue
                     # directly tranfer new tags
                     sbu = supercell[atom.index]
-                    sbu.transfer_tags(otopo.fragments[atom.index])           
+                    sbu.transfer_tags(supertopo.fragments[atom.index])           
             else:
                 offset = numpy.asarray(offset)
                 coffset = offset.dot(ocell)
@@ -191,7 +191,6 @@ class Framework(object):
                         continue
                     sbu = supercell[atom.index].copy()
                     sbu.atoms.positions += coffset
-                    # print("++++")
                     sbu.transfer_tags(supertopo.fragments[newidx])
                     supercell.append(index = newidx,
                                      sbu   = sbu,
@@ -285,20 +284,22 @@ class Framework(object):
         if pbc==2:
             cellpar0 = [cellpar0[0],cellpar0[1],cellpar0[5]]
             cellpar0 = numpy.array(cellpar0)
+        # compile a list of mutual pairs
+        atoms,_,_    = self.get_atoms(dummies=True)
+        tags         = atoms.get_tags()
+        # find the pairs...
+        pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
+        pairs = [p for p in pairs if len(p)==2]
+        pairs =  numpy.asarray(pairs).reshape(-1,2)
         # define the cost function
         def MSE(x):
             """Return cost of scaling as MSE of distances"""
             # scale with this parameter
             self.scale(cellpar=x)
             atoms,_,_    = self.get_atoms(dummies=True)
-            tags         = atoms.get_tags()
             # reinitialize stuff
             self.scale(cellpar=cellpar0)
-            # find the pairs...
-            pairs = [numpy.argwhere(tags==tag) for tag in set(tags) if tag>0]
-            pairs = [p for p in pairs if len(p)==2]
-            pairs =  numpy.asarray(pairs).reshape(-1,2)
-            # ...and the distances
+            # find the distances
             d = [atoms.get_distance(i0,i1,mic=True) for i0,i1 in pairs]
             d = numpy.asarray(d)
             mse = numpy.mean(d**2)

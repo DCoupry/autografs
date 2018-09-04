@@ -107,6 +107,7 @@ class Topology(object):
             if idx in seen_idx:
                 continue
             eq_sites = [s for s in self.equivalent_sites if idx in s][0]
+            eq_sites = [s for s in eq_sites if self.shapes[s][-1]==shape[-1]]
             seen_idx += eq_sites
             # test for compatible multiplicity  
             mult = (sbu.shape[-1] ==  shape[-1])
@@ -133,45 +134,21 @@ class Topology(object):
                      Ais ):
         """Return the cutoffs leading to the desired connectivity"""
         # initialize cutoffs to small non-zero skin partameter
-        # TODO check on coordination
         logger.debug("Generating cutoffs")
         skin    = 5e-3
         cutoffs = numpy.zeros(len(self.atoms))+skin
         # we iterate over non-dummies
         for other_index in Ais:
-            # cutoff starts impossibly big
-            cutoff   = 10000.0
             # we get the distances to all dummies and cluster accordingly
-            dists    = self.atoms.get_distances(other_index,Xis,mic=True)
-            mindist  = numpy.amin(dists)
-            # let's not analyse every single distance...
-            dists    = dists[dists<2.0*mindist].reshape(-1,1)
-            L   = 0
-            eps = mindist*0.5
+            dists = self.atoms.get_distances(other_index,Xis,mic=True)
             coord = self.atoms[other_index].number
-            # we nee to coerce the cutoffs to have 
-            # the good amount of dummies. 
-            # in theory, should loop only once
-            breaker = 0
-            while L!=coord:
-                breaker+=1
-                if breaker > 5:
-                    logger.debug("No correct coordination was found. exiting...")
-                    raise RuntimeError("Infinite loop in cutoff determination.")
-                clusters = cluster(dists, eps, criterion='distance')
-                for cluster_index in set(clusters):
-                    # check this cluster distances
-                    indices   = numpy.where(clusters==cluster_index)[0]
-                    cutoff_tmp = dists[indices].mean() 
-                    if cutoff_tmp<cutoff :
-                        # if better score, replace the cutoff
-                        cutoff = cutoff_tmp
-                        L = len(indices)
-                        if L!=coord:
-                            diff = coord/(L-coord)
-                            eps*=diff
-                            logger.debug("Coordination with cutoff {c}={l}, goal is {r}".format(c=cutoff,l=L,r=coord))
-                            logger.debug("\tEpsilon => {eps}".format(eps=eps))
+            if coord<len(dists):
+                # keep only the closest ones up to coordination
+                these_dummies = numpy.argpartition(dists, coord)
+                these_dummies = these_dummies[:coord]
+                cutoff = dists[these_dummies].max()
+            else:
+                cutoff = dists.max()
             cutoffs[other_index] = cutoff
         return cutoffs
 
@@ -208,7 +185,7 @@ class Topology(object):
             # create the Atoms object
             fragment = Atoms("X"*len(ni),positions,tags=tags[ni]) 
             # calculate the point group properties
-            max_order = min(8,len(ni))
+            max_order = len(ni)
             shape = symmetry.get_symmetry_elements(mol=fragment.copy(),
                                                    max_order=max_order)
             pg = symmetry.PointGroup(mol=fragment.copy(),

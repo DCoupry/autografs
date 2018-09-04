@@ -269,7 +269,7 @@ class Autografs(object):
         # getting the rotation matrix
         X0  = sbu.atoms[sbu_Xis].get_positions()
         X1  = fragment.get_positions()
-        if X0.shape[-1]>5:
+        if X0.shape[0]>5:
             X0 = self.get_vector_space(X0)
             X1 = self.get_vector_space(X1)
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
