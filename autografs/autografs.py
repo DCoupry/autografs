@@ -346,6 +346,7 @@ class Autografs(object):
             these_topologies_names = [tk for tk,tv in self.topologies.items() if sum(tv.pbc)==3]
         elif pbc != "all":
             logger.info("pbc keyword has to be '2D','3D' or 'all'. Assumed 'all'.")
+        these_topologies_names = sorted(these_topologies_names)
         if sbu_names:
             logger.info("Checking topology compatibility.")
             topologies = []
@@ -376,6 +377,7 @@ class Autografs(object):
         else:
             logger.info("Listing full database of topologies.")
             topologies = list(self.topologies.keys())
+            topologies = sorted(topologies)
         return topologies
 
     def list_available_sbu(self,
@@ -394,6 +396,7 @@ class Autografs(object):
             sbu_names = from_list
         else:
             sbu_names = list( self.sbu.keys())
+        sbu_names = sorted(sbu_names)
         if topology_name is not None or self.topology is not None:
             if topology_name is not None:
                 topology = Topology(name=topology_name,
@@ -424,6 +427,7 @@ class Autografs(object):
         else:
             logger.info("Listing full database of SBU.")
             av_sbu = list(self.sbu.keys())    
+            av_sbu = sorted(av_sbu)
             return av_sbu
 
 
