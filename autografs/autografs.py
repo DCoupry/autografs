@@ -253,30 +253,32 @@ class Autografs(object):
         # identify dummies in sbu
         sbu_Xis = [x.index for x in sbu.atoms if x.symbol=="X"]
         # get the scaling factor
-        size_sbu      = numpy.linalg.norm(sbu.atoms[sbu_Xis].positions,axis=1)
-        size_fragment = numpy.linalg.norm(fragment.positions,axis=1)
-        alpha         = size_sbu.mean()/size_fragment.mean()
+        sbu_pos = sbu.atoms.get_positions()
+        frag_pos = fragment.get_positions()
+        size_sbu      = numpy.linalg.norm(sbu_pos[sbu_Xis],axis=1)
+        size_fragment = numpy.linalg.norm(frag_pos,axis=1)
+        alpha_iso = size_sbu.mean()/size_fragment.mean()
         # TODO check initial scaling: it goes up too much with unit cell
-        ncop = numpy.linalg.norm(fragment_cop)
-        if ncop<1e-6:
-            direction  = numpy.ones(3,dtype=numpy.float32)
-            direction /= numpy.linalg.norm(direction)
-        else:
-            direction = fragment_cop / ncop
-        # scaling for better alignment
-        fragment.positions = fragment.positions.dot(numpy.eye(3)*alpha)
-        alpha *= direction/2.0
+        fragment.positions = frag_pos.dot(numpy.eye(3)*alpha_iso)
         # getting the rotation matrix
-        X0  = sbu.atoms[sbu_Xis].get_positions()
+        X0  = sbu_pos[sbu_Xis]
         X1  = fragment.get_positions()
         if X0.shape[0]>5:
             X0 = self.get_vector_space(X0)
             X1 = self.get_vector_space(X1)
         R,s = scipy.linalg.orthogonal_procrustes(X0,X1)
-        sbu.atoms.positions = sbu.atoms.positions.dot(R)+fragment_cop
-        fragment.positions += fragment_cop
-        # TEST
-        # ase.visualize.view(sbu.atoms+fragment)
+        sbu.atoms.positions = sbu.atoms.positions.dot(R)
+        alpha = numpy.zeros(3)
+        sign_count = numpy.zeros(3)
+        for sbu_xi in sbu_Xis:
+            xixi = fragment.get_positions()-sbu.atoms.get_positions()[sbu_xi]
+            xixidist = numpy.linalg.norm(xixi,axis=1)
+            frag_xi = numpy.argmin(xixidist)
+            size_frag = numpy.linalg.norm(frag_pos[frag_xi])
+            size_sbu = numpy.linalg.norm(sbu_pos[sbu_xi])
+            alpha += numpy.abs(frag_pos[frag_xi]*size_sbu/size_frag)
+        sbu.atoms.positions += fragment_cop
+        fragment.positions  += fragment_cop
         res_d = ase.geometry.distance(sbu.atoms[sbu_Xis],fragment)
         logger.debug("Residual distance: {d}".format(d=res_d))
         # tag the atoms

@@ -276,14 +276,14 @@ class Framework(object):
         """
         logger.info("Refining unit cell.")
         # get the scaled cell, normalized
-        I     = numpy.eye(3)*alpha0
         cell0 = self.topology.atoms.get_cell()
+        norm0 = cell0/numpy.linalg.norm(cell0,axis=0)
         pbc = sum(self.topology.atoms.get_pbc())
-        cell0 = cell0.dot(I/numpy.linalg.norm(cell0,axis=0))
-        cellpar0 = ase.geometry.cell_to_cellpar(cell0, radians=False)
+        norm = numpy.linalg.norm(norm0,axis=0)/numpy.linalg.norm(cell0,axis=0)
+        cellpar0 = ase.geometry.cell_to_cellpar(norm0, radians=False)
+        cellpar0[:3] *= alpha0*norm
         if pbc==2:
-            cellpar0 = [cellpar0[0],cellpar0[1],cellpar0[5]]
-            cellpar0 = numpy.array(cellpar0)
+            cellpar0 = cellpar0[[0,1,5]]
         # compile a list of mutual pairs
         atoms,_,_    = self.get_atoms(dummies=True)
         tags         = atoms.get_tags()
@@ -306,13 +306,16 @@ class Framework(object):
             logger.info("\t|--> Scaling error = {e:>5.3f}".format(e=mse))
             return mse
         # first get an idea of the bounds.
-        bounds = list(zip(0.1*cellpar0, 2.0*cellpar0))
+        bounds = list(zip(0.5*cellpar0, 2.0*cellpar0))
+        eps = 0.05*cellpar0.min()
+        print(eps)
         result = scipy.optimize.minimize(fun = MSE, 
                                          x0 = cellpar0, 
                                          method = "L-BFGS-B", 
                                          bounds = bounds, 
-                                         tol=0.05, 
-                                         options={"eps":0.1})
+                                         tol=0.5, 
+                                         options={"eps":eps,
+                                                  "maxiter":20})
         self.scale(cellpar=result.x)
         logger.info("Best cell parameters found:")
         logger.info("\ta = {a:<5.1f} Angstroms".format(a=result.x[0]))
