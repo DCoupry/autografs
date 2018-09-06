@@ -5,7 +5,7 @@
 """
 AuToGraFS: Automatic Topological Generator for Framework Structures.
 Addicoat, M. a, Coupry, D. E., & Heine, T. (2014).
-The Journal of Physical Chemistry. A, 118(40), 9607–14. 
+The Journal of Physical Chemistry. A, 118(40), 9607–14.
 """
 
 __all__     = ["autografs","framework","utils"]
@@ -22,6 +22,6 @@ from autografs.framework import Framework
 
 import logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
-logging.basicConfig(format='%(asctime)s | %(message)s', 
-	                level=logging.INFO, 
+logging.basicConfig(format='%(asctime)s | %(message)s',
+	                level=logging.INFO,
 	                datefmt='%I:%M:%S')
