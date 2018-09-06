@@ -52,12 +52,24 @@ class Framework(object):
         """Constructor for the Framework class.
 
         Can be initialized empty and filled consecutively.
-        topology -- Topology object.
-        SBU      -- list of ASE Atoms objects.
-        mmtypes  -- array of type names. e.g: 'C_R','O_3'...
-        bonds    -- block-symmetric matrix of bond orders.
+
+        Parameters
+        ----------
+        topology: autografs.utils.topology.Topology, optional
+            topology objct contianing all information
+            for the creation and aligment of a framework
+        building_units: {slot index: ase.Atoms, ...}
+            dictionary of building units
+        mmtypes: [str, ...]
+            array of UFF atomic types of the final ase.Atoms
+            e.g: 'C_R','O_3'...
+        bonds: LxL numpy.array(dtype=float)
+            2D, block-symmetric matrix of bond orders.
+
+        Returns
+        -------
+        None
         """
-        logger.debug("Creating Framework instance.")
         self.topology = topology
         if building_units is not None:
             self.SBU = building_units
@@ -114,30 +126,73 @@ class Framework(object):
         return iter(self.SBU.items())
 
     def copy(self):
-        """Return a copy of itself as a new instance"""
+        """Return a copy of itself as a new instance
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        autografs.framework.Framework
+            deep copy of the current framework object
+        """
         new = self.__class__(topology=self.get_topology(),
                              building_units=copy.deepcopy(self.SBU),
-                             mmtypes=self.get_mmtypes(),
-                             bonds=self.get_bonds())
+                             mmtypes=self.process_mmtypes(),
+                             bonds=self.process_bonds())
         new._todel = copy.deepcopy(self._todel)
         return new
 
     def set_topology(self,
                      topology):
-        """Set the topology attribute with an ASE Atoms object."""
-        logger.debug("Setting topology.")
+        """Set the topology attribute.
+
+        Parameters
+        ----------
+        topology: autografs.utils.topology.Topology
+            topology objct contianing all information
+            for the creation and aligment of a framework
+
+        Returns
+        -------
+        None
+        """
         self.topology = topology.copy()
         return None
 
     def get_topology(self):
-        """Return a copy of the topology attribute as an ASE Atoms object."""
+        """Return a copy of the framework's topology
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        autografs.utils.topology.Topology
+            deep copy of the current framework object
+            stored topology.
+        """
         return self.topology.copy()
 
     def get_supercell(self,
                       m=(2, 2, 2)):
         """Return a framework supercell using m as multiplier.
+
         Setup this way to keep the whole modifications that could
         have been made to the framework.
+
+        Parameters
+        ----------
+        m: int or (int, int, in)
+            multiplicator for the generation of the
+            supercell in the post-generation steps
+
+        Returns
+        -------
+        autografs.framework.Framework
+            the supercell of the current framework
         """
         if isinstance(m, int):
             m = (m, m, m)
@@ -212,23 +267,42 @@ class Framework(object):
         molecular mechanics atomic types as numpy arrays. These three objects
         are related through indexing: sbu[i] has a MM type mmtypes[i] and
         a bonding array of bonds[i,:] or bonds[:,i]
-        sbu     -- the Atoms object
-        bonds   -- the bonds numpy array, of size len(sbu) by len(sbu).
-        mmtypes -- the MM atomic types.
+
+        Parameters
+        ----------
+        sbu: autografs.utils.sbu.SBU
+            the object to append to the Framework
+        bonds: numpy.array(dtype=float)
+            the bonds numpy array, of size len(sbu) by len(sbu).
+        mmtypes: [str, ...]
+            the MM atomic types.
+
+        Returns
+        -------
+        None
         """
         # first append the atoms object to the list of sbu
-        logger.debug("Appending SBU {n} to framework.".format(n=sbu.name))
         self.SBU[index] = sbu
         if update:
             # make the bonds matrix with a new block
-            self.bonds = self.get_bonds()
+            self.bonds = self.process_bonds()
             # append the atom types
-            self.mmtypes = self.get_mmtypes()
+            self.mmtypes = self.process_mmtypes()
         return None
 
-    def get_bonds(self):
-        """Return and update the current bond matrix"""
-        logger.debug("Updating framework bond matrix.")
+    def process_bonds(self):
+        """Return and update the current bond matrix
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        numpy.array
+            the block symmetric bond order matrix
+            of the current framework
+        """
         bonds = []
         for _, sbu in self:
             bonds.append(sbu.bonds)
@@ -236,9 +310,19 @@ class Framework(object):
         self.bonds = bonds
         return bonds
 
-    def get_mmtypes(self):
-        """Return and update the current bond matrix"""
-        logger.debug("Updating framework MM types.")
+    def process_mmtypes(self):
+        """Return and update the current UFF types
+
+        Parameters
+        ----------
+        None
+
+        Returns
+        -------
+        numpy.array
+            the UFF atomic types
+            of the current framework
+        """
         mmtypes = []
         for _, sbu in self:
             mmtypes.append(sbu.mmtypes)
@@ -254,7 +338,15 @@ class Framework(object):
         and the building units in the SBU list. Indeed, SBU[i] is centered on
         topology[i]. By scaling the topology, we obtain a new center for the
         sbu.
-        alpha -- scaling factor
+
+        Parameters
+        ----------
+        cellpar: numpy.array
+            cell parameters to use during scaling
+
+        Returns
+        -------
+        None
         """
         if len(cellpar) == 3:
             # 2D case
@@ -281,7 +373,15 @@ class Framework(object):
         We already have tagged the corresponding dummies during alignment,
         so we just need to calculate the MSE of the distances between
         identical tags in the complete structure
-        alpha0 -- starting point of the scaling search algorithm
+
+        Parameters
+        ----------
+        alpha0: numpy.array
+            starting point of the scaling search algorithm
+
+        Returns
+        -------
+        None
         """
         logger.info("Refining unit cell.")
         # get the scaled cell, normalized
@@ -348,7 +448,22 @@ class Framework(object):
                index,
                angle,
                axis=None):
-        """Rotate the SBU at index around a Cinf symmetry axis"""
+        """Rotate the SBU at index around a Cinf symmetry axis
+
+        Parameters
+        ----------
+        index: int
+            the index of the SBU to rotate
+        angle: float
+            the rotation angle in degrees
+        axis: numpy.array (optional)
+            vector around which to rotate
+            not needed for linear objects
+
+        Returns
+        -------
+        None
+        """
         logger.info("Rotating {idx} by {a}.".format(idx=index, a=angle))
         xs = [x.position for x in self[index].atoms
               if x.symbol == "X"]
@@ -368,7 +483,20 @@ class Framework(object):
              index,
              plane=None):
         """Flip the SBU at index around a C* symmetry axis or Sigmav plane
+
         TODO: use symmetry operation for sigma v finding
+
+        Parameters
+        ----------
+        index: int
+            the index of the SBU to rotate
+        plane: numpy.array (optional)
+            vector around which to flip
+            not needed for linear objects
+
+        Returns
+        -------
+        None
         """
         logger.info("Flipping {idx}".format(idx=index))
         if plane is not None:
@@ -395,7 +523,20 @@ class Framework(object):
     def apply(self,
               index,
               M):
-        """Apply a transformation matrix to the SBU at index"""
+        """Apply a transformation matrix to the SBU at index
+
+        Parameters
+        ----------
+        index: int
+            the index of the SBU to rotate
+        M: numpy.array
+            transformation matrix to apply
+            to the SBU. shape=3x3
+
+        Returns
+        -------
+        None
+        """
         self[index].atoms.positions = self[index].atoms.positions.dot(M)
         fragment = self.topology.fragments[index]
         self[index].transfer_tags(fragment=fragment)
@@ -407,6 +548,21 @@ class Framework(object):
         """Return a list of tuple for functionalizable sites
         symbol -- what type of atom we consider functionalizable.
         sbu_names -- what SBU we consider
+
+        Parameters
+        ----------
+        symbol: str
+            the type of atom to consider.
+            defaults to hydrogen
+        sbu_names: [str, ...]
+            the names of the SBU to consider
+
+        Returns
+        -------
+        list of tuples
+            a list of sites where the functionalize
+            funtion can be applied. each site is of the
+            type (SBU index, atom index in SBU)
         """
         if sbu_names:
             logger.info(("Only considering the following"
@@ -453,9 +609,18 @@ class Framework(object):
         atom, it can be functionalized. The given functional group
         has to have exactly one dummy atom. For best performance,
         set the x-func distance at the C-H bond distance.
-        where -- (slot index, atom index)
-        fg    -- ASE Atoms to replace the atom in where by.
-                 can also be a SBU in the database
+
+        Parameters
+        ----------
+        where: (int,int)
+            site where the functionalize funtion is applied.
+            each site is of the type (SBU index, atom index in SBU)
+        fg: ase.Atoms
+            ASE Atoms to replace the atom in where by
+
+        Returns
+        -------
+        None
         """
         sidx, aidx = where
         # create the SBU object for the functional group
@@ -512,13 +677,22 @@ class Framework(object):
         The concatenation can either remove the dummies and
         connect the corresponding atoms or leave hem in place
         clean -- remove the dummies if True
+
+        Parameters
+        ----------
+        dummies: bool, optional
+            If True, the dummy atoms will be removed
+            and the bonding information corrcted accordingly
+
+        Returns
+        -------
+        structure: ase.Atoms
+            the framework in atoms form
+        bonds: numpy.array
+            the bond matrix of the connected framework
+        mmtypes: list
+            the UFF atom types of the connected framework
         """
-        logger.debug("Creating ASE Atoms from framework.")
-        if dummies:
-            logger.debug("\tDummies will be kept.")
-            logger.debug("\tNo connection between SBU will occur.")
-        else:
-            logger.debug("\tDummies will be removed during connection.")
         # concatenate every sbu into one Atoms object
         framework = self.copy()
         cell = framework.topology.atoms.get_cell()
@@ -531,8 +705,8 @@ class Framework(object):
                 del atoms[todel]
             framework[idx].set_atoms(atoms, analyze=True)
             structure += atoms
-        bonds = framework.get_bonds()
-        mmtypes = framework.get_mmtypes()
+        bonds = framework.process_bonds()
+        mmtypes = framework.process_mmtypes()
         symbols = numpy.asarray(structure.get_chemical_symbols())
         if not dummies:
             # keep track of dummies
@@ -579,7 +753,20 @@ class Framework(object):
     def write(self,
               f="./mof",
               ext="gin"):
-        """Write a chemical information file to disk in selected format"""
+        """Write a chemical information file to disk in selected format
+
+        Parameters
+        ----------
+        f: str or Path
+            the file path without extension to
+            which the framework will be written
+        ext: str
+            the extension of the file.
+
+        Returns
+        -------
+        None
+        """
         atoms, bonds, mmtypes = self.get_atoms(dummies=False)
         # add a numerical artifact for optimization in z direction
         if sum(atoms.pbc) == 2:
@@ -592,10 +779,10 @@ class Framework(object):
             write_gin(path, atoms, bonds, mmtypes)
         else:
             ase.io.write(path, atoms)
-        return
+        return None
 
     def view(self):
         """Use ASE gui for visualization"""
         atoms, _, _ = self.get_atoms(dummies=False)
         ase.visualize.view(atoms)
-        return
+        return None
