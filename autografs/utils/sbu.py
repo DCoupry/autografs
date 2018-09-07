@@ -237,7 +237,6 @@ def read_sbu_database(update=False,
         -------
         sbu: {str: ase.Atoms, ...}
             the dictionary of SBU
-        }
     """
     from autografs.utils.io import read_sbu
     db_file = os.path.join(__data__, "sbu/sbu.pkl")
