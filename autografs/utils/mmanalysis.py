@@ -13,17 +13,37 @@ __status__ = "production"
 import numpy
 import ase
 import os
+import logging
 
 from scipy.sparse import csgraph
 from ase.data import covalent_radii
 from ase.neighborlist import NeighborList
 from itertools import combinations
+from scipy.cluster.hierarchy import fclusterdata
 
 from autografs.utils import __data__
 
+logger = logging.getLogger(__name__)
+
 
 def is_metal(symbols):
-    """Check wether symbols in a list are metals"""
+    """Check wether symbols in a list are metals
+
+    Metallic atoms are generally much more complicated
+    cases than simple organic components, with multiple
+    coordination environment possible.
+
+    Parameters
+    ----------
+    symbols: str or [str, ...]
+        the Atomic symbols to check
+
+    Returns
+    -------
+    is_metal: numpy.array(dtype=bool)
+        the element wise boolean array checking
+        wether it is a metal or not
+    """
     symbols = numpy.array([symbols]).flatten()
     metals = ['Li', 'Be', 'Al', 'Sc', 'Ti', 'V',
               'Cr', 'Mn', 'Fe', 'Co', 'Ni', 'Cu', 'Zn',
@@ -39,18 +59,52 @@ def is_metal(symbols):
               'No', 'Lr', 'Rf', 'Db', 'Sg', 'Bh', 'Hs',
               'Mt', 'Ds', 'Rg', 'Cn', 'Nh', 'Fl',
               'Mc', 'Lv', 'Ts', 'Og']
-    return numpy.isin(symbols, metals)
+    is_metal = numpy.isin(symbols, metals)
+    return is_metal
 
 
 def is_alkali(symbols):
-    """Check wether symbols in a list are alkali"""
+    """Check wether symbols in a list are alkali
+
+    Alkali atoms, due to their enormous covalent radii
+    have behavours that necessitate special cases.
+
+    Parameters
+    ----------
+    symbols: str or [str, ...]
+        the Atomic symbols to check
+
+    Returns
+    -------
+    is_metal: numpy.array(dtype=bool)
+        the element wise boolean array checking
+        wether it is alkaline or not
+    """
     symbols = numpy.array([symbols]).flatten()
-    alkali = ['Li', 'Be', 'Na', 'Mg', 'K', 'Ca', 'Rb', 'Sr', 'Cs', 'Ba']
+    alkali = ['Li', 'Be', 'Na', 'Mg', 'K',
+              'Ca', 'Rb', 'Sr', 'Cs', 'Ba']
     return numpy.isin(symbols, alkali)
 
 
 def read_uff_library(library="uff4mof"):
-    """Return the UFF library as a numpy array"""
+    """Return the UFF library as a numpy array
+
+    The Universal Force Field is the force field best adapted
+    to optimization of full periodic table compounds such as
+    frameworks. The atomic types can either come from the
+    vanilla version or from the extended one.
+
+    Parameters
+    ----------
+    library: str
+        'uff' or 'uff4mof', wich library version to use
+
+    Returns
+    -------
+    ufflib: {str:[float,float,int]}
+        the dictionary of type name to
+        values of the radius,angle and coordination
+    """
     uff_file = os.path.join(__data__, "uff/{0}.csv".format(library))
     with open(uff_file, "r") as lib:
         lines = [l.split(",") for l in lib.read().splitlines()
@@ -63,11 +117,23 @@ def read_uff_library(library="uff4mof"):
 
 def get_bond_matrix(sbu):
     """Guesses the bond order in neighbourlist based on covalent radii
+
     the radii for BO > 1 are extrapolated by removing 0.1 Angstroms by order
     see Beatriz Cordero, Veronica Gomez, Ana E. Platero-Prats, Marc Reves,
     Jorge Echeverria, Eduard Cremades, Flavia Barragan and Santiago Alvarez
     (2008). "Covalent radii revisited". Dalton Trans. (21): 2832-2838
     http://dx.doi.org/10.1039/b801115j
+
+    Parameters
+    ----------
+    sbu: ase.Atoms
+        the molecule from which to guess
+        the bonding information
+
+    Returns
+    -------
+    bonds: numpy.array()
+        the bond orders matrix
     """
     # first guess
     bonds = numpy.zeros((len(sbu), len(sbu)))
@@ -182,7 +248,7 @@ def get_bond_matrix(sbu):
         if (homocycle and (len(ring) % 2) == 0) or heterocycle:
             ring_positions = positions[ring]
             # small function for coplanarity
-            dets = [numpy.linalg.det(numpy.array(x[:3])-x[3])
+            dets = [numpy.linalg.det(numpy.array(x[:3]) - x[3])
                     for x in combinations(ring_positions, 4)]
             coplanar = all(dets < aromatic_epsilon)
             if coplanar:
@@ -199,7 +265,18 @@ def get_bond_matrix(sbu):
 
 
 def uff_symbol(atom):
-    """Returns the first twol letters of a UFF parameters"""
+    """Returns the first two letters of a UFF parameters
+
+    Parameters
+    ----------
+    atom: ase.Atom
+        the atom to consider
+
+    Returns
+    -------
+    sym: str
+        the first two characters of the UFF type
+    """
     sym = atom.symbol
     if len(sym) == 1:
         sym = ''.join([sym, '_'])
@@ -209,7 +286,22 @@ def uff_symbol(atom):
 def best_angle(a,
                sbu,
                indices):
-    """Calculates the most common angle around an atom"""
+    """Calculates the most common angle around an atom
+
+    Parameters
+    ----------
+    a: ase.Atom
+        the atom to consider
+    sbu: ase.Atoms
+        the molecule to consider
+    indices: [int,...]
+        the indices of neighbors of a in sbu
+
+    Returns
+    -------
+    da: float
+        the best guess for bond angle
+    """
     # linear case
     if len(indices) <= 1:
         da = 180.0
@@ -219,8 +311,7 @@ def best_angle(a,
         angles = angles.reshape(-1, 1)
         if angles.shape[0] > 1:
             # do some clustering on the angles, keep most frequent
-            from scipy.cluster.hierarchy import fclusterdata as cluster
-            clusters = cluster(angles, 10.0, criterion='distance')
+            clusters = fclusterdata(angles, 10.0, criterion='distance')
             counts = numpy.bincount(clusters)
             da = angles[numpy.where(clusters == numpy.argmax(counts))].mean()
         else:
@@ -232,7 +323,24 @@ def best_radius(a,
                 sbu,
                 indices,
                 ufflib):
-    """Return the radius, according to the neighbors of an atom"""
+    """Return the radius, according to the neighbors of an atom
+
+    Parameters
+    ----------
+    a: ase.Atom
+        the atom to consider
+    sbu: ase.Atoms
+        the molecule to consider
+    indices: [int,...]
+        the indices of neighbors of a in sbu
+    ufflib: dict
+        the uff library
+
+    Returns
+    -------
+    dx: float
+        the best guess for bond radius
+    """
     if len(indices) == 0:
         d1 = 0.7
     else:
@@ -255,7 +363,26 @@ def best_type(dx,
               dc,
               ufflib,
               types):
-    """Chooses the best UFF type according to neighborhood."""
+    """Chooses the best UFF type according to neighborhood.
+
+    Parameters
+    ----------
+    dx: float
+        the atomic radius
+    da: float
+        the atomic angle
+    dc: int
+        the coordination number
+    ufflib: dict
+        the uff library
+    types: [str,...]
+        the mmtypes symbols to consider
+
+    Returns
+    -------
+    mintyp: str
+        the best guess for UFF mmtype
+    """
     mincost = 1000.0
     mintyp = None
     for typ in types:
@@ -271,7 +398,20 @@ def best_type(dx,
 
 
 def analyze_mm(sbu):
-    """Returns the UFF types and bond matrix for an ASE Atoms."""
+    """Returns the UFF types and bond matrix for an ASE Atoms.
+
+    Parameters
+    ----------
+    sbu: ase.Atoms
+        the molecule to consider
+
+    Returns
+    -------
+    bonds: numpy.array
+        symmetrical bond orders matrix
+    mmtypes: numpy.array
+        array of UFF type symbols
+    """
     ufflib = read_uff_library(library="uff4mof")
     bonds = get_bond_matrix(sbu)
     mmtypes = [None, ] * len(sbu)
