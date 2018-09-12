@@ -28,7 +28,7 @@ import warnings
 
 
 from autografs.utils import symmetry
-from autografs.utils.mmanalysis import analyze_mm
+from autografs.utils import mmanalysis
 
 from autografs.utils import __data__
 
@@ -36,12 +36,28 @@ logger = logging.getLogger(__name__)
 
 
 class SBU(object):
-    """Container class for a building unit information"""
+    """Container class for a building unit information
+
+    Attributes
+    ----------
+
+    Methods
+    -------
+
+    """
 
     def __init__(self,
                  name,
                  atoms=None):
-        """Constructor for a building unit, from an ASE Atoms."""
+        """Constructor for a building unit, from an ASE Atoms.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+
+        """
         self.name = name
         self.atoms = atoms
         self.mmtypes = []
@@ -198,7 +214,7 @@ class SBU(object):
                                                    max_order=max_order)
             self.shape = shape
             self.pg = pg.schoenflies
-        bonds, mmtypes = analyze_mm(self.get_atoms())
+        bonds, mmtypes = mmanalysis.analyze_mm(self.get_atoms())
         self.bonds = bonds
         self.mmtypes = mmtypes
         return None

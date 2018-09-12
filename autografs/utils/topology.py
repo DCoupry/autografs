@@ -12,20 +12,15 @@ __status__ = "production"
 
 import os
 import sys
-import numpy
+import ase
 import copy
+import numpy
+import logging
 import _pickle as pickle
 
-import ase
-from ase import Atom
-from ase import Atoms
 from ase.spacegroup import crystal
 from ase.spacegroup import Spacegroup
-from ase.data import chemical_symbols
 from ase.neighborlist import NeighborList
-from collections import Counter
-
-from scipy.cluster.hierarchy import fclusterdata as cluster
 
 import warnings
 
@@ -33,7 +28,6 @@ from autografs.utils import symmetry
 from autografs.utils import __data__
 
 
-import logging
 logger = logging.getLogger(__name__)
 
 
@@ -41,13 +35,29 @@ warnings.filterwarnings("error")
 
 
 class Topology(object):
-    """Contener class for the topology information"""
+    """Contener class for the topology information
+
+    Attributes
+    ----------
+
+    Methods
+    -------
+
+    """
 
     def __init__(self,
                  name,
                  atoms,
                  analyze=True):
-        """Constructor for a topology, from an ASE Atoms."""
+        """Constructor for a topology, from an ASE Atoms.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+
+        """
         self.name = name
         self.atoms = atoms
         # initialize empty fragments
@@ -263,7 +273,7 @@ class Topology(object):
             # get absolute positions, no offsets
             positions = self.atoms.positions[ni] + no.dot(self.atoms.cell)
             # create the Atoms object
-            fragment = Atoms("X" * len(ni), positions, tags=tags[ni])
+            fragment = ase.Atoms("X" * len(ni), positions, tags=tags[ni])
             # calculate the point group properties
             max_order = len(ni)
             shape = symmetry.get_symmetry_elements(mol=fragment.copy(),

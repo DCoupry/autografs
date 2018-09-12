@@ -23,9 +23,6 @@ from ase.spacegroup import Spacegroup
 from ase.data import chemical_symbols
 from ase.neighborlist import NeighborList
 
-
-from scipy.cluster.hierarchy import fclusterdata as cluster
-
 import warnings
 
 from autografs.utils import __data__

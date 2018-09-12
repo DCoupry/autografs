@@ -22,7 +22,6 @@ from collections import defaultdict
 
 from autografs.utils.sbu import read_sbu_database
 from autografs.utils.topology import read_topologies_database
-from autografs.utils.mmanalysis import analyze_mm
 from autografs.utils.topology import Topology
 import autografs.utils.sbu
 
@@ -42,6 +41,13 @@ class Framework(object):
     The SBUs are assumed to already be aligned and tagged by the
     Framework generator, and both bonds and mmtypes are assumed to be ordered.
     The bond matrices are also assumed to be block symmetrical.
+
+    Attributes
+    ----------
+
+    Methods
+    -------
+
     """
 
     def __init__(self,
