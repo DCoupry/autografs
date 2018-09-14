@@ -218,7 +218,7 @@ class Autografs(object):
         else:
             raise ValueError("Either supply sbu_names or sbu_dict.")
         # some logging for pretty information
-        for idx, sbu in sbu_dict.items():
+        for idx, sbu in self.sbu_dict.items():
             logging.info("\tSlot {sl}".format(sl=idx))
             logging.info("\t   |--> SBU {sbn}".format(sbn=sbu.name))
         # carry on

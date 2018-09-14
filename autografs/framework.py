@@ -425,12 +425,12 @@ class Framework(object):
 
         # first get an idea of the bounds.
         bounds = list(zip(0.5*cellpar0, 2.0*cellpar0))
-        eps = 0.05*cellpar0.min()
+        eps = 0.01*cellpar0.min()
         result = scipy.optimize.minimize(fun=MSE,
                                          x0=cellpar0,
                                          method="L-BFGS-B",
                                          bounds=bounds,
-                                         tol=0.5,
+                                         tol=0.05,
                                          options={"eps": eps,
                                                   "maxiter": 20})
         self.scale(cellpar=result.x)
