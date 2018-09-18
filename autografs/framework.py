@@ -424,15 +424,12 @@ class Framework(object):
             return mse
 
         # first get an idea of the bounds.
-        bounds = list(zip(0.5*cellpar0, 2.0*cellpar0))
-        eps = 0.01*cellpar0.min()
+        bounds = list(zip(0.1*cellpar0, 2.0*cellpar0))
         result = scipy.optimize.minimize(fun=MSE,
                                          x0=cellpar0,
                                          method="L-BFGS-B",
                                          bounds=bounds,
-                                         tol=0.05,
-                                         options={"eps": eps,
-                                                  "maxiter": 20})
+                                         tol=0.01)
         self.scale(cellpar=result.x)
         logger.info("Best cell parameters found:")
         logger.info("\ta = {a:<5.1f} Angstroms".format(a=result.x[0]))
