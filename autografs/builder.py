@@ -99,7 +99,9 @@ class Autografs(object):
         # logger.info(f"Number of cores for parrallel building = {cpu_count}")
         total_len = 0
         topologies = self.list_topologies(subset=topology_subset)
-        for topology_name in tqdm(topologies, desc="topologies"):
+        topology_pbar = tqdm(topologies)
+        for topology_name in topology_pbar:
+            topology_pbar.set_description("Processing topology {topology_name:<5}")
             maps = []
             topology = self.topologies[topology_name].copy()
             sbu_dict = self.list_building_units(sieve=topology_name, verbose=False, subset=sbu_subset)
@@ -107,7 +109,15 @@ class Autografs(object):
             for sbus in list(itertools.product(*sbu_dict.values())):
                 maps.append((topology, dict(zip(sbu_dict.keys(), sbus))))
             total_len += len(maps)
-            results_graphs = [self.build(*args, refine_cell=refine_cell, verbose=False) for args in tqdm(maps)]
+            results_graphs = []
+            for build_args in tqdm(maps):
+                try:
+                    g = self.build(*build_args, refine_cell=refine_cell, verbose=False)
+                    results_graphs.append(g)
+                except AssertionError:
+                    # probably an unfilled slot in a topology
+                    # need to be a graceful failure here
+                    continue
             graphs += [g for g in results_graphs if g is not None]
         logger.info(f"\t[x] Generated a total of {len(graphs):^6} periodic graphs.")
         logger.info(f"\t[x] Rate of error: {1.0 - len(graphs)/total_len:2.2%}.")
