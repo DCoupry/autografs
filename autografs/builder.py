@@ -101,7 +101,7 @@ class Autografs(object):
         topologies = self.list_topologies(subset=topology_subset)
         topology_pbar = tqdm(topologies)
         for topology_name in topology_pbar:
-            topology_pbar.set_description("Processing topology {topology_name:<5}")
+            topology_pbar.set_description(f"Processing topology {topology_name:<5}")
             maps = []
             topology = self.topologies[topology_name].copy()
             sbu_dict = self.list_building_units(sieve=topology_name, verbose=False, subset=sbu_subset)
