@@ -1,4 +1,5 @@
-#symbol,radius,angle,coordination
+symbol,radius,angle,coordination
+X_,0.354,180,1
 H_,0.354,180,1
 H_b,0.46,83.5,2
 He4+4,0.849,90,4
@@ -225,5 +226,3 @@ Fm6+3,1.712,90,6
 Md6+3,1.689,90,6
 No6+3,1.679,90,6
 Lr6+3,1.698,90,6
-H_OH,0.354,180,1
-O_HH,0.658,104.51,2
