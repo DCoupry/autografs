@@ -1,0 +1,129 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AuToGraFS"
+version = "3.0.0"
+description = "Automatic Topological Generator for Framework Structures"
+readme = "README.rst"
+license = {text = "MIT"}
+authors = [
+    {name = "Damien Coupry", email = "damien.coupry@gmail.com"}
+]
+maintainers = [
+    {name = "Damien Coupry", email = "damien.coupry@gmail.com"}
+]
+keywords = [
+    "chemistry",
+    "materials science",
+    "MOF",
+    "metal-organic frameworks",
+    "topology",
+    "crystallography",
+    "computational chemistry"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "ase>=3.22.0",
+    "scipy>=1.7.0",
+    "numpy>=1.20.0",
+    "networkx>=2.6.0",
+    "pandas>=1.3.0",
+    "pymatgen>=2022.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+]
+docs = [
+    "sphinx>=4.0.0",
+    "sphinx-rtd-theme>=1.0.0",
+    "myst-parser>=0.18.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/DCoupry/autografs"
+Documentation = "https://github.com/DCoupry/autografs#readme"
+Repository = "https://github.com/DCoupry/autografs.git"
+Issues = "https://github.com/DCoupry/autografs/issues"
+
+[project.scripts]
+cgd2pkl = "autografs.scripts.cgd2pkl:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autografs = ["data/*.csv", "data/*.xyz", "data/*.pkl"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src/autografs"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["autografs"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
