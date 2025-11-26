@@ -6,19 +6,20 @@ even before any imports. Module docstrings should include the following:
 A brief description of the module and its purpose
 A list of any classes, exception, functions, and any other objects exported by the module
 """
+from __future__ import annotations
+
 import itertools
+import logging
 import os
 import re
-import logging
+import warnings
 from collections import defaultdict
-from typing import List, Optional, Tuple, Dict, Iterable
-from itertools import groupby, count
+from collections.abc import Iterable
+from itertools import count, groupby
 
 import networkx
-import numpy
+import numpy as np
 import pandas
-import pymatgen
-import warnings
 from pymatgen.analysis.graphs import MoleculeGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_order
@@ -45,7 +46,7 @@ def format_indices(iterable: Iterable[int]) -> str:
         return f'{lst[0]}'
 
 
-def format_mappings(mappings: Dict[int, str]) -> str:
+def format_mappings(mappings: dict[int, str]) -> str:
     """Helper function concatenating the mappings into a
     logging-friendly format for readability
     TODO
@@ -62,7 +63,7 @@ def format_mappings(mappings: Dict[int, str]) -> str:
     return "; ".join(out_mappings)
 
 
-def get_xyz_names(path: str) -> List[str]:
+def get_xyz_names(path: str) -> list[str]:
     """
     [summary]
 
@@ -91,7 +92,7 @@ def get_xyz_names(path: str) -> List[str]:
     return names
 
 
-def xyz_to_sbu(path: str) -> Dict[str, Fragment]:
+def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     """
     [summary]
 
@@ -118,7 +119,7 @@ def xyz_to_sbu(path: str) -> Dict[str, Fragment]:
     return sbu
 
 
-def load_uff_lib(mol: Molecule) -> Tuple[pandas.DataFrame, List[str]]:
+def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
     """
     [summary]
 
@@ -129,7 +130,7 @@ def load_uff_lib(mol: Molecule) -> Tuple[pandas.DataFrame, List[str]]:
 
     Returns
     -------
-    Tuple[pandas.DataFrame, List[str]]
+    tuple[pandas.DataFrame, list[str]]
         [description]
     """
     uff_symbs = [s.symbol if len(s.symbol)==2 else f"{s.symbol}_" for s in mol.species]
@@ -140,8 +141,8 @@ def load_uff_lib(mol: Molecule) -> Tuple[pandas.DataFrame, List[str]]:
 
 
 def find_element_cutoffs(uff_lib: pandas.DataFrame,
-                         uff_symbs: List[str]
-                         ) -> Dict[Tuple[str, str], float]:
+                         uff_symbs: list[str]
+                         ) -> dict[tuple[str, str], float]:
     """
     [summary]
 
@@ -149,7 +150,7 @@ def find_element_cutoffs(uff_lib: pandas.DataFrame,
     ----------
     uff_lib : pandas.DataFrame
         [description]
-    uff_symbs : List[str]
+    uff_symbs : list[str]
         [description]
 
     Returns
@@ -170,8 +171,8 @@ def find_element_cutoffs(uff_lib: pandas.DataFrame,
 
 def find_mmtypes(molgraph: MoleculeGraph,
                  uff_lib: pandas.DataFrame,
-                 uff_symbs: List[str]
-                 ) -> List[str]:
+                 uff_symbs: list[str]
+                 ) -> list[str]:
     """
     [summary]
 
@@ -181,12 +182,12 @@ def find_mmtypes(molgraph: MoleculeGraph,
         [description]
     uff_lib : pandas.DataFrame
         [description]
-    uff_symbs : List[str]
+    uff_symbs : list[str]
         [description]
 
     Returns
     -------
-    List[str]
+    list[str]
         [description]
     """
     mmtypes = []
@@ -204,8 +205,8 @@ def find_mmtypes(molgraph: MoleculeGraph,
             c1, c2 = s1.site.coords, s2.site.coords
             c01 = c1 - c0
             c02 = c2 - c0
-            cosine_angle = numpy.dot(c01, c02) / (numpy.linalg.norm(c01) * numpy.linalg.norm(c02))
-            angle = numpy.degrees(numpy.arccos(cosine_angle))
+            cosine_angle = np.dot(c01, c02) / (np.linalg.norm(c01) * np.linalg.norm(c02))
+            angle = np.degrees(np.arccos(cosine_angle))
         else:
             angle = 180.0
         coordinations_compat = atom_compat[atom_compat.coordination == ncoord]
@@ -259,17 +260,17 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     return mg
 
 
-def fragments_to_networkx(fragments: List[Fragment],
-                          cell: Optional[numpy.ndarray] = None
+def fragments_to_networkx(fragments: list[Fragment],
+                          cell: np.ndarray | None = None
                           ) -> networkx.Graph:
     """
     [summary]
 
     Parameters
     ----------
-    fragments : List[Fragment]
+    fragments : list[Fragment]
         [description]
-    cell : Optional[numpy.ndarray], optional
+    cell : np.ndarray | None, optional
         [description], by default None
 
     Returns

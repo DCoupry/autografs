@@ -12,12 +12,16 @@ import copy
 import functools
 import logging
 import warnings
-from typing import Dict, List, Tuple, Union
+from typing import TYPE_CHECKING
 
-import numpy
+import numpy as np
+from numpy.typing import NDArray
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+
+if TYPE_CHECKING:
+    from typing import Self
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
@@ -64,17 +68,22 @@ class Fragment(object):
         return f"{self.name} : {self.__str__()} valent"
 
     def __eq__(self,
-               other: Fragment
+               other: object
                ) -> bool:
         # for now only considers symmetries
+        if not isinstance(other, Fragment):
+            return NotImplemented
         symm = (self.symmetry.sch_symbol == other.symmetry.sch_symbol)
         size = (len(self.atoms) == len(other.atoms))
         return (symm and size)
 
     def __ne__(self,
-               other: Fragment
+               other: object
                ) -> bool:
-        return not self.__eq__(other)
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return NotImplemented
+        return not result
 
     def __hash__(self):
         return hash(f"SYMM={self.symmetry.sch_symbol}/NAT={len(self.atoms)}")
@@ -121,7 +130,7 @@ class Fragment(object):
             c_i = dummies[i]
             for j in range(i, len(dummies)):
                 c_j = dummies[j]
-                dist = max(dist, numpy.linalg.norm(c_i - c_j))
+                dist = max(dist, float(np.linalg.norm(c_i - c_j)))
         return dist
 
     def has_compatible_symmetry(self,
@@ -224,18 +233,18 @@ class Topology(object):
     """
     def __init__(self,
                  name: str,
-                 slots: List[Fragment],
-                 cell: Union[numpy.ndarray, Lattice]
+                 slots: list[Fragment],
+                 cell: np.ndarray | Lattice
                  ) -> None:
         """
         Parameters
         ----------
         name : str
             the name given to the topology (RCSR symbol in defaults)
-        slots : List[Fragment]
+        slots : list[Fragment]
             the list of Fragment objects describing the orientation and
             connectivity of slots in the topology.
-        cell : numpy.ndarray
+        cell : np.ndarray
             The information on periodicity in matrix form (3x3)
         """
         self.name = name
@@ -243,9 +252,9 @@ class Topology(object):
             self.cell = cell
         else:
             self.cell = Lattice(cell)
-        self.slots = numpy.array(slots, dtype=object)
+        self.slots = np.array(slots, dtype=object)
         sizes = [len(fragment.atoms) for fragment in self.slots]
-        self.sizes = numpy.array(sizes, dtype=numpy.int8)
+        self.sizes = np.array(sizes, dtype=np.int8)
         mappings = {}
         for slot_type in set(slots):
             mappings[slot_type] = [i for i, s in enumerate(slots) if s == slot_type]
@@ -271,7 +280,7 @@ class Topology(object):
 
     def get_compatible_slots(self,
                              candidate: Fragment
-                             ) -> Dict[Fragment, List[int]]:
+                             ) -> dict[Fragment, list[int]]:
         """
         Returns a dictionary of the slot indices available for a candidate
         Fragment object, taking into account the symmetry elements common to
@@ -284,10 +293,10 @@ class Topology(object):
 
         Returns
         -------
-        Dict[Fragment, List[int]]
-            A ictionary of available slot indices
+        dict[Fragment, list[int]]
+            A dictionary of available slot indices
         """
-        available_slots = {}
+        available_slots: dict[Fragment, list[int]] = {}
         for slot in self.mappings:
             available_slots[slot] = []
             if slot.has_compatible_symmetry(candidate):
@@ -295,16 +304,16 @@ class Topology(object):
         return available_slots
 
     def scale_slots(self,
-                    scales: Tuple[float, float, float] = (1.0, 1.0, 1.0)
+                    scales: tuple[float, float, float] = (1.0, 1.0, 1.0)
                     ) -> None:
         """
-        Applies in-place a scaling along cell vectors of the slots contines in
+        Applies in-place a scaling along cell vectors of the slots contained in
         the topology.
         TODO: rename scales to three a, b, c parameters for clarity
 
         Parameters
         ----------
-        scales : Tuple[float, float, float], optional
+        scales : tuple[float, float, float], optional
             the cell vector lengths to apply, by default (1.0, 1.0, 1.0)
         """
         alpha, beta, gamma = self.cell.angles
@@ -317,7 +326,7 @@ class Topology(object):
             scaled_coords = scaled_cell.get_cartesian_coords(fract_coords)
             scaled_slot.atoms = Molecule(slot.atoms.species, scaled_coords, site_properties=slot.atoms.site_properties)
             scaled_slots.append(scaled_slot)
-        self.slots = scaled_slots
+        self.slots = np.array(scaled_slots, dtype=object)
         self.cell = scaled_cell
         return None
 

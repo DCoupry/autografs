@@ -6,22 +6,22 @@ even before any imports. Module docstrings should include the following:
 A brief description of the module and its purpose
 A list of any classes, exception, functions, and any other objects exported by the module
 """
+from __future__ import annotations
+
 import copy
 import itertools
 import logging
 import os
+import random
 import time
 import warnings
-from typing import Dict, List, Optional, Tuple, Union
 
 import dill
-import joblib
 import networkx
-import numpy
-import random
+import numpy as np
 from pymatgen.analysis.molecule_matcher import HungarianOrderMatcher
 from pymatgen.core.structure import Molecule
-from scipy.optimize import minimize, brute
+from scipy.optimize import brute
 from tqdm.auto import tqdm
 
 import autografs.data
@@ -47,12 +47,12 @@ class Autografs(object):
     -------
 
     """
-    topologies : Dict[str, Topology] = {}
-    sbu : Dict[str, Fragment] = {}
+    topologies: dict[str, Topology] = {}
+    sbu: dict[str, Fragment] = {}
 
     def __init__(self,
-                 xyzfile: Optional[str] = None,
-                 topofile: Optional[str] = None,
+                 xyzfile: str | None = None,
+                 topofile: str | None = None,
                  ) -> None:
         """
         Parameters
@@ -74,23 +74,23 @@ class Autografs(object):
         logger.info("")
 
     def build_all(self,
-                  sbu_subset: Optional[List[str]] = None,
-                  topology_subset: Optional[List[str]] = None,
+                  sbu_subset: list[str] | None = None,
+                  topology_subset: list[str] | None = None,
                   refine_cell: bool = True,
-                  ) -> List[networkx.Graph]:
+                  ) -> list[networkx.Graph]:
         """
         Builds all available structures based on the SBU and Topologies libraries
 
         Parameters
         ----------
-        sbu_subset : Optional[List[str]], optional
+        sbu_subset : list[str] | None, optional
             The subset of SBU to build on, by default None
-        topology_subset : Optional[List[str]], optional
+        topology_subset : list[str] | None, optional
             the subset of topologies to build on, by default None
 
         Returns
         -------
-        List[networkx.Graph]
+        list[networkx.Graph]
             the list of connected graphs produced by the building method
         """
         graphs = []
@@ -125,7 +125,7 @@ class Autografs(object):
 
     def build(self,
               topology: Topology,
-              mappings: Dict[Union[Fragment, int], Union[Fragment, str]],
+              mappings: dict[Fragment | int, Fragment | str],
               refine_cell: bool = True,
               verbose: bool = False
               ) -> networkx.Graph:
@@ -136,7 +136,7 @@ class Autografs(object):
         ----------
         topology : Topology
             the topology to consider
-        mappings : Dict[Union[Fragment, int], Union[Fragment, str]]
+        mappings : dict[Fragment | int, Fragment | str]
             the mappings to go from a slot to a compatible SBU
         verbose : bool, optional
             If True, will log additional information, by default False
@@ -153,13 +153,13 @@ class Autografs(object):
             formatted_mappings = autografs.utils.format_mappings(mappings)
             logger.info(f"\tMappings =  {formatted_mappings}")
             logger.info(f"Aligning with cell scaling...")
-        def opt_fun(scales: Tuple[float, float, float]) -> float:
+        def opt_fun(scales: tuple[float, float, float]) -> float:
             """
             [summary]
 
             Parameters
             ----------
-            scales : Tuple[float, float, float]
+            scales : tuple[float, float, float]
                 [description]
 
             Returns
@@ -176,7 +176,7 @@ class Autografs(object):
         t0 = time.time()
         #  We need better initialization of search space for faster convergence
         abc_norm = sum([f.max_dummy_distance for f  in mappings.values()]) / 3.0
-        abc_norm = numpy.ones(3) * abc_norm
+        abc_norm = np.ones(3) * abc_norm
         if refine_cell:
             x_min = abc_norm * 0.1
             x_max = abc_norm * 2.0
@@ -200,8 +200,8 @@ class Autografs(object):
 
     def _validate_mappings(self,
                            topology: Topology,
-                           mappings: Dict[Union[Fragment, int], Union[Fragment, str]]
-                           ) -> Dict[int, Fragment]:
+                           mappings: dict[Fragment | int, Fragment | str]
+                           ) -> dict[int, Fragment]:
         """
         Returns a standard slot index to fragment object mappin
 
@@ -209,12 +209,12 @@ class Autografs(object):
         ----------
         topology : Topology
             [description]
-        mappings : Dict[Union[Fragment, int], Union[Fragment, str]]
+        mappings : dict[Fragment | int, Fragment | str]
             [description]
 
         Returns
         -------
-        Dict[int, Fragment]
+        dict[int, Fragment]
             [description]
         """
         for k in topology.mappings.keys():
@@ -234,14 +234,14 @@ class Autografs(object):
         return true_mappings
 
     def _setup_sbu(self,
-                   xyzfile: Optional[str] = None
+                   xyzfile: str | None = None
                    ) -> None:
         """
         TODO: make that a class property
 
         Parameters
         ----------
-        xyzfile : Optional[str], optional
+        xyzfile : str | None, optional
             [description], by default None
         """
         t0 = time.time()
@@ -257,13 +257,13 @@ class Autografs(object):
         return None
 
     def _setup_topologies(self,
-                          topofile: Optional[str]  = None) -> None:
+                          topofile: str | None = None) -> None:
         """
         TODO: make that a class property
 
         Parameters
         ----------
-        topofile : Optional[str], optional
+        topofile : str | None, optional
             [description], by default None
         """
         t0 = time.time()
@@ -276,25 +276,25 @@ class Autografs(object):
         return None
 
     def list_topologies(self,
-                        sieve: Optional[str] = None,
+                        sieve: str | None = None,
                         verbose: bool = False,
-                        subset: Optional[List[str]] = None,
-                        ) -> List[str]:
+                        subset: list[str] | None = None,
+                        ) -> list[str]:
         """
         [summary]
 
         Parameters
         ----------
-        sieve : Optional[str], optional
+        sieve : str | None, optional
             [description], by default None
         verbose : bool, optional
             [description], by default False
-        subset : Optional[List[str]], optional
+        subset : list[str] | None, optional
             [description], by default None
 
         Returns
         -------
-        List[str]
+        list[str]
             [description]
         """
         full_list = sorted(self.topologies.keys())
@@ -314,25 +314,25 @@ class Autografs(object):
         return full_list
 
     def list_building_units(self,
-                            sieve: Optional[str] = None,
+                            sieve: str | None = None,
                             verbose: bool = False,
-                            subset: Optional[List[str]] = None,
-                            ) -> Dict[str, Fragment]:
+                            subset: list[str] | None = None,
+                            ) -> dict[str, Fragment]:
         """
         [summary]
 
         Parameters
         ----------
-        sieve : Optional[str], optional
+        sieve : str | None, optional
             [description], by default None
         verbose : bool, optional
             [description], by default False
-        subset : [type], optional
-            [description], by default Optional[List[str]]
+        subset : list[str] | None, optional
+            [description], by default None
 
         Returns
         -------
-        Dict[str, Fragment]
+        dict[str, Fragment]
             [description]
         """
         full_list = []
@@ -369,8 +369,8 @@ class Autografs(object):
 
     def _align_all_mappings(self,
                             topology: Topology,
-                            mappings: Dict[int, Fragment],
-                            scales: Tuple[float, float, float]
+                            mappings: dict[int, Fragment],
+                            scales: tuple[float, float, float]
                             ):
         """
         [summary]
@@ -379,9 +379,9 @@ class Autografs(object):
         ----------
         topology : Topology
             [description]
-        mappings : Dict[int, Fragment]
+        mappings : dict[int, Fragment]
             [description]
-        scales : Tuple[float, float, float]
+        scales : tuple[float, float, float]
             [description]
 
         Returns
@@ -405,7 +405,7 @@ class Autografs(object):
     def _align_slot(self,
                     slot: Fragment,
                     fragment: Fragment
-                    ) -> Tuple[Fragment, float]:
+                    ) -> tuple[Fragment, float]:
         """
         [summary]
 
@@ -418,7 +418,7 @@ class Autografs(object):
 
         Returns
         -------
-        Tuple[Fragment, float]
+        tuple[Fragment, float]
             [description]
         """
         # m0 = slot.atoms.copy()
@@ -431,7 +431,7 @@ class Autografs(object):
         _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
         new_coords = fragment.atoms.cart_coords.dot(U) + V
         fragment.atoms = Molecule(fragment.atoms.species, coords=new_coords)
-        fragment_tags = numpy.array([-1, ] * len(fragment.atoms))
+        fragment_tags = np.array([-1, ] * len(fragment.atoms))
         for j, frag_tag in enumerate(fragment_tags):
             fragment.atoms[j].properties["tags"] = frag_tag
         slot_tags = slot.atoms.site_properties["tags"]
@@ -439,7 +439,7 @@ class Autografs(object):
             tag_by_dist = []
             for j in fragment.atoms.indices_from_symbol("X"):
                 d = slot.atoms[i].coords - fragment.atoms[j].coords
-                tag_by_dist.append((numpy.linalg.norm(d), j))
+                tag_by_dist.append((np.linalg.norm(d), j))
             _, best_match = sorted(tag_by_dist)[0]
             fragment.atoms[best_match].properties["tags"] = slot_tag
         return fragment, rmsd
