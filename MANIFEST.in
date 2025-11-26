@@ -1,2 +1,13 @@
-graft autografs
-prune autografs/tests
+# Include package data
+graft src/autografs/data
+recursive-include src/autografs *.csv *.xyz *.pkl
+
+# Include documentation
+include README.rst
+include LICENSE.txt
+include COPYING
+include COPYING.LESSER
+include CHANGES.txt
+
+# Exclude test files from distribution
+prune tests

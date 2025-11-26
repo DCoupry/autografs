@@ -1,0 +1,123 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "AuToGraFS"
+version = "3.0.0"
+description = "Automatic Topological Generator for Framework Structures"
+readme = "README.rst"
+license = {text = "MIT"}
+authors = [
+    {name = "Damien Coupry", email = "damien.coupry@gmail.com"}
+]
+maintainers = [
+    {name = "Damien Coupry", email = "damien.coupry@gmail.com"}
+]
+keywords = [
+    "chemistry",
+    "materials science",
+    "MOF",
+    "metal-organic frameworks",
+    "topology",
+    "crystallography",
+    "computational chemistry"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Chemistry",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+requires-python = ">=3.13"
+dependencies = [
+    "ase>=3.23.0",
+    "scipy>=1.14.0",
+    "numpy>=2.0.0",
+    "networkx>=3.0",
+    "pandas>=2.0.0",
+    "pymatgen>=2024.1.1",
+    "dill>=0.3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "black>=24.0.0",
+    "isort>=5.13.0",
+    "flake8>=7.0.0",
+    "mypy>=1.8.0",
+]
+docs = [
+    "sphinx>=7.0.0",
+    "sphinx-rtd-theme>=2.0.0",
+    "myst-parser>=3.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/DCoupry/autografs"
+Documentation = "https://github.com/DCoupry/autografs#readme"
+Repository = "https://github.com/DCoupry/autografs.git"
+Issues = "https://github.com/DCoupry/autografs/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+autografs = ["data/*.csv", "data/*.xyz", "data/*.pkl"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src/autografs"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+known_first_party = ["autografs"]
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true

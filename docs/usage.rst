@@ -1,33 +1,8 @@
-AuToGraFS
-=========
+Usage Guide
+===========
 
-Original publication: `"Automatic Topological Generator for Framework Structures" <http://pubs.acs.org/doi/abs/10.1021/jp507643v>`_.
-
-*This version is under active development*. Bug hunting is very much going on, and there are still some old functionalities that are not yet reimplemented.
-
-Installation
-------------
-
-.. code-block:: bash
-
-    pip install AuToGraFS
-
-For a development install:
-
-.. code-block:: bash
-
-    git clone https://github.com/DCoupry/autografs.git
-    cd autografs
-    pip install -e ".[dev]"
-
-Requirements
-------------
-
-- Python >= 3.13
-- ase, scipy, numpy, networkx, pandas, pymatgen, dill
-
-Examples
---------
+Basic Framework Generation
+--------------------------
 
 From any Python script or command line:
 
@@ -42,11 +17,8 @@ From any Python script or command line:
     )
     mof.write()
 
-Custom databases can be accessed by passing the path during instantiation:
-
-.. code-block:: python
-
-    mofgen = Autografs(topology_path="my_topo_path", sbu_path="my_sbu_path")
+Looping Over Topologies and SBUs
+--------------------------------
 
 When looping over both SBU and topologies, it is better to set the topology directly:
 
@@ -58,7 +30,7 @@ When looping over both SBU and topologies, it is better to set the topology dire
             mof = mofgen.make(sbu_names=sbu_names)
 
 Probabilistic SBU Selection
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+---------------------------
 
 It is possible to pass more than one SBU of each shape, optionally with an associated 
 probabilistic weight. This weight defaults to ``1.0 / (number of similar SBU)``.
@@ -75,8 +47,11 @@ probabilistic weight. This weight defaults to ``1.0 / (number of similar SBU)``.
     )
     mof.write()
 
-This is particularly helpful in combination with an initial supercell for statistically 
-introducing defects:
+Introducing Defects
+-------------------
+
+Probabilistic SBU selection is particularly helpful in combination with an initial 
+supercell for statistically introducing defects:
 
 .. code-block:: python
 
@@ -92,9 +67,9 @@ introducing defects:
     mof.write()
 
 Supercell Generation
-~~~~~~~~~~~~~~~~~~~~
+--------------------
 
-Supercells can also be generated post-alignment:
+Supercells can also be generated post-alignment, carrying everything done before:
 
 .. code-block:: python
 
@@ -102,7 +77,7 @@ Supercells can also be generated post-alignment:
     supercell_6x6x6.write()
 
 Direct Modifications
-~~~~~~~~~~~~~~~~~~~~
+--------------------
 
 Defects and modifications can be introduced at any time directly:
 
@@ -125,7 +100,9 @@ Defects and modifications can be introduced at any time directly:
     mof.write()
 
 Rotation, Functionalization, and Flipping
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+-----------------------------------------
+
+Methods are available for rotation, functionalization, and flipping:
 
 .. code-block:: python
 
@@ -142,8 +119,11 @@ Rotation, Functionalization, and Flipping
         mof.functionalize(where=site, fg=nh2)
     mof.write()
 
-Monitoring Bonds and Types
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Monitoring Bonding and Types
+----------------------------
+
+At any moment, you can monitor the bonding matrix and mmtypes, or get a cleaned 
+version without dummies:
 
 .. code-block:: python
 
@@ -158,23 +138,29 @@ Monitoring Bonds and Types
     view(atoms)
 
 Direct Slot Mapping
-~~~~~~~~~~~~~~~~~~~
+-------------------
 
-If you know the shape of each slot and its index within the topology:
+If you know the shape of each slot and its index within the topology, you can 
+directly pass a dictionary mapping the SBU to a particular slot:
 
 .. code-block:: python
 
+    # Method to investigate the topology shapes and slots
     topology = mofgen.get_topology(topology_name="pcu")
     sbu_dict = {}
     for slot_index, slot_shape in topology.shapes.items():
         # Do something to choose an SBU
+        ...
         sbu_dict[slot_index] = "chosen_sbu_name"
     
+    # Now pass it directly
     mof = mofgen.make(topology_name="pcu", sbu_dict=sbu_dict)
     mof.write()
 
 Accessing Databases
-~~~~~~~~~~~~~~~~~~~
+-------------------
+
+You can access the databases as dictionaries:
 
 .. code-block:: python
 
@@ -191,10 +177,10 @@ Or using tools to find compatible objects:
     )
 
 Multi-Component Frameworks
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+--------------------------
 
 AuToGraFS is aware of topologically equivalent positions and can generate 
-multi-component frameworks:
+multi-component frameworks with minimal effort:
 
 .. code-block:: python
 
@@ -204,17 +190,12 @@ multi-component frameworks:
         mof.view()
 
 Atom Typing Utility
-~~~~~~~~~~~~~~~~~~~
+-------------------
 
-A useful utility assigns bond orders and UFF atom types to a structure:
+A useful utility is the Atom typer, which assigns bond orders and UFF atom types 
+to a structure:
 
 .. code-block:: python
 
     from autografs.mmanalysis import analyze_mm
     bonds, types = analyze_mm(sbu=mofgen.sbu["Zn_mof5_octahedral"])
-
-License
--------
-
-MIT License - see LICENSE.txt for details.
-

@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+"""
+Convenience script to generate topology pickles from cgd files.
+
+Usage:
+    python scripts/cgd2pkl.py -o output.pkl --use_rcsr
+    python scripts/cgd2pkl.py -i custom.cgd -o output.pkl
+"""
 import argparse
 import codecs
 import io
@@ -29,10 +37,10 @@ warnings.filterwarnings("ignore")
 def download_cgd(url: str) -> str:
     """inspired heavily by: https://stackoverflow.com/a/62113293"""
     resp = requests.get(url, stream=True)
-    total = int(resp.headers.get('content-length', 0))
+    total = int(resp.headers.get("content-length", 0))
     with io.BytesIO() as bytIO, tqdm(
         total=total,
-        unit='iB',
+        unit="iB",
         unit_scale=True,
         unit_divisor=1024,
     ) as bar:
@@ -44,7 +52,9 @@ def download_cgd(url: str) -> str:
     return cgd
 
 
-def topology_from_string(cgd : str, spacegroups: Dict[str, int]) -> Tuple[str, Structure]:
+def topology_from_string(
+    cgd: str, spacegroups: Dict[str, int]
+) -> Tuple[str, Structure]:
     lines = cgd.splitlines()
     lines = [l[2:].split() for l in lines if len(l) > 2]
     elements = []
@@ -92,14 +102,11 @@ def topology_from_string(cgd : str, spacegroups: Dict[str, int]) -> Tuple[str, S
     xyz = numpy.stack(xyz, axis=0)
     if is_2D:
         # node coordinates need to be padded
-        xyz = numpy.pad(xyz, ((0, 0), (0, 1)),
-                        'constant',
-                         constant_values=0.0)
+        xyz = numpy.pad(xyz, ((0, 0), (0, 1)), "constant", constant_values=0.0)
     # generate the crystal
-    topology = Structure.from_spacegroup(sg=sg,
-                                         lattice=lattice,
-                                         species=elements,
-                                         coords=xyz)
+    topology = Structure.from_spacegroup(
+        sg=sg, lattice=lattice, species=elements, coords=xyz
+    )
     # remove any duplicate sites
     topology.merge_sites(tol=1e-3, mode="delete")
     return name, topology
@@ -133,7 +140,9 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
         # we ignore them with the heat of a thousand suns
         assert len(fragment_sites) <= 12, "Fragment size larger than limit of 12."
         # store as molecule to use the point group analysis
-        fragment = Molecule.from_sites(fragment_sites)#, charge=1, spin_multiplicity=1)
+        fragment = Molecule.from_sites(
+            fragment_sites
+        )  # , charge=1, spin_multiplicity=1)
         # this is needed because X have no mass, leading to a
         # symmetrization error.
         fragment.replace_species({"X": "He"})
@@ -141,8 +150,8 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
         # from pymatgen.io.ase import AseAtomsAdaptor
         # view(AseAtomsAdaptor.get_atoms(fragment))
         if pg.sch_symbol == "C1":
-            raise("NoSymm")
-        fragment.replace_species({"He":"X"})
+            raise ("NoSymm")
+        fragment.replace_species({"He": "X"})
         fragments.append(Fragment(atoms=fragment, symmetry=pg, name="slot"))
     return fragments
 
@@ -184,15 +193,44 @@ def read_cgd_data(cgd: str, spacegroups: Dict[str, int]) -> Dict[str, Topology]:
     return topologies
 
 
+def main(args: argparse.Namespace = None) -> None:
+    if args is None:
+        parser = argparse.ArgumentParser(
+            description="Convenience script to generate topology pickles from cgd files."
+        )
+        parser.add_argument(
+            "-i",
+            "--input",
+            type=str,
+            default=None,
+            help="path to a cgd format file. See http://rcsr.anu.edu.au for a downloadable example.",
+        )
+        parser.add_argument(
+            "-o",
+            "--output",
+            type=str,
+            help="path to the pickle output where the results will be stored.",
+        )
+        parser.add_argument(
+            "--use_rcsr",
+            action="store_true",
+            help="Flag to download and use the RCSR nets in addition to the given inputs.",
+        )
+        args = parser.parse_args()
 
-def main(args: argparse.Namespace) -> None:
     topologies = {}
     # dictionary of symmetry groups from pymatgen
-    spacegroups = json.loads(pkgutil.get_data(pymatgen.symmetry.__name__, "symm_data.json"))
+    spacegroups = json.loads(
+        pkgutil.get_data(pymatgen.symmetry.__name__, "symm_data.json")
+    )
     # only keep a dict of the name to index of the spacegroups
-    spacegroups = {k:v["int_number"] for k, v in spacegroups["space_group_encoding"].items()}
+    spacegroups = {
+        k: v["int_number"] for k, v in spacegroups["space_group_encoding"].items()
+    }
     if args.use_rcsr or args.input is None:
-        logger.info("Downloading RCSR nets from http://rcsr.anu.edu.au/downloads/RCSRnets-2019-06-01.cgd")
+        logger.info(
+            "Downloading RCSR nets from http://rcsr.anu.edu.au/downloads/RCSRnets-2019-06-01.cgd"
+        )
         # cgd string contining all the RCSR nets
         cgd = download_cgd("http://rcsr.anu.edu.au/downloads/RCSRnets-2019-06-01.cgd")
         # converting defaults to autografs topologies
@@ -208,9 +246,4 @@ def main(args: argparse.Namespace) -> None:
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Convenience script to generate topology pickles from cgd files.')
-    parser.add_argument('-i', '--input', type=str, default=None, help='path to a cgd format file. See http://rcsr.anu.edu.au for a downloadable example.')
-    parser.add_argument('-o', '--output', type=str, help='path to the pickle output where the results will be stored.')
-    parser.add_argument('--use_rcsr', action="store_true", help='Flag to download and use the RCSR nets in addition to the given inputs.')
-    args = parser.parse_args()
-    main(args)
+    main()
