@@ -1,10 +1,31 @@
 """
-Module docstrings are similar to class docstrings. Instead of classes and class methods being documented,
-it’s now the module and any functions found within. Module docstrings are placed at the top of the file
-even before any imports. Module docstrings should include the following:
+Utility functions for AuToGraFS framework generation.
 
-A brief description of the module and its purpose
-A list of any classes, exception, functions, and any other objects exported by the module
+This module provides utility functions for file I/O, molecular graph
+manipulation, force field parameterization, and structure visualization.
+
+Functions
+---------
+format_mappings
+    Format slot-to-SBU mappings for logging output.
+get_xyz_names
+    Extract fragment names from multi-structure XYZ files.
+xyz_to_sbu
+    Load Secondary Building Units from an XYZ file.
+load_uff_lib
+    Load UFF force field parameters for a molecule.
+find_element_cutoffs
+    Calculate bond distance cutoffs from UFF radii.
+find_mmtypes
+    Determine UFF atom types from molecular connectivity.
+fragment_to_molgraph
+    Convert a Fragment to a pymatgen MoleculeGraph.
+fragments_to_networkx
+    Combine fragments into a single networkx Graph.
+view_graph
+    Visualize a molecular graph using ASE.
+networkx_to_gulp
+    Export a molecular graph to GULP input format.
 """
 
 from __future__ import annotations
@@ -48,9 +69,26 @@ def format_indices(iterable: Iterable[int]) -> str:
 
 
 def format_mappings(mappings: dict[int, str]) -> str:
-    """Helper function concatenating the mappings into a
-    logging-friendly format for readability
-    TODO
+    """Format slot-to-SBU mappings into a readable string.
+
+    Converts a dictionary of slot indices to SBU names into a compact,
+    human-readable format suitable for logging.
+
+    Parameters
+    ----------
+    mappings : dict[int, str]
+        Dictionary mapping slot indices to SBU names.
+
+    Returns
+    -------
+    str
+        Formatted string with consecutive indices grouped (e.g., "0-3").
+
+    Examples
+    --------
+    >>> mappings = {0: "SBU_A", 1: "SBU_A", 2: "SBU_A", 3: "SBU_B"}
+    >>> print(format_mappings(mappings))
+    SBU_A : 0-2; SBU_B : 3
     """
     new_dict = defaultdict(list)
     for k, v in mappings.items():
@@ -65,18 +103,25 @@ def format_mappings(mappings: dict[int, str]) -> str:
 
 
 def get_xyz_names(path: str) -> list[str]:
-    """
-    [summary]
+    """Extract fragment names from a multi-structure XYZ file.
+
+    Parses comment lines in XYZ format files to extract names defined
+    with the "name=" tag. Structures without names are labeled "Unnamed".
 
     Parameters
     ----------
     path : str
-        [description]
+        Path to the XYZ file containing one or more molecular structures.
 
     Returns
     -------
-    str
-        [description]
+    list[str]
+        List of names corresponding to each structure in the file.
+
+    Examples
+    --------
+    >>> names = get_xyz_names("sbus.xyz")
+    >>> print(names)  # ['Benzene_linear', 'Zn_paddlewheel', ...]
     """
     names = []
     white_space = r"[ \t\r\f\v]"
@@ -96,18 +141,26 @@ def get_xyz_names(path: str) -> list[str]:
 
 
 def xyz_to_sbu(path: str) -> dict[str, Fragment]:
-    """
-    [summary]
+    """Load Secondary Building Units from an XYZ file.
+
+    Reads a multi-structure XYZ file and creates Fragment objects for
+    each structure. Dummy atoms ("X") define connection points and are
+    used to determine the point group symmetry.
 
     Parameters
     ----------
     path : str
-        [description]
+        Path to the XYZ file containing SBU structures.
 
     Returns
     -------
-    Fragment
-        [description]
+    dict[str, Fragment]
+        Dictionary mapping SBU names to Fragment objects.
+
+    Examples
+    --------
+    >>> sbus = xyz_to_sbu("custom_sbus.xyz")
+    >>> print(sbus.keys())  # dict_keys(['SBU_1', 'SBU_2', ...])
     """
     xyz = XYZ.from_file(path)
     names = get_xyz_names(path)
@@ -128,18 +181,22 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
 
 
 def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
-    """
-    [summary]
+    """Load UFF force field parameters relevant to a molecule.
+
+    Extracts UFF4MOF parameters for elements present in the molecule,
+    used for determining atom types and bond length cutoffs.
 
     Parameters
     ----------
     mol : Molecule
-        [description]
+        A pymatgen Molecule object.
 
     Returns
     -------
     tuple[pandas.DataFrame, list[str]]
-        [description]
+        A tuple containing:
+        - DataFrame with UFF parameters for relevant elements.
+        - List of UFF symbol prefixes for each atom in the molecule.
     """
     uff_symbs = [
         s.symbol if len(s.symbol) == 2 else f"{s.symbol}_" for s in mol.species
@@ -155,20 +212,28 @@ def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
 def find_element_cutoffs(
     uff_lib: pandas.DataFrame, uff_symbs: list[str]
 ) -> dict[tuple[str, str], float]:
-    """
-    [summary]
+    """Calculate bond distance cutoffs from UFF atomic radii.
+
+    Computes maximum bonding distances for all element pairs using the
+    sum of their UFF radii.
 
     Parameters
     ----------
     uff_lib : pandas.DataFrame
-        [description]
+        DataFrame containing UFF parameters including radii.
     uff_symbs : list[str]
-        [description]
+        List of UFF symbol prefixes for atoms in the molecule.
 
     Returns
     -------
-    pandas.DataFrame
-        [description]
+    dict[tuple[str, str], float]
+        Dictionary mapping element pairs to bond distance cutoffs.
+
+    Examples
+    --------
+    >>> uff_lib, uff_symbs = load_uff_lib(molecule)
+    >>> cutoffs = find_element_cutoffs(uff_lib, uff_symbs)
+    >>> print(cutoffs[("C", "N")])  # Bond cutoff for C-N
     """
     radii = uff_lib[["symbol", "radius"]]
     radii.symbol = radii.symbol.str[:2]
@@ -184,22 +249,24 @@ def find_element_cutoffs(
 def find_mmtypes(
     molgraph: MoleculeGraph, uff_lib: pandas.DataFrame, uff_symbs: list[str]
 ) -> list[str]:
-    """
-    [summary]
+    """Determine UFF atom types from molecular connectivity.
+
+    Assigns UFF atom types based on coordination number and bond angles,
+    following the UFF4MOF parameterization scheme.
 
     Parameters
     ----------
     molgraph : MoleculeGraph
-        [description]
+        A pymatgen MoleculeGraph with connectivity information.
     uff_lib : pandas.DataFrame
-        [description]
+        DataFrame containing UFF parameters.
     uff_symbs : list[str]
-        [description]
+        List of UFF symbol prefixes for atoms in the molecule.
 
     Returns
     -------
     list[str]
-        [description]
+        List of assigned UFF atom type symbols.
     """
     mmtypes = []
     for i, symb in enumerate(uff_symbs):
@@ -239,18 +306,21 @@ def find_mmtypes(
 
 
 def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
-    """
-    [summary]
+    """Convert a Fragment to a pymatgen MoleculeGraph.
+
+    Creates a molecular connectivity graph from a Fragment, with UFF
+    atom types assigned and dummy atoms removed. Tags from dummies are
+    transferred to their connected atoms.
 
     Parameters
     ----------
     fragment : Fragment
-        [description]
+        The molecular fragment to convert.
 
     Returns
     -------
-    pymatgen.analysis.graphs.MoleculeGraph
-        [description]
+    MoleculeGraph
+        A pymatgen MoleculeGraph with connectivity and UFF types.
     """
     mol = fragment.atoms.copy()
     dummies_idx = fragment.atoms.indices_from_symbol("X")
@@ -278,20 +348,28 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
 def fragments_to_networkx(
     fragments: list[Fragment], cell: np.ndarray | None = None
 ) -> networkx.Graph:
-    """
-    [summary]
+    """Combine multiple fragments into a single networkx Graph.
+
+    Creates a molecular graph representing the full framework structure,
+    with inter-fragment bonds formed between atoms with matching tags.
 
     Parameters
     ----------
     fragments : list[Fragment]
-        [description]
-    cell : np.ndarray | None, optional
-        [description], by default None
+        List of aligned Fragment objects to combine.
+    cell : np.ndarray or None, optional
+        3x3 cell matrix for periodic structures. Stored as graph attribute.
 
     Returns
     -------
     networkx.Graph
-        [description]
+        Molecular graph with node attributes (symbol, coord, tag, ufftype)
+        and edge attributes (bond_order).
+
+    Examples
+    --------
+    >>> graph = fragments_to_networkx(aligned_fragments, cell=topology.cell.matrix)
+    >>> print(f"Atoms: {graph.number_of_nodes()}, Bonds: {graph.number_of_edges()}")
     """
     full_graph = networkx.Graph(cell=cell)
     subgraphs = [fragment_to_molgraph(f) for f in fragments]
@@ -326,13 +404,20 @@ def fragments_to_networkx(
 
 
 def view_graph(graph: networkx.Graph) -> None:
-    """
-    [summary]
+    """Visualize a molecular graph using ASE's viewer.
+
+    Opens an interactive 3D viewer displaying the structure stored in
+    the networkx graph with periodic boundary conditions.
 
     Parameters
     ----------
     graph : networkx.Graph
-        [description]
+        Molecular graph with 'cell' graph attribute and node attributes
+        'symbol' and 'coord'.
+
+    Notes
+    -----
+    Requires ASE to be installed with a working visualization backend.
     """
     from ase import Atom, Atoms
     from ase.visualize import view
@@ -346,22 +431,30 @@ def view_graph(graph: networkx.Graph) -> None:
 def networkx_to_gulp(
     graph: networkx.Graph, name: str = "MOF", write_to_file: bool = True
 ) -> str:
-    """
-    [summary]
+    """Export a molecular graph to GULP input format.
+
+    Generates a GULP input file for geometry optimization using the
+    UFF4MOF force field, including cell parameters, atomic coordinates,
+    and bond connectivity.
 
     Parameters
     ----------
     graph : networkx.Graph
-        [description]
+        Molecular graph with cell, coordinates, and UFF type information.
     name : str, optional
-        [description], by default "MOF"
+        Base name for output files. Default is "MOF".
     write_to_file : bool, optional
-        [description], by default True
+        If True, writes to ``{name}.gin`` in current directory. Default is True.
 
     Returns
     -------
     str
-        [description]
+        The complete GULP input file as a string.
+
+    Examples
+    --------
+    >>> gulp_input = networkx_to_gulp(graph, name="my_mof", write_to_file=True)
+    >>> # Creates my_mof.gin in current directory
     """
     logger.info("Creating Gulp file from graph.")
     out_string = ""

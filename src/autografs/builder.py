@@ -1,10 +1,22 @@
 """
-Module docstrings are similar to class docstrings. Instead of classes and class methods being documented,
-it’s now the module and any functions found within. Module docstrings are placed at the top of the file
-even before any imports. Module docstrings should include the following:
+Builder module for AuToGraFS framework generation.
 
-A brief description of the module and its purpose
-A list of any classes, exception, functions, and any other objects exported by the module
+This module contains the main Autografs class responsible for generating
+Metal-Organic Frameworks (MOFs) and other periodic crystalline structures
+from topological blueprints and Secondary Building Units (SBUs).
+
+Classes
+-------
+Autografs
+    Main framework maker class for generating structures.
+
+Examples
+--------
+>>> from autografs.builder import Autografs
+>>> mofgen = Autografs()
+>>> topology = mofgen.topologies["pcu"]
+>>> mappings = mofgen.list_building_units(sieve="pcu")
+>>> graph = mofgen.build(topology, mappings={k: v[0] for k, v in mappings.items()})
 """
 
 from __future__ import annotations
@@ -34,18 +46,31 @@ warnings.filterwarnings("ignore")
 
 
 class Autografs(object):
-    """Framework maker class to generate ASE Atoms objects from topologies.
+    """Framework maker class to generate periodic structures from topologies.
 
     AuToGraFS: Automatic Topological Generator for Framework Structures.
-    Addicoat, M., Coupry, D. E., & Heine, T. (2014).
-    The Journal of Physical Chemistry. A, 118(40), 9607–14.
+
+    This class manages libraries of Secondary Building Units (SBUs) and
+    topological blueprints, providing methods to combine them into
+    periodic framework structures.
 
     Attributes
     ----------
+    topologies : dict[str, Topology]
+        Dictionary of available topology blueprints, keyed by name.
+    sbu : dict[str, Fragment]
+        Dictionary of available Secondary Building Units, keyed by name.
 
-    Methods
-    -------
+    References
+    ----------
+    .. [1] Addicoat, M., Coupry, D. E., & Heine, T. (2014).
+           The Journal of Physical Chemistry A, 118(40), 9607-14.
 
+    Examples
+    --------
+    >>> mofgen = Autografs()
+    >>> print(len(mofgen.topologies))  # Available topologies
+    >>> print(len(mofgen.sbu))  # Available building units
     """
 
     topologies: dict[str, Topology] = {}
@@ -56,11 +81,21 @@ class Autografs(object):
         xyzfile: str | None = None,
         topofile: str | None = None,
     ) -> None:
-        """
+        """Initialize the Autografs framework generator.
+
         Parameters
         ----------
-        xyzfile : Optional[str], optional
-            [description], by default None
+        xyzfile : str or None, optional
+            Path to an XYZ file containing custom Secondary Building Units.
+            If provided, these SBUs will be added to the default library.
+        topofile : str or None, optional
+            Path to a pickle file containing custom topologies.
+            If None, uses the default RCSR topology library.
+
+        Examples
+        --------
+        >>> mofgen = Autografs()  # Use defaults
+        >>> mofgen = Autografs(xyzfile="my_sbus.xyz")  # Add custom SBUs
         """
         super().__init__()
         logger.info(f"{'*':*^78}")
@@ -164,18 +199,17 @@ class Autografs(object):
             logger.info(f"Aligning with cell scaling...")
 
         def opt_fun(scales: tuple[float, float, float]) -> float:
-            """
-            [summary]
+            """Objective function for cell parameter optimization.
 
             Parameters
             ----------
             scales : tuple[float, float, float]
-                [description]
+                Cell vector lengths (a, b, c) to evaluate.
 
             Returns
             -------
             float
-                [description]
+                Root mean square error of fragment alignment.
             """
             this_topology = topology.copy()
             this_mapping = copy.deepcopy(mappings)
@@ -217,20 +251,27 @@ class Autografs(object):
     def _validate_mappings(
         self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]
     ) -> dict[int, Fragment]:
-        """
-        Returns a standard slot index to fragment object mappin
+        """Validate and normalize the slot-to-fragment mappings.
+
+        Converts string SBU names to Fragment objects and ensures all
+        topology slots have corresponding mappings.
 
         Parameters
         ----------
         topology : Topology
-            [description]
+            The topology blueprint being filled.
         mappings : dict[Fragment | int, Fragment | str]
-            [description]
+            User-provided mappings from slot identifiers to SBU names or objects.
 
         Returns
         -------
         dict[int, Fragment]
-            [description]
+            Normalized mappings from slot indices to Fragment objects.
+
+        Raises
+        ------
+        AssertionError
+            If any required slot is not present in the mappings.
         """
         for k in topology.mappings.keys():
             assert k in mappings, f"Unfilled {k} slot."
@@ -249,13 +290,16 @@ class Autografs(object):
         return true_mappings
 
     def _setup_sbu(self, xyzfile: str | None = None) -> None:
-        """
-        TODO: make that a class property
+        """Load Secondary Building Units from XYZ files.
+
+        Loads default SBUs from the package data directory and optionally
+        adds custom SBUs from a user-provided file.
 
         Parameters
         ----------
-        xyzfile : str | None, optional
-            [description], by default None
+        xyzfile : str or None, optional
+            Path to an XYZ file containing additional SBUs to load.
+            Custom SBUs with the same name as defaults will override them.
         """
         t0 = time.time()
         default_path = os.path.join(autografs.data.__path__[0], "defaults.xyz")
@@ -274,13 +318,16 @@ class Autografs(object):
         return None
 
     def _setup_topologies(self, topofile: str | None = None) -> None:
-        """
-        TODO: make that a class property
+        """Load topologies from a pickle file.
+
+        Loads topology blueprints from a serialized pickle file containing
+        pre-processed RCSR or custom topologies.
 
         Parameters
         ----------
-        topofile : str | None, optional
-            [description], by default None
+        topofile : str or None, optional
+            Path to a pickle file containing topologies.
+            If None, loads from the default package data location.
         """
         t0 = time.time()
         if topofile is None:
@@ -299,22 +346,28 @@ class Autografs(object):
         verbose: bool = False,
         subset: list[str] | None = None,
     ) -> list[str]:
-        """
-        [summary]
+        """List available topologies, optionally filtered by SBU compatibility.
 
         Parameters
         ----------
-        sieve : str | None, optional
-            [description], by default None
+        sieve : str or None, optional
+            Name of an SBU to filter topologies by compatibility.
+            Only topologies with slots matching this SBU will be returned.
         verbose : bool, optional
-            [description], by default False
-        subset : list[str] | None, optional
-            [description], by default None
+            If True, logs detailed information about the filtering process.
+        subset : list[str] or None, optional
+            If provided, only consider topologies in this list.
 
         Returns
         -------
         list[str]
-            [description]
+            Sorted list of available topology names.
+
+        Examples
+        --------
+        >>> mofgen = Autografs()
+        >>> all_topos = mofgen.list_topologies()
+        >>> compatible = mofgen.list_topologies(sieve="Benzene_linear")
         """
         full_list = sorted(self.topologies.keys())
         if subset is not None:
@@ -340,22 +393,30 @@ class Autografs(object):
         verbose: bool = False,
         subset: list[str] | None = None,
     ) -> dict[str, Fragment]:
-        """
-        [summary]
+        """List available SBUs, optionally filtered by topology compatibility.
 
         Parameters
         ----------
-        sieve : str | None, optional
-            [description], by default None
+        sieve : str or None, optional
+            Name of a topology to filter SBUs by compatibility.
+            Returns SBUs grouped by compatible slot types.
         verbose : bool, optional
-            [description], by default False
-        subset : list[str] | None, optional
-            [description], by default None
+            If True, logs detailed information about available SBUs per slot.
+        subset : list[str] or None, optional
+            If provided, only consider SBUs in this list.
 
         Returns
         -------
-        dict[str, Fragment]
-            [description]
+        dict[str, list[str]]
+            Dictionary mapping slot identifiers to lists of compatible SBU names.
+            If no sieve is provided, returns an empty dict.
+
+        Examples
+        --------
+        >>> mofgen = Autografs()
+        >>> sbu_dict = mofgen.list_building_units(sieve="pcu")
+        >>> for slot, sbus in sbu_dict.items():
+        ...     print(f"Slot {slot}: {len(sbus)} compatible SBUs")
         """
         full_list = []
         if subset is not None:
@@ -396,23 +457,27 @@ class Autografs(object):
         topology: Topology,
         mappings: dict[int, Fragment],
         scales: tuple[float, float, float],
-    ):
-        """
-        [summary]
+    ) -> tuple[list[Fragment], float]:
+        """Align all SBU fragments to their corresponding topology slots.
+
+        Scales the topology cell and aligns each fragment to its designated
+        slot using the Hungarian algorithm for optimal atom matching.
 
         Parameters
         ----------
         topology : Topology
-            [description]
+            The topology blueprint (will be modified in-place by scaling).
         mappings : dict[int, Fragment]
-            [description]
+            Mapping from slot indices to Fragment objects.
         scales : tuple[float, float, float]
-            [description]
+            Cell vector lengths (a, b, c) to apply.
 
         Returns
         -------
-        [type]
-            [description]
+        tuple[list[Fragment], float]
+            A tuple containing:
+            - List of aligned Fragment objects.
+            - Total weighted RMSE of the alignment.
         """
         all_aligned_fragments = []
         topology.scale_slots(scales)
@@ -430,20 +495,24 @@ class Autografs(object):
         return all_aligned_fragments, sum_rmse
 
     def _align_slot(self, slot: Fragment, fragment: Fragment) -> tuple[Fragment, float]:
-        """
-        [summary]
+        """Align a single fragment to a topology slot.
+
+        Uses the Hungarian algorithm to find the optimal rotation and
+        translation that minimizes the RMSD between dummy atoms.
 
         Parameters
         ----------
         slot : Fragment
-            [description]
+            The topology slot defining the target orientation and position.
         fragment : Fragment
-            [description]
+            The SBU fragment to align (modified in-place).
 
         Returns
         -------
         tuple[Fragment, float]
-            [description]
+            A tuple containing:
+            - The aligned fragment with updated coordinates and tags.
+            - RMSD of the alignment.
         """
         # m0 = slot.atoms.copy()
         m0 = slot.extract_dummies()

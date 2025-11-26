@@ -1,10 +1,28 @@
 #!/usr/bin/env python3
 """
-Convenience script to generate topology pickles from cgd files.
+Convert CGD crystallographic topology files to AuToGraFS pickle format.
 
-Usage:
+This script downloads and processes topology data from the RCSR database
+or custom CGD files, creating serialized topology objects for use with
+AuToGraFS.
+
+Usage
+-----
+Download and process RCSR topologies::
+
     python scripts/cgd2pkl.py -o output.pkl --use_rcsr
+
+Process a custom CGD file::
+
     python scripts/cgd2pkl.py -i custom.cgd -o output.pkl
+
+Combine RCSR with custom topologies::
+
+    python scripts/cgd2pkl.py -i custom.cgd -o output.pkl --use_rcsr
+
+Notes
+-----
+The CGD format is documented at http://rcsr.anu.edu.au/help/cgd.
 """
 import argparse
 import codecs

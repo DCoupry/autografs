@@ -1,10 +1,24 @@
 """
-Module docstrings are similar to class docstrings. Instead of classes and class methods being documented,
-it’s now the module and any functions found within. Module docstrings are placed at the top of the file
-even before any imports. Module docstrings should include the following:
+Structure module for AuToGraFS molecular and topological data structures.
 
-A brief description of the module and its purpose
-A list of any classes, exception, functions, and any other objects exported by the module
+This module defines the core data structures used to represent molecular
+fragments and periodic topology blueprints in AuToGraFS.
+
+Classes
+-------
+Fragment
+    Represents a molecular fragment with symmetry information and dummy atoms.
+Topology
+    Represents a periodic topology blueprint with slots for SBUs.
+
+Examples
+--------
+>>> from autografs.structure import Fragment, Topology
+>>> from pymatgen.core.structure import Molecule
+>>> from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+>>> mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+>>> pg = PointGroupAnalyzer(mol)
+>>> frag = Fragment(atoms=mol, symmetry=pg, name="linear_carbon")
 """
 
 from __future__ import annotations
@@ -29,16 +43,31 @@ warnings.filterwarnings("ignore")
 
 
 class Fragment(object):
-    """
-    [description]
+    """Molecular fragment with symmetry information for topology mapping.
+
+    A Fragment represents a Secondary Building Unit (SBU) or topology slot,
+    containing atomic coordinates and dummy atoms ("X") that define
+    connection points.
 
     Attributes
     ----------
+    atoms : Molecule
+        A pymatgen Molecule object containing the atomic structure.
+        Dummy atoms are represented by the symbol "X".
+    symmetry : PointGroupAnalyzer
+        Point group symmetry analyzer for the dummy atom arrangement.
+    name : str
+        Human-readable identifier for this fragment.
 
-    Methods
-    -------
-    has_compatible_symmetry(other)
-        checks symmetry compatibilities with another fragment
+    Examples
+    --------
+    >>> from pymatgen.core.structure import Molecule
+    >>> from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+    >>> mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+    >>> symm_mol = Molecule(["H", "H"], [[1, 0, 0], [-1, 0, 0]], charge=2)
+    >>> pg = PointGroupAnalyzer(symm_mol)
+    >>> frag = Fragment(atoms=mol, symmetry=pg, name="linear_carbon")
+    >>> print(frag)  # D*h 2
     """
 
     def __init__(
@@ -218,7 +247,31 @@ class Fragment(object):
 
 
 class Topology(object):
-    """ """
+    """Periodic topology blueprint for framework structure generation.
+
+    A Topology represents the periodic arrangement of slots where Secondary
+    Building Units (SBUs) can be placed. Each slot defines the local
+    geometry and connectivity requirements.
+
+    Attributes
+    ----------
+    name : str
+        Topology identifier (typically RCSR three-letter symbol).
+    cell : Lattice
+        Periodic cell parameters as a pymatgen Lattice object.
+    slots : np.ndarray[Fragment]
+        Array of Fragment objects representing topology slots.
+    sizes : np.ndarray[int]
+        Array of slot sizes (number of atoms per slot).
+    mappings : dict[Fragment, list[int]]
+        Groups equivalent slots by their Fragment type.
+
+    Examples
+    --------
+    >>> topology = mofgen.topologies["pcu"]
+    >>> print(f"{topology.name}: {len(topology)} slots")
+    >>> print(f"Cell: {topology.cell.abc}")
+    """
 
     def __init__(
         self, name: str, slots: list[Fragment], cell: np.ndarray | Lattice
