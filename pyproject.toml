@@ -65,9 +65,6 @@ Documentation = "https://github.com/DCoupry/autografs#readme"
 Repository = "https://github.com/DCoupry/autografs.git"
 Issues = "https://github.com/DCoupry/autografs/issues"
 
-[project.scripts]
-cgd2pkl = "autografs.scripts.cgd2pkl:main"
-
 [tool.setuptools]
 package-dir = {"" = "src"}
 
