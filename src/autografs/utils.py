@@ -6,6 +6,7 @@ even before any imports. Module docstrings should include the following:
 A brief description of the module and its purpose
 A list of any classes, exception, functions, and any other objects exported by the module
 """
+
 from __future__ import annotations
 
 import itertools
@@ -41,9 +42,9 @@ pandas.options.mode.chained_assignment = None
 def format_indices(iterable: Iterable[int]) -> str:
     lst = list(iterable)
     if len(lst) > 1:
-        return f'{lst[0]}-{lst[1]}'
+        return f"{lst[0]}-{lst[1]}"
     else:
-        return f'{lst[0]}'
+        return f"{lst[0]}"
 
 
 def format_mappings(mappings: dict[int, str]) -> str:
@@ -58,7 +59,7 @@ def format_mappings(mappings: dict[int, str]) -> str:
     for k, v in new_dict.items():
         v = sorted(v)
         grouped_indices = groupby(v, lambda n, c=count(): n - next(c))
-        v = ','.join(format_indices(g) for _, g in grouped_indices)
+        v = ",".join(format_indices(g) for _, g in grouped_indices)
         out_mappings.append(f"{k} : {v}")
     return "; ".join(out_mappings)
 
@@ -82,7 +83,9 @@ def get_xyz_names(path: str) -> list[str]:
     natoms_line = white_space + r"*\d+" + white_space + r"*\n"
     with open(path, "r") as xyz_file:
         data = re.split(natoms_line, xyz_file.read())
-        comment_lines = [list(y)[0] for x, y in itertools.groupby(data, lambda z: z == "") if not x]
+        comment_lines = [
+            list(y)[0] for x, y in itertools.groupby(data, lambda z: z == "") if not x
+        ]
         for cl in comment_lines:
             if "name=" in cl:
                 name = cl.split("name=")[1].split(" ")[0]
@@ -111,9 +114,14 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     sbu = {}
     for molecule, name in zip(xyz.all_molecules, names):
         dummies_idx = molecule.indices_from_symbol("X")
-        symmetric_mol = Molecule(["H", ] * len(dummies_idx),
-                                 [molecule[idx].coords for idx in dummies_idx],
-                                 charge=len(dummies_idx))
+        symmetric_mol = Molecule(
+            [
+                "H",
+            ]
+            * len(dummies_idx),
+            [molecule[idx].coords for idx in dummies_idx],
+            charge=len(dummies_idx),
+        )
         symmetry = PointGroupAnalyzer(symmetric_mol, tolerance=0.1)
         sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
     return sbu
@@ -133,16 +141,20 @@ def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
     tuple[pandas.DataFrame, list[str]]
         [description]
     """
-    uff_symbs = [s.symbol if len(s.symbol)==2 else f"{s.symbol}_" for s in mol.species]
+    uff_symbs = [
+        s.symbol if len(s.symbol) == 2 else f"{s.symbol}_" for s in mol.species
+    ]
     path = os.path.join(autografs.data.__path__[0], "uff4mof.csv")
     full_lib = pandas.read_csv(path)
-    uff_lib = pandas.concat([full_lib[full_lib.symbol.str.startswith(s)] for s in set(uff_symbs)])
+    uff_lib = pandas.concat(
+        [full_lib[full_lib.symbol.str.startswith(s)] for s in set(uff_symbs)]
+    )
     return uff_lib, uff_symbs
 
 
-def find_element_cutoffs(uff_lib: pandas.DataFrame,
-                         uff_symbs: list[str]
-                         ) -> dict[tuple[str, str], float]:
+def find_element_cutoffs(
+    uff_lib: pandas.DataFrame, uff_symbs: list[str]
+) -> dict[tuple[str, str], float]:
     """
     [summary]
 
@@ -165,14 +177,13 @@ def find_element_cutoffs(uff_lib: pandas.DataFrame,
     for e0, e1 in itertools.product(uff_symbs, uff_symbs):
         r0 = radii.loc[e0, "radius"]
         r1 = radii.loc[e1, "radius"]
-        cuts[(e0.strip("_"), e1.strip("_"))] =  r0 + r1
+        cuts[(e0.strip("_"), e1.strip("_"))] = r0 + r1
     return cuts
 
 
-def find_mmtypes(molgraph: MoleculeGraph,
-                 uff_lib: pandas.DataFrame,
-                 uff_symbs: list[str]
-                 ) -> list[str]:
+def find_mmtypes(
+    molgraph: MoleculeGraph, uff_lib: pandas.DataFrame, uff_symbs: list[str]
+) -> list[str]:
     """
     [summary]
 
@@ -205,19 +216,23 @@ def find_mmtypes(molgraph: MoleculeGraph,
             c1, c2 = s1.site.coords, s2.site.coords
             c01 = c1 - c0
             c02 = c2 - c0
-            cosine_angle = np.dot(c01, c02) / (np.linalg.norm(c01) * np.linalg.norm(c02))
+            cosine_angle = np.dot(c01, c02) / (
+                np.linalg.norm(c01) * np.linalg.norm(c02)
+            )
             angle = np.degrees(np.arccos(cosine_angle))
         else:
             angle = 180.0
         coordinations_compat = atom_compat[atom_compat.coordination == ncoord]
         if len(coordinations_compat) == 1:
-            molgraph.molecule[i].properties["ufftype"] = coordinations_compat.symbol.values[0]
+            molgraph.molecule[i].properties["ufftype"] = (
+                coordinations_compat.symbol.values[0]
+            )
             continue
         elif len(coordinations_compat) == 0:
             # problem with the coordinations. use angles
             coordinations_compat = atom_compat
         coordinations_compat["angle_diff"] = coordinations_compat.angle - angle
-        best_angle = coordinations_compat.sort_values(by='angle_diff').iloc[0]
+        best_angle = coordinations_compat.sort_values(by="angle_diff").iloc[0]
         # TODO: if < 10% diff in angle error, use radii error
         mmtypes.append(best_angle.symbol)
     return mmtypes
@@ -260,9 +275,9 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     return mg
 
 
-def fragments_to_networkx(fragments: list[Fragment],
-                          cell: np.ndarray | None = None
-                          ) -> networkx.Graph:
+def fragments_to_networkx(
+    fragments: list[Fragment], cell: np.ndarray | None = None
+) -> networkx.Graph:
     """
     [summary]
 
@@ -293,10 +308,14 @@ def fragments_to_networkx(fragments: list[Fragment],
         for i, (s, c, t, m) in enumerate(zip(species, coords, tags, mmtypes)):
             full_graph.add_node(i + offset, symbol=s, coord=c, tag=t, ufftype=m)
         for i in range(this_len):
-            for j, ij_dist in [(s.index, s.dist) for s in subgraph.get_connected_sites(i)]:
+            for j, ij_dist in [
+                (s.index, s.dist) for s in subgraph.get_connected_sites(i)
+            ]:
                 # evaluate bond orders
                 uff_bl = bond_lengths[(species[i], species[j])]
-                bo = get_bond_order(species[i], species[j], ij_dist, tol=0.2, default_bl=uff_bl)
+                bo = get_bond_order(
+                    species[i], species[j], ij_dist, tol=0.2, default_bl=uff_bl
+                )
                 full_graph.add_edge(i + offset, j + offset, bond_order=bo)
         offset += this_len
     # interfragment edges
@@ -317,16 +336,16 @@ def view_graph(graph: networkx.Graph) -> None:
     """
     from ase import Atom, Atoms
     from ase.visualize import view
+
     at = Atoms(cell=graph.graph["cell"], pbc=(True, True, True))
     for _, d in graph.nodes(data=True):
         at.append(Atom(d["symbol"], d["coord"]))
     view(at)
 
 
-def networkx_to_gulp(graph: networkx.Graph,
-                     name: str = "MOF",
-                     write_to_file: bool = True
-                     ) -> str:
+def networkx_to_gulp(
+    graph: networkx.Graph, name: str = "MOF", write_to_file: bool = True
+) -> str:
     """
     [summary]
 
@@ -346,38 +365,44 @@ def networkx_to_gulp(graph: networkx.Graph,
     """
     logger.info("Creating Gulp file from graph.")
     out_string = ""
-    out_string += 'opti conp molmec noautobond cartesian noelectrostatics ocell\n'
+    out_string += "opti conp molmec noautobond cartesian noelectrostatics ocell\n"
     # out_string += 'maxcyc 1000\nswitch bfgs gnorm 0.5\n'
     cell = graph.graph["cell"]
-    out_string += 'vectors\n'
-    out_string += '{0:>.3f} {1:>.3f} {2:>.3f}\n'.format(*cell[0])
-    out_string += '{0:>.3f} {1:>.3f} {2:>.3f}\n'.format(*cell[1])
-    out_string += '{0:>.3f} {1:>.3f} {2:>.3f}\n'.format(*cell[2])
-    out_string += '{0}\n'.format('cartesian')
+    out_string += "vectors\n"
+    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[0])
+    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[1])
+    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[2])
+    out_string += "{0}\n".format("cartesian")
     mmset = list(set([(d["symbol"], d["ufftype"]) for _, d in graph.nodes(data=True)]))
     mmdict = {u: f"{s}{i}" for i, (s, u) in enumerate(mmset)}
     for _, d in graph.nodes(data=True):
         x, y, z = d["coord"]
         s = mmdict[d["ufftype"]]
         out_string += f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}\n"
-    out_string += '\n'
+    out_string += "\n"
     for b0, b1, bd in graph.edges(data=True):
         # this line is for the dummy to dummy bonds
-        if "bond_order" not in bd: bd["bond_order"] = 1.0
+        if "bond_order" not in bd:
+            bd["bond_order"] = 1.0
         # the strings depend on the bond order number here
-        if bd["bond_order"] < 0.9: bo = "half"
-        elif 0.9 < bd["bond_order"] < 1.1: bo = "single"
-        elif 1.1 < bd["bond_order"] < 1.8: bo = "aromatic"
-        elif 1.8 < bd["bond_order"] < 2.1: bo = "double"
-        else: bo = "triple"
+        if bd["bond_order"] < 0.9:
+            bo = "half"
+        elif 0.9 < bd["bond_order"] < 1.1:
+            bo = "single"
+        elif 1.1 < bd["bond_order"] < 1.8:
+            bo = "aromatic"
+        elif 1.8 < bd["bond_order"] < 2.1:
+            bo = "double"
+        else:
+            bo = "triple"
         out_string += f"connect {b0+1:<4} {b1+1:<4} {bo}\n"
-    out_string += '\nspecies\n'
+    out_string += "\nspecies\n"
     for u, s in mmdict.items():
         out_string += f"{s:<5} {u:<5}\n"
-    out_string += '\nlibrary uff4mof\n'
-    out_string += '\n'
-    out_string += f'output movie xyz {name}.xyz\n'
-    out_string += f'output cif {name}.cif\n'
+    out_string += "\nlibrary uff4mof\n"
+    out_string += "\n"
+    out_string += f"output movie xyz {name}.xyz\n"
+    out_string += f"output cif {name}.cif\n"
     # write to the file
     if write_to_file:
         logger.info(f" [x] Saved to {name}.gin")

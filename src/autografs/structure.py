@@ -6,6 +6,7 @@ even before any imports. Module docstrings should include the following:
 A brief description of the module and its purpose
 A list of any classes, exception, functions, and any other objects exported by the module
 """
+
 from __future__ import annotations
 
 import copy
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 
-
 class Fragment(object):
     """
     [description]
@@ -40,11 +40,10 @@ class Fragment(object):
     has_compatible_symmetry(other)
         checks symmetry compatibilities with another fragment
     """
-    def __init__(self,
-                 atoms: Molecule,
-                 symmetry: PointGroupAnalyzer,
-                 name: str = ""
-                 ) -> None:
+
+    def __init__(
+        self, atoms: Molecule, symmetry: PointGroupAnalyzer, name: str = ""
+    ) -> None:
         """
         Parameters
         ----------
@@ -62,24 +61,20 @@ class Fragment(object):
         return None
 
     def __str__(self) -> str:
-        return	f"{self.symmetry.sch_symbol} {len(self.atoms.indices_from_symbol('X'))}"
+        return f"{self.symmetry.sch_symbol} {len(self.atoms.indices_from_symbol('X'))}"
 
     def __repr__(self) -> str:
         return f"{self.name} : {self.__str__()} valent"
 
-    def __eq__(self,
-               other: object
-               ) -> bool:
+    def __eq__(self, other: object) -> bool:
         # for now only considers symmetries
         if not isinstance(other, Fragment):
             return NotImplemented
-        symm = (self.symmetry.sch_symbol == other.symmetry.sch_symbol)
-        size = (len(self.atoms) == len(other.atoms))
-        return (symm and size)
+        symm = self.symmetry.sch_symbol == other.symmetry.sch_symbol
+        size = len(self.atoms) == len(other.atoms)
+        return symm and size
 
-    def __ne__(self,
-               other: object
-               ) -> bool:
+    def __ne__(self, other: object) -> bool:
         result = self.__eq__(other)
         if result is NotImplemented:
             return NotImplemented
@@ -133,9 +128,7 @@ class Fragment(object):
                 dist = max(dist, float(np.linalg.norm(c_i - c_j)))
         return dist
 
-    def has_compatible_symmetry(self,
-                                other: Fragment
-                                ) -> bool:
+    def has_compatible_symmetry(self, other: Fragment) -> bool:
         """
         Verifies that the symmetry elements of another fragment are part of
         the symmetry elements of the present one. This is the only condition
@@ -166,9 +159,7 @@ class Fragment(object):
         except Exception:
             return False
 
-    def rotate(self,
-               theta: float
-               ) -> None:
+    def rotate(self, theta: float) -> None:
         """
         Rotates in place the atoms in the Fragment.atoms object around the
         axis provided by dummies by an angle of theta radians. This method will
@@ -184,7 +175,9 @@ class Fragment(object):
             sites = list(range(len(self.atoms)))
             axis = dummies.cart_coords[0] - dummies.cart_coords[1]
             anchor = dummies.cart_coords.mean(axis=0)
-            self.atoms.rotate_sites(indices=sites, theta=theta, axis=axis, anchor=anchor)
+            self.atoms.rotate_sites(
+                indices=sites, theta=theta, axis=axis, anchor=anchor
+            )
         return None
 
     def flip(self) -> None:
@@ -198,10 +191,7 @@ class Fragment(object):
         """
         raise NotImplementedError("Flipping is not yet implemented")
 
-    def functionalize(self,
-                      index: int,
-                      functional_group: str
-                      ) -> None:
+    def functionalize(self, index: int, functional_group: str) -> None:
         """
         replaces the atom at index with the functional group provided.
         the available functional groups are listed in the dictionary object
@@ -227,15 +217,12 @@ class Fragment(object):
         return None
 
 
-
 class Topology(object):
-    """
-    """
-    def __init__(self,
-                 name: str,
-                 slots: list[Fragment],
-                 cell: np.ndarray | Lattice
-                 ) -> None:
+    """ """
+
+    def __init__(
+        self, name: str, slots: list[Fragment], cell: np.ndarray | Lattice
+    ) -> None:
         """
         Parameters
         ----------
@@ -278,9 +265,7 @@ class Topology(object):
         """
         return copy.deepcopy(self)
 
-    def get_compatible_slots(self,
-                             candidate: Fragment
-                             ) -> dict[Fragment, list[int]]:
+    def get_compatible_slots(self, candidate: Fragment) -> dict[Fragment, list[int]]:
         """
         Returns a dictionary of the slot indices available for a candidate
         Fragment object, taking into account the symmetry elements common to
@@ -303,9 +288,7 @@ class Topology(object):
                 available_slots[slot] += self.mappings[slot]
         return available_slots
 
-    def scale_slots(self,
-                    scales: tuple[float, float, float] = (1.0, 1.0, 1.0)
-                    ) -> None:
+    def scale_slots(self, scales: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         """
         Applies in-place a scaling along cell vectors of the slots contained in
         the topology.
@@ -324,9 +307,12 @@ class Topology(object):
             scaled_slot = copy.deepcopy(slot)
             fract_coords = self.cell.get_fractional_coords(slot.atoms.cart_coords)
             scaled_coords = scaled_cell.get_cartesian_coords(fract_coords)
-            scaled_slot.atoms = Molecule(slot.atoms.species, scaled_coords, site_properties=slot.atoms.site_properties)
+            scaled_slot.atoms = Molecule(
+                slot.atoms.species,
+                scaled_coords,
+                site_properties=slot.atoms.site_properties,
+            )
             scaled_slots.append(scaled_slot)
         self.slots = np.array(scaled_slots, dtype=object)
         self.cell = scaled_cell
         return None
-

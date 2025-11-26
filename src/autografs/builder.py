@@ -6,6 +6,7 @@ even before any imports. Module docstrings should include the following:
 A brief description of the module and its purpose
 A list of any classes, exception, functions, and any other objects exported by the module
 """
+
 from __future__ import annotations
 
 import copy
@@ -32,7 +33,6 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 
-
 class Autografs(object):
     """Framework maker class to generate ASE Atoms objects from topologies.
 
@@ -47,13 +47,15 @@ class Autografs(object):
     -------
 
     """
+
     topologies: dict[str, Topology] = {}
     sbu: dict[str, Fragment] = {}
 
-    def __init__(self,
-                 xyzfile: str | None = None,
-                 topofile: str | None = None,
-                 ) -> None:
+    def __init__(
+        self,
+        xyzfile: str | None = None,
+        topofile: str | None = None,
+    ) -> None:
         """
         Parameters
         ----------
@@ -63,7 +65,9 @@ class Autografs(object):
         super().__init__()
         logger.info(f"{'*':*^78}")
         logger.info(f"*{'AuToGraFS':^76}*")
-        logger.info(f"*{'Automatic Topological Generator for Framework Structures':^76}*")
+        logger.info(
+            f"*{'Automatic Topological Generator for Framework Structures':^76}*"
+        )
         logger.info(f"*{'Addicoat, M., Coupry, D. E., & Heine, T. (2014)':^76}*")
         logger.info(f"*{'The Journal of Physical Chemistry A, 118(40), 9607-14':^76}*")
         logger.info(f"{'*':*^78}")
@@ -73,11 +77,12 @@ class Autografs(object):
         self._setup_topologies(topofile=topofile)
         logger.info("")
 
-    def build_all(self,
-                  sbu_subset: list[str] | None = None,
-                  topology_subset: list[str] | None = None,
-                  refine_cell: bool = True,
-                  ) -> list[networkx.Graph]:
+    def build_all(
+        self,
+        sbu_subset: list[str] | None = None,
+        topology_subset: list[str] | None = None,
+        refine_cell: bool = True,
+    ) -> list[networkx.Graph]:
         """
         Builds all available structures based on the SBU and Topologies libraries
 
@@ -104,8 +109,11 @@ class Autografs(object):
             topology_pbar.set_description(f"Processing topology {topology_name:<5}")
             maps = []
             topology = self.topologies[topology_name].copy()
-            sbu_dict = self.list_building_units(sieve=topology_name, verbose=False, subset=sbu_subset)
-            if not all(sbu_dict.values()): continue
+            sbu_dict = self.list_building_units(
+                sieve=topology_name, verbose=False, subset=sbu_subset
+            )
+            if not all(sbu_dict.values()):
+                continue
             for sbus in list(itertools.product(*sbu_dict.values())):
                 maps.append((topology, dict(zip(sbu_dict.keys(), sbus))))
             total_len += len(maps)
@@ -123,12 +131,13 @@ class Autografs(object):
         logger.info(f"\t[x] Rate of error: {1.0 - len(graphs)/total_len:2.2%}.")
         return graphs
 
-    def build(self,
-              topology: Topology,
-              mappings: dict[Fragment | int, Fragment | str],
-              refine_cell: bool = True,
-              verbose: bool = False
-              ) -> networkx.Graph:
+    def build(
+        self,
+        topology: Topology,
+        mappings: dict[Fragment | int, Fragment | str],
+        refine_cell: bool = True,
+        verbose: bool = False,
+    ) -> networkx.Graph:
         """
         Generates a graph from a mapping of SBU to topology slots.
 
@@ -153,6 +162,7 @@ class Autografs(object):
             formatted_mappings = autografs.utils.format_mappings(mappings)
             logger.info(f"\tMappings =  {formatted_mappings}")
             logger.info(f"Aligning with cell scaling...")
+
         def opt_fun(scales: tuple[float, float, float]) -> float:
             """
             [summary]
@@ -175,12 +185,14 @@ class Autografs(object):
         # try:
         t0 = time.time()
         #  We need better initialization of search space for faster convergence
-        abc_norm = sum([f.max_dummy_distance for f  in mappings.values()]) / 3.0
+        abc_norm = sum([f.max_dummy_distance for f in mappings.values()]) / 3.0
         abc_norm = np.ones(3) * abc_norm
         if refine_cell:
             x_min = abc_norm * 0.1
             x_max = abc_norm * 2.0
-            best_scales, _, _, _ = brute(opt_fun, ranges=list(zip(x_min, x_max)), Ns=3, full_output=True)
+            best_scales, _, _, _ = brute(
+                opt_fun, ranges=list(zip(x_min, x_max)), Ns=3, full_output=True
+            )
         else:
             if verbose:
                 logger.info("\t[x] No cell refinement performed.")
@@ -191,17 +203,20 @@ class Autografs(object):
             logger.info(f"\t\ta = {best_scales[0]:<.1f}")
             logger.info(f"\t\tb = {best_scales[1]:<.1f}")
             logger.info(f"\t\tc = {best_scales[2]:<.1f}")
-            logger.info(f"\t[x] Aligned {len(topology.slots)} fragments in {time.time() - t0:.1f} seconds")
-        graph = autografs.utils.fragments_to_networkx(best_alignment, cell=topology.cell.matrix)
+            logger.info(
+                f"\t[x] Aligned {len(topology.slots)} fragments in {time.time() - t0:.1f} seconds"
+            )
+        graph = autografs.utils.fragments_to_networkx(
+            best_alignment, cell=topology.cell.matrix
+        )
         # except Exception as e:
-            # logger.debug(e)
-            # graph = None
+        # logger.debug(e)
+        # graph = None
         return graph
 
-    def _validate_mappings(self,
-                           topology: Topology,
-                           mappings: dict[Fragment | int, Fragment | str]
-                           ) -> dict[int, Fragment]:
+    def _validate_mappings(
+        self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]
+    ) -> dict[int, Fragment]:
         """
         Returns a standard slot index to fragment object mappin
 
@@ -233,9 +248,7 @@ class Autografs(object):
                     true_mappings[i] = copy.deepcopy(v)
         return true_mappings
 
-    def _setup_sbu(self,
-                   xyzfile: str | None = None
-                   ) -> None:
+    def _setup_sbu(self, xyzfile: str | None = None) -> None:
         """
         TODO: make that a class property
 
@@ -247,17 +260,20 @@ class Autografs(object):
         t0 = time.time()
         default_path = os.path.join(autografs.data.__path__[0], "defaults.xyz")
         sbu = autografs.utils.xyz_to_sbu(default_path)
-        logger.info(f"\t[x] loaded {len(sbu)} default building units in {time.time() - t0:.0f} seconds.")
+        logger.info(
+            f"\t[x] loaded {len(sbu)} default building units in {time.time() - t0:.0f} seconds."
+        )
         if xyzfile is not None:
             t0 = time.time()
             added_sbu = autografs.utils.xyz_to_sbu(xyzfile)
             sbu.update(added_sbu)
-            logger.info(f"\t[x] loaded {len(added_sbu)} custom building units in {time.time() - t0:.0f} seconds.")
+            logger.info(
+                f"\t[x] loaded {len(added_sbu)} custom building units in {time.time() - t0:.0f} seconds."
+            )
         self.sbu = sbu
         return None
 
-    def _setup_topologies(self,
-                          topofile: str | None = None) -> None:
+    def _setup_topologies(self, topofile: str | None = None) -> None:
         """
         TODO: make that a class property
 
@@ -269,17 +285,20 @@ class Autografs(object):
         t0 = time.time()
         if topofile is None:
             topofile = os.path.join(autografs.data.__path__[0], "topologies.pkl")
-        with open(topofile, 'rb') as topo:
+        with open(topofile, "rb") as topo:
             topologies = dill.load(topo)
-        logger.info(f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds.")
+        logger.info(
+            f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."
+        )
         self.topologies.update(topologies)
         return None
 
-    def list_topologies(self,
-                        sieve: str | None = None,
-                        verbose: bool = False,
-                        subset: list[str] | None = None,
-                        ) -> list[str]:
+    def list_topologies(
+        self,
+        sieve: str | None = None,
+        verbose: bool = False,
+        subset: list[str] | None = None,
+    ) -> list[str]:
         """
         [summary]
 
@@ -303,7 +322,9 @@ class Autografs(object):
         if sieve is not None:
             sieve = self.sbu[sieve]
             if verbose:
-                logger.info(f"filtering topologies for compatibility with {sieve} building unit...")
+                logger.info(
+                    f"filtering topologies for compatibility with {sieve} building unit..."
+                )
             for topology in self.topologies.values():
                 if topology.get_compatible_slots(candidate=sieve):
                     continue
@@ -313,11 +334,12 @@ class Autografs(object):
             logger.info(f"\t[x] {len(full_list):>5} topologies available.")
         return full_list
 
-    def list_building_units(self,
-                            sieve: str | None = None,
-                            verbose: bool = False,
-                            subset: list[str] | None = None,
-                            ) -> dict[str, Fragment]:
+    def list_building_units(
+        self,
+        sieve: str | None = None,
+        verbose: bool = False,
+        subset: list[str] | None = None,
+    ) -> dict[str, Fragment]:
         """
         [summary]
 
@@ -343,7 +365,9 @@ class Autografs(object):
         if sieve is not None:
             sieve = self.topologies[sieve]
             if verbose:
-                logger.info(f"filtering building units for compatibility with {sieve} topology...")
+                logger.info(
+                    f"filtering building units for compatibility with {sieve} topology..."
+                )
             for sbu in sbus:
                 mappings = sieve.get_compatible_slots(candidate=sbu)
                 full_list += [(k, sbu.name) for k, v in mappings.items() if v]
@@ -364,14 +388,15 @@ class Autografs(object):
         if sieve is not None and verbose:
             for k in sieve.mappings.keys():
                 if k not in out_dict:
-                 logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
+                    logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
         return out_dict
 
-    def _align_all_mappings(self,
-                            topology: Topology,
-                            mappings: dict[int, Fragment],
-                            scales: tuple[float, float, float]
-                            ):
+    def _align_all_mappings(
+        self,
+        topology: Topology,
+        mappings: dict[int, Fragment],
+        scales: tuple[float, float, float],
+    ):
         """
         [summary]
 
@@ -397,15 +422,14 @@ class Autografs(object):
             slot_weight = this_fragment.max_dummy_distance / slot.max_dummy_distance
             aligned_fragment, rmse = self._align_slot(slot, this_fragment)
             all_aligned_fragments.append(aligned_fragment)
-            score = slot_weight * rmse / (len(slot.atoms) * len(topology.mappings[slot]))
+            score = (
+                slot_weight * rmse / (len(slot.atoms) * len(topology.mappings[slot]))
+            )
             sum_rmse += score
         logger.debug(f"Cell scaled with RMSE = {sum_rmse}")
         return all_aligned_fragments, sum_rmse
 
-    def _align_slot(self,
-                    slot: Fragment,
-                    fragment: Fragment
-                    ) -> tuple[Fragment, float]:
+    def _align_slot(self, slot: Fragment, fragment: Fragment) -> tuple[Fragment, float]:
         """
         [summary]
 
@@ -431,7 +455,12 @@ class Autografs(object):
         _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
         new_coords = fragment.atoms.cart_coords.dot(U) + V
         fragment.atoms = Molecule(fragment.atoms.species, coords=new_coords)
-        fragment_tags = np.array([-1, ] * len(fragment.atoms))
+        fragment_tags = np.array(
+            [
+                -1,
+            ]
+            * len(fragment.atoms)
+        )
         for j, frag_tag in enumerate(fragment_tags):
             fragment.atoms[j].properties["tags"] = frag_tag
         slot_tags = slot.atoms.site_properties["tags"]
@@ -447,6 +476,7 @@ class Autografs(object):
 
 if __name__ == "__main__":
     from pprint import pprint
+
     molgen = Autografs()
     # pprint(molgen.list_topologies())
     # pprint(sorted(molgen.sbu.keys()))
@@ -475,8 +505,8 @@ if __name__ == "__main__":
     #         i += 1
     #         maps = molgen.list_building_units(sieve=name, verbose=True)
     #         g = molgen.build(topology=topology, mappings={k: random.choice(v) for k, v in maps.items()}, verbose=True, refine_cell=False)
-            # autografs.utils.networkx_to_gulp(g, name=name, write_to_file=True)
-            # autografs.utils.view_graph(g)
+    # autografs.utils.networkx_to_gulp(g, name=name, write_to_file=True)
+    # autografs.utils.view_graph(g)
     # pprint(sbu_names)
     # print(list(molgen.topologies.keys()))
     # benz = molgen.sbu["Benzene_linear"].copy()
