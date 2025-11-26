@@ -1,5 +1,8 @@
 """
-Basic tests for AuToGraFS package.
+Basic tests for the AuToGraFS package.
+
+This module contains unit tests verifying package imports, version
+information, and basic module accessibility.
 """
 
 import pytest

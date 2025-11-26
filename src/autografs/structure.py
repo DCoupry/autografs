@@ -1,46 +1,78 @@
 """
-Module docstrings are similar to class docstrings. Instead of classes and class methods being documented,
-it’s now the module and any functions found within. Module docstrings are placed at the top of the file
-even before any imports. Module docstrings should include the following:
+Structure module for AuToGraFS molecular and topological data structures.
 
-A brief description of the module and its purpose
-A list of any classes, exception, functions, and any other objects exported by the module
+This module defines the core data structures used to represent molecular
+fragments and periodic topology blueprints in AuToGraFS.
+
+Classes
+-------
+Fragment
+    Represents a molecular fragment with symmetry information and dummy atoms.
+Topology
+    Represents a periodic topology blueprint with slots for SBUs.
+
+Examples
+--------
+>>> from autografs.structure import Fragment, Topology
+>>> from pymatgen.core.structure import Molecule
+>>> from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+>>> mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+>>> pg = PointGroupAnalyzer(mol)
+>>> frag = Fragment(atoms=mol, symmetry=pg, name="linear_carbon")
 """
+
 from __future__ import annotations
 
 import copy
 import functools
 import logging
 import warnings
-from typing import Dict, List, Tuple, Union
+from typing import TYPE_CHECKING
 
-import numpy
+import numpy as np
+from numpy.typing import NDArray
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+
+if TYPE_CHECKING:
+    from typing import Self
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 
-
 class Fragment(object):
-    """
-    [description]
+    """Molecular fragment with symmetry information for topology mapping.
+
+    A Fragment represents a Secondary Building Unit (SBU) or topology slot,
+    containing atomic coordinates and dummy atoms ("X") that define
+    connection points.
 
     Attributes
     ----------
+    atoms : Molecule
+        A pymatgen Molecule object containing the atomic structure.
+        Dummy atoms are represented by the symbol "X".
+    symmetry : PointGroupAnalyzer
+        Point group symmetry analyzer for the dummy atom arrangement.
+    name : str
+        Human-readable identifier for this fragment.
 
-    Methods
-    -------
-    has_compatible_symmetry(other)
-        checks symmetry compatibilities with another fragment
+    Examples
+    --------
+    >>> from pymatgen.core.structure import Molecule
+    >>> from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+    >>> mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+    >>> symm_mol = Molecule(["H", "H"], [[1, 0, 0], [-1, 0, 0]], charge=2)
+    >>> pg = PointGroupAnalyzer(symm_mol)
+    >>> frag = Fragment(atoms=mol, symmetry=pg, name="linear_carbon")
+    >>> print(frag)  # D*h 2
     """
-    def __init__(self,
-                 atoms: Molecule,
-                 symmetry: PointGroupAnalyzer,
-                 name: str = ""
-                 ) -> None:
+
+    def __init__(
+        self, atoms: Molecule, symmetry: PointGroupAnalyzer, name: str = ""
+    ) -> None:
         """
         Parameters
         ----------
@@ -58,23 +90,24 @@ class Fragment(object):
         return None
 
     def __str__(self) -> str:
-        return	f"{self.symmetry.sch_symbol} {len(self.atoms.indices_from_symbol('X'))}"
+        return f"{self.symmetry.sch_symbol} {len(self.atoms.indices_from_symbol('X'))}"
 
     def __repr__(self) -> str:
         return f"{self.name} : {self.__str__()} valent"
 
-    def __eq__(self,
-               other: Fragment
-               ) -> bool:
+    def __eq__(self, other: object) -> bool:
         # for now only considers symmetries
-        symm = (self.symmetry.sch_symbol == other.symmetry.sch_symbol)
-        size = (len(self.atoms) == len(other.atoms))
-        return (symm and size)
+        if not isinstance(other, Fragment):
+            return NotImplemented
+        symm = self.symmetry.sch_symbol == other.symmetry.sch_symbol
+        size = len(self.atoms) == len(other.atoms)
+        return symm and size
 
-    def __ne__(self,
-               other: Fragment
-               ) -> bool:
-        return not self.__eq__(other)
+    def __ne__(self, other: object) -> bool:
+        result = self.__eq__(other)
+        if result is NotImplemented:
+            return NotImplemented
+        return not result
 
     def __hash__(self):
         return hash(f"SYMM={self.symmetry.sch_symbol}/NAT={len(self.atoms)}")
@@ -121,12 +154,10 @@ class Fragment(object):
             c_i = dummies[i]
             for j in range(i, len(dummies)):
                 c_j = dummies[j]
-                dist = max(dist, numpy.linalg.norm(c_i - c_j))
+                dist = max(dist, float(np.linalg.norm(c_i - c_j)))
         return dist
 
-    def has_compatible_symmetry(self,
-                                other: Fragment
-                                ) -> bool:
+    def has_compatible_symmetry(self, other: Fragment) -> bool:
         """
         Verifies that the symmetry elements of another fragment are part of
         the symmetry elements of the present one. This is the only condition
@@ -157,9 +188,7 @@ class Fragment(object):
         except Exception:
             return False
 
-    def rotate(self,
-               theta: float
-               ) -> None:
+    def rotate(self, theta: float) -> None:
         """
         Rotates in place the atoms in the Fragment.atoms object around the
         axis provided by dummies by an angle of theta radians. This method will
@@ -175,7 +204,9 @@ class Fragment(object):
             sites = list(range(len(self.atoms)))
             axis = dummies.cart_coords[0] - dummies.cart_coords[1]
             anchor = dummies.cart_coords.mean(axis=0)
-            self.atoms.rotate_sites(indices=sites, theta=theta, axis=axis, anchor=anchor)
+            self.atoms.rotate_sites(
+                indices=sites, theta=theta, axis=axis, anchor=anchor
+            )
         return None
 
     def flip(self) -> None:
@@ -189,10 +220,7 @@ class Fragment(object):
         """
         raise NotImplementedError("Flipping is not yet implemented")
 
-    def functionalize(self,
-                      index: int,
-                      functional_group: str
-                      ) -> None:
+    def functionalize(self, index: int, functional_group: str) -> None:
         """
         replaces the atom at index with the functional group provided.
         the available functional groups are listed in the dictionary object
@@ -218,24 +246,45 @@ class Fragment(object):
         return None
 
 
-
 class Topology(object):
+    """Periodic topology blueprint for framework structure generation.
+
+    A Topology represents the periodic arrangement of slots where Secondary
+    Building Units (SBUs) can be placed. Each slot defines the local
+    geometry and connectivity requirements.
+
+    Attributes
+    ----------
+    name : str
+        Topology identifier (typically RCSR three-letter symbol).
+    cell : Lattice
+        Periodic cell parameters as a pymatgen Lattice object.
+    slots : np.ndarray[Fragment]
+        Array of Fragment objects representing topology slots.
+    sizes : np.ndarray[int]
+        Array of slot sizes (number of atoms per slot).
+    mappings : dict[Fragment, list[int]]
+        Groups equivalent slots by their Fragment type.
+
+    Examples
+    --------
+    >>> topology = mofgen.topologies["pcu"]
+    >>> print(f"{topology.name}: {len(topology)} slots")
+    >>> print(f"Cell: {topology.cell.abc}")
     """
-    """
-    def __init__(self,
-                 name: str,
-                 slots: List[Fragment],
-                 cell: Union[numpy.ndarray, Lattice]
-                 ) -> None:
+
+    def __init__(
+        self, name: str, slots: list[Fragment], cell: np.ndarray | Lattice
+    ) -> None:
         """
         Parameters
         ----------
         name : str
             the name given to the topology (RCSR symbol in defaults)
-        slots : List[Fragment]
+        slots : list[Fragment]
             the list of Fragment objects describing the orientation and
             connectivity of slots in the topology.
-        cell : numpy.ndarray
+        cell : np.ndarray
             The information on periodicity in matrix form (3x3)
         """
         self.name = name
@@ -243,9 +292,9 @@ class Topology(object):
             self.cell = cell
         else:
             self.cell = Lattice(cell)
-        self.slots = numpy.array(slots, dtype=object)
+        self.slots = np.array(slots, dtype=object)
         sizes = [len(fragment.atoms) for fragment in self.slots]
-        self.sizes = numpy.array(sizes, dtype=numpy.int8)
+        self.sizes = np.array(sizes, dtype=np.int8)
         mappings = {}
         for slot_type in set(slots):
             mappings[slot_type] = [i for i, s in enumerate(slots) if s == slot_type]
@@ -269,9 +318,7 @@ class Topology(object):
         """
         return copy.deepcopy(self)
 
-    def get_compatible_slots(self,
-                             candidate: Fragment
-                             ) -> Dict[Fragment, List[int]]:
+    def get_compatible_slots(self, candidate: Fragment) -> dict[Fragment, list[int]]:
         """
         Returns a dictionary of the slot indices available for a candidate
         Fragment object, taking into account the symmetry elements common to
@@ -284,27 +331,25 @@ class Topology(object):
 
         Returns
         -------
-        Dict[Fragment, List[int]]
-            A ictionary of available slot indices
+        dict[Fragment, list[int]]
+            A dictionary of available slot indices
         """
-        available_slots = {}
+        available_slots: dict[Fragment, list[int]] = {}
         for slot in self.mappings:
             available_slots[slot] = []
             if slot.has_compatible_symmetry(candidate):
                 available_slots[slot] += self.mappings[slot]
         return available_slots
 
-    def scale_slots(self,
-                    scales: Tuple[float, float, float] = (1.0, 1.0, 1.0)
-                    ) -> None:
+    def scale_slots(self, scales: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         """
-        Applies in-place a scaling along cell vectors of the slots contines in
+        Applies in-place a scaling along cell vectors of the slots contained in
         the topology.
         TODO: rename scales to three a, b, c parameters for clarity
 
         Parameters
         ----------
-        scales : Tuple[float, float, float], optional
+        scales : tuple[float, float, float], optional
             the cell vector lengths to apply, by default (1.0, 1.0, 1.0)
         """
         alpha, beta, gamma = self.cell.angles
@@ -315,9 +360,12 @@ class Topology(object):
             scaled_slot = copy.deepcopy(slot)
             fract_coords = self.cell.get_fractional_coords(slot.atoms.cart_coords)
             scaled_coords = scaled_cell.get_cartesian_coords(fract_coords)
-            scaled_slot.atoms = Molecule(slot.atoms.species, scaled_coords, site_properties=slot.atoms.site_properties)
+            scaled_slot.atoms = Molecule(
+                slot.atoms.species,
+                scaled_coords,
+                site_properties=slot.atoms.site_properties,
+            )
             scaled_slots.append(scaled_slot)
-        self.slots = scaled_slots
+        self.slots = np.array(scaled_slots, dtype=object)
         self.cell = scaled_cell
         return None
-
