@@ -188,6 +188,11 @@ class Fragment(object):
         except Exception:
             return False
 
+    def _clear_max_dummy_distance_cache(self) -> None:
+        """Clear the cached max_dummy_distance value."""
+        if "max_dummy_distance" in self.__dict__:
+            del self.__dict__["max_dummy_distance"]
+
     def rotate(self, theta: float) -> None:
         """
         Rotates in place the atoms in the Fragment.atoms object around the
@@ -207,6 +212,8 @@ class Fragment(object):
             self.atoms.rotate_sites(
                 indices=sites, theta=theta, axis=axis, anchor=anchor
             )
+            # Clear cached max_dummy_distance since coordinates have changed
+            self._clear_max_dummy_distance_cache()
         return None
 
     def flip(self) -> None:
