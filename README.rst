@@ -1,6 +1,32 @@
 AuToGraFS
 =========
 
+|PyPI| |Python| |CI| |codecov| |License| |Black|
+
+.. |PyPI| image:: https://img.shields.io/pypi/v/AuToGraFS.svg
+   :target: https://pypi.org/project/AuToGraFS/
+   :alt: PyPI version
+
+.. |Python| image:: https://img.shields.io/pypi/pyversions/AuToGraFS.svg
+   :target: https://pypi.org/project/AuToGraFS/
+   :alt: Python versions
+
+.. |CI| image:: https://github.com/DCoupry/autografs/actions/workflows/ci.yml/badge.svg
+   :target: https://github.com/DCoupry/autografs/actions/workflows/ci.yml
+   :alt: CI Status
+
+.. |codecov| image:: https://codecov.io/gh/DCoupry/autografs/branch/master/graph/badge.svg
+   :target: https://codecov.io/gh/DCoupry/autografs
+   :alt: Code Coverage
+
+.. |License| image:: https://img.shields.io/github/license/DCoupry/autografs.svg
+   :target: https://github.com/DCoupry/autografs/blob/master/LICENSE.txt
+   :alt: License
+
+.. |Black| image:: https://img.shields.io/badge/code%20style-black-000000.svg
+   :target: https://github.com/psf/black
+   :alt: Code style: black
+
 Original publication: `"Automatic Topological Generator for Framework Structures" <http://pubs.acs.org/doi/abs/10.1021/jp507643v>`_.
 
 *This version is under active development*. Bug hunting is very much going on, and there are still some old functionalities that are not yet reimplemented.
