@@ -57,6 +57,11 @@ logger = logging.getLogger(__name__)
 # suppress false positive SettingWithCopyWarning
 pandas.options.mode.chained_assignment = None
 
+# Constants for molecular analysis
+SYMMETRY_TOLERANCE = 0.1  # Tolerance for point group symmetry detection
+BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
+BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
+
 
 def format_indices(iterable: Iterable[int]) -> str:
     lst = list(iterable)
@@ -173,7 +178,7 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
             [molecule[idx].coords for idx in dummies_idx],
             charge=len(dummies_idx),
         )
-        symmetry = PointGroupAnalyzer(symmetric_mol, tolerance=0.1)
+        symmetry = PointGroupAnalyzer(symmetric_mol, tolerance=SYMMETRY_TOLERANCE)
         sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
     return sbu
 
@@ -326,7 +331,7 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     # setting up UFF type analysis
     uff_lib, uff_symbs = load_uff_lib(mol)
     # obtaining cutoffs from the maximum UFF radius
-    strategy = EconNN(tol=0.3, use_fictive_radius=True, cutoff=10.0)
+    strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
     mg = MoleculeGraph.with_local_env_strategy(mol, strategy=strategy)
     # add mmtypes
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)

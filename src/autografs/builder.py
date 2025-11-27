@@ -42,6 +42,11 @@ from autografs.structure import Fragment, Topology
 
 logger = logging.getLogger(__name__)
 
+# Constants for cell parameter optimization
+BRUTE_SEARCH_GRID_POINTS = 3  # Number of grid points per dimension in brute force search
+SCALE_SEARCH_MIN_FACTOR = 0.1  # Minimum scale factor for cell parameter search
+SCALE_SEARCH_MAX_FACTOR = 2.0  # Maximum scale factor for cell parameter search
+
 
 class Autografs:
     """Framework maker class to generate periodic structures from topologies.
@@ -220,10 +225,10 @@ class Autografs:
         abc_norm = sum([f.max_dummy_distance for f in mappings.values()]) / 3.0
         abc_norm = np.ones(3) * abc_norm
         if refine_cell:
-            x_min = abc_norm * 0.1
-            x_max = abc_norm * 2.0
+            x_min = abc_norm * SCALE_SEARCH_MIN_FACTOR
+            x_max = abc_norm * SCALE_SEARCH_MAX_FACTOR
             best_scales, _, _, _ = brute(
-                opt_fun, ranges=list(zip(x_min, x_max)), Ns=3, full_output=True
+                opt_fun, ranges=list(zip(x_min, x_max)), Ns=BRUTE_SEARCH_GRID_POINTS, full_output=True
             )
         else:
             if verbose:
