@@ -487,9 +487,11 @@ class Autografs(object):
             slot_weight = this_fragment.max_dummy_distance / slot.max_dummy_distance
             aligned_fragment, rmse = self._align_slot(slot, this_fragment)
             all_aligned_fragments.append(aligned_fragment)
-            score = (
-                slot_weight * rmse / (len(slot.atoms) * len(topology.mappings[slot]))
-            )
+            denominator = len(slot.atoms) * len(topology.mappings[slot])
+            if denominator == 0:
+                logger.warning(f"Empty slot encountered at index {slot_index}, skipping score calculation")
+                continue
+            score = slot_weight * rmse / denominator
             sum_rmse += score
         logger.debug(f"Cell scaled with RMSE = {sum_rmse}")
         return all_aligned_fragments, sum_rmse
