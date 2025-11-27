@@ -92,7 +92,7 @@ def linear_fragment(linear_molecule):
     from pymatgen.core.structure import Molecule
     from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
-    from autografs.structure import Fragment
+    from autografs.fragment import Fragment
 
     # Create symmetry from dummies only
     symm_mol = Molecule(["H", "H"], [[1.5, 0.0, 0.0], [-1.5, 0.0, 0.0]], charge=2)
@@ -106,7 +106,7 @@ def trigonal_fragment():
     from pymatgen.core.structure import Molecule
     from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
-    from autografs.structure import Fragment
+    from autografs.fragment import Fragment
 
     coords = [
         [0.0, 0.0, 0.0],  # Central C
@@ -126,7 +126,7 @@ def tetrahedral_fragment():
     from pymatgen.core.structure import Molecule
     from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
-    from autografs.structure import Fragment
+    from autografs.fragment import Fragment
 
     coords = [
         [0.0, 0.0, 0.0],  # Central Zn
@@ -146,7 +146,7 @@ def simple_topology(linear_fragment):
     """Create a simple topology with linear slots."""
     import numpy as np
 
-    from autografs.structure import Topology
+    from autografs.topology import Topology
 
     cell = np.eye(3) * 10.0
     # Add tags to the fragment atoms

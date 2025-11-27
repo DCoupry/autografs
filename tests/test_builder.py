@@ -13,7 +13,8 @@ import numpy as np
 import pytest
 from hypothesis import given, strategies as st, settings, assume
 
-from autografs.structure import Fragment, Topology
+from autografs.fragment import Fragment
+from autografs.topology import Topology
 
 
 # =============================================================================

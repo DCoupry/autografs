@@ -49,7 +49,7 @@ from pymatgen.io.xyz import XYZ
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
 import autografs.data
-from autografs.structure import Fragment
+from autografs.fragment import Fragment
 
 
 logger = logging.getLogger(__name__)
