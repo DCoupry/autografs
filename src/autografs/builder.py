@@ -73,9 +73,6 @@ class Autografs(object):
     >>> print(len(mofgen.sbu))  # Available building units
     """
 
-    topologies: dict[str, Topology] = {}
-    sbu: dict[str, Fragment] = {}
-
     def __init__(
         self,
         xyzfile: str | None = None,
@@ -98,6 +95,9 @@ class Autografs(object):
         >>> mofgen = Autografs(xyzfile="my_sbus.xyz")  # Add custom SBUs
         """
         super().__init__()
+        # Initialize instance attributes to avoid sharing between instances
+        self.topologies: dict[str, Topology] = {}
+        self.sbu: dict[str, Fragment] = {}
         logger.info(f"{'*':*^78}")
         logger.info(f"*{'AuToGraFS':^76}*")
         logger.info(
