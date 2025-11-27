@@ -43,7 +43,7 @@ from autografs.structure import Fragment, Topology
 logger = logging.getLogger(__name__)
 
 
-class Autografs(object):
+class Autografs:
     """Framework maker class to generate periodic structures from topologies.
 
     AuToGraFS: Automatic Topological Generator for Framework Structures.

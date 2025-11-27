@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Fragment(object):
+class Fragment:
     """Molecular fragment with symmetry information for topology mapping.
 
     A Fragment represents a Secondary Building Unit (SBU) or topology slot,
@@ -251,7 +251,7 @@ class Fragment(object):
         return None
 
 
-class Topology(object):
+class Topology:
     """Periodic topology blueprint for framework structure generation.
 
     A Topology represents the periodic arrangement of slots where Secondary
