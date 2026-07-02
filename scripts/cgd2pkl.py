@@ -52,6 +52,14 @@ from ase.visualize import view
 logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
+# Nets with vertices above this connectivity are skipped: some RCSR
+# entries have enormous coordination figures that are not usable as slots.
+MAX_FRAGMENT_SITES = 12
+
+
+class TopologyExtractionError(Exception):
+    """Raised when a net cannot be converted into an AuToGraFS topology."""
+
 
 def download_cgd(url: str) -> str:
     """inspired heavily by: https://stackoverflow.com/a/62113293"""
@@ -158,9 +166,12 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
         # now extract the corresponding fragment
         fragment_center = topology.sites[not_dummies[center_idx]]
         fragment_sites = topology.get_neighbors(fragment_center, r=cutoff)
-        # some topologies in the RCSR have a crazy size
-        # we ignore them with the heat of a thousand suns
-        assert len(fragment_sites) <= 12, "Fragment size larger than limit of 12."
+        # some topologies in the RCSR have a crazy size: skip them
+        if len(fragment_sites) > MAX_FRAGMENT_SITES:
+            raise TopologyExtractionError(
+                f"Fragment size {len(fragment_sites)} larger than "
+                f"limit of {MAX_FRAGMENT_SITES}."
+            )
         # store as molecule to use the point group analysis
         fragment = Molecule.from_sites(
             fragment_sites
@@ -169,10 +180,8 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
         # symmetrization error.
         fragment.replace_species({"X": "He"})
         pg = PointGroupAnalyzer(fragment, tolerance=0.1)
-        # from pymatgen.io.ase import AseAtomsAdaptor
-        # view(AseAtomsAdaptor.get_atoms(fragment))
         if pg.sch_symbol == "C1":
-            raise ("NoSymm")
+            raise TopologyExtractionError("No symmetry detected (C1) in fragment.")
         fragment.replace_species({"He": "X"})
         fragments.append(Fragment(atoms=fragment, symmetry=pg, name="slot"))
     return fragments
@@ -184,8 +193,8 @@ def read_cgd_data(cgd: str, spacegroups: Dict[str, int]) -> Dict[str, Topology]:
     topologies = {}
     # keep track of weird behaviours
     unknown_symbols = []
-    sb_error_counter = 0
-    pg_error_counter = 0
+    parse_error_counter = 0
+    extraction_errors: Dict[str, str] = {}
     # split the file by topology
     split_cgd = [t.strip().strip("CRYSTAL") for t in cgd.split("END")]
     for cgd_string in tqdm(split_cgd, desc="Creating topologies"):
@@ -194,24 +203,30 @@ def read_cgd_data(cgd: str, spacegroups: Dict[str, int]) -> Dict[str, Topology]:
         # read from the template.
         try:
             name, struct = topology_from_string(cgd=cgd_string, spacegroups=spacegroups)
-            if struct is None:
-                sb_error_counter += 1
-                unknown_symbols.append(name)
-                continue
+        except (KeyError, ValueError, IndexError) as exc:
+            # malformed entries: empty coordinates, bad fields, ...
+            parse_error_counter += 1
+            logger.debug(f"Could not parse a CGD entry: {exc!r}")
+            continue
+        if struct is None:
+            # name holds the unrecognized spacegroup symbol here
+            unknown_symbols.append(name)
+            continue
+        try:
             fragments = analyze(struct, skin=5e-3)
-            topology = Topology(name=name, slots=fragments, cell=struct.lattice)
-            topologies[name] = topology
-        except Exception:
-            # mainly KeyError for bad international symbols,
-            # occasional ValueError, for empty coordinates
-            # TODO: separate counters
-            pg_error_counter += 1
+        except TopologyExtractionError as exc:
+            extraction_errors[name] = str(exc)
+            continue
+        topologies[name] = Topology(name=name, slots=fragments, cell=struct.lattice)
     logger.info(f"{len(split_cgd)} Topologies treated with:")
     logger.info(f"  + {len(topologies)} successful treatments.")
-    logger.info(f"  + {sb_error_counter} bad international symbols errors.")
+    logger.info(f"  + {len(unknown_symbols)} bad international symbols errors.")
     for bad_symbol, count in Counter(unknown_symbols).most_common():
         logger.info(f"    - {bad_symbol} : {count}")
-    logger.info(f"  + {pg_error_counter} fragment symmetrization errors.")
+    logger.info(f"  + {parse_error_counter} unparseable entries.")
+    logger.info(f"  + {len(extraction_errors)} fragment extraction errors:")
+    for net_name, reason in sorted(extraction_errors.items()):
+        logger.info(f"    - {net_name} : {reason}")
     return topologies
 
 
