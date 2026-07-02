@@ -78,7 +78,7 @@ class Topology:
             self.cell = Lattice(cell)
         self.slots = np.array(slots, dtype=object)
         sizes = [len(fragment.atoms) for fragment in self.slots]
-        self.sizes = np.array(sizes, dtype=np.int8)
+        self.sizes = np.array(sizes, dtype=np.int32)
         mappings = {}
         for slot_type in set(slots):
             mappings[slot_type] = [i for i, s in enumerate(slots) if s == slot_type]

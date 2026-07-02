@@ -30,13 +30,14 @@ networkx_to_gulp
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
-import os
 import re
 from collections import defaultdict
 from collections.abc import Iterable
 from itertools import count, groupby
+from pathlib import Path
 
 import networkx
 import numpy as np
@@ -183,6 +184,19 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     return sbu
 
 
+@functools.lru_cache(maxsize=1)
+def _load_uff_full_library() -> pandas.DataFrame:
+    """Load and cache the full UFF4MOF library.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The complete UFF4MOF parameter library.
+    """
+    path = Path(autografs.data.__path__[0]) / "uff4mof.csv"
+    return pandas.read_csv(path)
+
+
 def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
     """Load UFF force field parameters relevant to a molecule.
 
@@ -204,8 +218,7 @@ def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
     uff_symbs = [
         s.symbol if len(s.symbol) == 2 else f"{s.symbol}_" for s in mol.species
     ]
-    path = os.path.join(autografs.data.__path__[0], "uff4mof.csv")
-    full_lib = pandas.read_csv(path)
+    full_lib = _load_uff_full_library()
     uff_lib = pandas.concat(
         [full_lib[full_lib.symbol.str.startswith(s)] for s in set(uff_symbs)]
     )
@@ -460,48 +473,63 @@ def networkx_to_gulp(
     >>> # Creates my_mof.gin in current directory
     """
     logger.info("Creating Gulp file from graph.")
-    out_string = ""
-    out_string += "opti conp molmec noautobond cartesian noelectrostatics ocell\n"
-    # out_string += 'maxcyc 1000\nswitch bfgs gnorm 0.5\n'
+    lines = []
+
+    # Header and cell vectors
     cell = graph.graph["cell"]
-    out_string += "vectors\n"
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[0])
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[1])
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[2])
-    out_string += "{0}\n".format("cartesian")
+    lines.append("opti conp molmec noautobond cartesian noelectrostatics ocell")
+    lines.append("vectors")
+    lines.append(f"{cell[0][0]:>.3f} {cell[0][1]:>.3f} {cell[0][2]:>.3f}")
+    lines.append(f"{cell[1][0]:>.3f} {cell[1][1]:>.3f} {cell[1][2]:>.3f}")
+    lines.append(f"{cell[2][0]:>.3f} {cell[2][1]:>.3f} {cell[2][2]:>.3f}")
+    lines.append("cartesian")
+
+    # Build atom type mapping
     mmset = list(set([(d["symbol"], d["ufftype"]) for _, d in graph.nodes(data=True)]))
     mmdict = {u: f"{s}{i}" for i, (s, u) in enumerate(mmset)}
+
+    # Atomic coordinates
     for _, d in graph.nodes(data=True):
         x, y, z = d["coord"]
         s = mmdict[d["ufftype"]]
-        out_string += f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}\n"
-    out_string += "\n"
+        lines.append(f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}")
+
+    lines.append("")
+
+    # Bond connectivity
     for b0, b1, bd in graph.edges(data=True):
-        # this line is for the dummy to dummy bonds
-        if "bond_order" not in bd:
-            bd["bond_order"] = 1.0
-        # the strings depend on the bond order number here
-        if bd["bond_order"] < 0.9:
+        bond_order = bd.get("bond_order", 1.0)
+        if bond_order < 0.9:
             bo = "half"
-        elif 0.9 < bd["bond_order"] < 1.1:
+        elif bond_order < 1.1:
             bo = "single"
-        elif 1.1 < bd["bond_order"] < 1.8:
+        elif bond_order < 1.8:
             bo = "aromatic"
-        elif 1.8 < bd["bond_order"] < 2.1:
+        elif bond_order < 2.1:
             bo = "double"
         else:
             bo = "triple"
-        out_string += f"connect {b0+1:<4} {b1+1:<4} {bo}\n"
-    out_string += "\nspecies\n"
+        lines.append(f"connect {b0+1:<4} {b1+1:<4} {bo}")
+
+    # Species mapping
+    lines.append("")
+    lines.append("species")
     for u, s in mmdict.items():
-        out_string += f"{s:<5} {u:<5}\n"
-    out_string += "\nlibrary uff4mof\n"
-    out_string += "\n"
-    out_string += f"output movie xyz {name}.xyz\n"
-    out_string += f"output cif {name}.cif\n"
-    # write to the file
+        lines.append(f"{s:<5} {u:<5}")
+
+    # Footer
+    lines.append("")
+    lines.append("library uff4mof")
+    lines.append("")
+    lines.append(f"output movie xyz {name}.xyz")
+    lines.append(f"output cif {name}.cif")
+
+    out_string = "\n".join(lines)
+
+    # Write to file
     if write_to_file:
-        logger.info(f" [x] Saved to {name}.gin")
-        with open(os.path.join(os.getcwd(), f"{name}.gin"), "w") as gin:
-            gin.write(out_string)
+        output_path = Path.cwd() / f"{name}.gin"
+        logger.info(f" [x] Saved to {output_path}")
+        output_path.write_text(out_string)
+
     return out_string

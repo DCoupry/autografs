@@ -27,6 +27,7 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
+from scipy.spatial.distance import pdist
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
@@ -127,9 +128,8 @@ class Fragment:
         Molecule
             The extracted dummy atoms
         """
-        dummies_idx = self.atoms.indices_from_symbol("X")
-        dummies = Molecule.from_sites([self.atoms[i] for i in dummies_idx])
-        return dummies
+        dummy_sites = [site for site in self.atoms if site.specie.symbol == "X"]
+        return Molecule.from_sites(dummy_sites)
 
     @functools.cached_property
     def max_dummy_distance(self) -> float:
@@ -143,13 +143,9 @@ class Fragment:
             The maximum distance between dummies
         """
         dummies = self.extract_dummies().cart_coords
-        dist = 0.0
-        for i in range(len(dummies)):
-            c_i = dummies[i]
-            for j in range(i, len(dummies)):
-                c_j = dummies[j]
-                dist = max(dist, float(np.linalg.norm(c_i - c_j)))
-        return dist
+        if len(dummies) < 2:
+            return 0.0
+        return float(pdist(dummies).max())
 
     def has_compatible_symmetry(self, other: Fragment) -> bool:
         """
@@ -213,13 +209,33 @@ class Fragment:
     def flip(self) -> None:
         """
         Flips in-place all the atoms in the Fragment.atoms object using a reflection
-        plane symmetry operation from the Fragment.symmetry object
+        plane symmetry operation from the Fragment.symmetry object.
+
+        The method finds a reflection plane (mirror symmetry) from the point group
+        symmetry operations and applies it to all atomic coordinates.
 
         Raises
         ------
-        NotImplementedError
+        ValueError
+            If no reflection plane is found in the symmetry operations.
         """
-        raise NotImplementedError("Flipping is not yet implemented")
+        # Get symmetry operations from the PointGroupAnalyzer
+        for op in self.symmetry.symmops:
+            rot_matrix = op.rotation_matrix
+            # A reflection has det = -1 and trace can vary
+            # For a pure reflection: det(R) = -1
+            if np.isclose(np.linalg.det(rot_matrix), -1.0):
+                # This is a reflection or improper rotation
+                # Apply the symmetry operation to all coordinates
+                new_coords = op.operate_multi(self.atoms.cart_coords)
+                self.atoms = Molecule(
+                    self.atoms.species,
+                    new_coords,
+                    site_properties=self.atoms.site_properties,
+                )
+                self._clear_max_dummy_distance_cache()
+                return
+        raise ValueError("No reflection plane found in symmetry operations")
 
     def functionalize(self, index: int, functional_group: str) -> None:
         """

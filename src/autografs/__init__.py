@@ -50,7 +50,15 @@ __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
 __version__ = "3.0.0"
 __status__ = "production"
-__all__ = ["utils", "fragment", "topology", "builder", "Autografs", "Fragment", "Topology"]
+__all__ = [
+    "utils",
+    "fragment",
+    "topology",
+    "builder",
+    "Autografs",
+    "Fragment",
+    "Topology",
+]
 
 import logging
 
@@ -58,9 +66,6 @@ from autografs.builder import Autografs
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 
+# Add NullHandler to prevent "No handler found" warnings
+# Applications should configure their own logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
-logging.basicConfig(
-    format="[AuToGraFS] %(asctime)s | %(message)s",
-    level=logging.INFO,
-    datefmt="%I:%M:%S",
-)

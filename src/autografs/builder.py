@@ -24,16 +24,15 @@ from __future__ import annotations
 import copy
 import itertools
 import logging
-import os
-import random
 import time
+from pathlib import Path
 
 import dill
 import networkx
 import numpy as np
 from pymatgen.analysis.molecule_matcher import HungarianOrderMatcher
 from pymatgen.core.structure import Molecule
-from scipy.optimize import brute
+from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
 import autografs.data
@@ -44,9 +43,9 @@ from autografs.topology import Topology
 logger = logging.getLogger(__name__)
 
 # Constants for cell parameter optimization
-BRUTE_SEARCH_GRID_POINTS = 3  # Number of grid points per dimension in brute force search
-SCALE_SEARCH_MIN_FACTOR = 0.1  # Minimum scale factor for cell parameter search
-SCALE_SEARCH_MAX_FACTOR = 2.0  # Maximum scale factor for cell parameter search
+NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
+NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
+NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
 
 
 class Autografs:
@@ -220,21 +219,27 @@ class Autografs:
             _, rmse = self._align_all_mappings(this_topology, this_mapping, scales)
             return rmse
 
-        # try:
         t0 = time.time()
-        #  We need better initialization of search space for faster convergence
+        # Initialize search from average dummy distance
         abc_norm = sum([f.max_dummy_distance for f in mappings.values()]) / 3.0
-        abc_norm = np.ones(3) * abc_norm
+        x0 = np.ones(3) * abc_norm
         if refine_cell:
-            x_min = abc_norm * SCALE_SEARCH_MIN_FACTOR
-            x_max = abc_norm * SCALE_SEARCH_MAX_FACTOR
-            best_scales, _, _, _ = brute(
-                opt_fun, ranges=list(zip(x_min, x_max)), Ns=BRUTE_SEARCH_GRID_POINTS, full_output=True
+            # Use Nelder-Mead for gradient-free optimization
+            result = minimize(
+                opt_fun,
+                x0,
+                method="Nelder-Mead",
+                options={
+                    "xatol": NELDER_MEAD_XATOL,
+                    "fatol": NELDER_MEAD_FATOL,
+                    "maxiter": NELDER_MEAD_MAXITER,
+                },
             )
+            best_scales = result.x
         else:
             if verbose:
                 logger.info("\t[x] No cell refinement performed.")
-            best_scales = abc_norm
+            best_scales = x0
         best_alignment, _ = self._align_all_mappings(topology, mappings, best_scales)
         if verbose:
             logger.info("\t[x] Best cell parameters:")
@@ -274,11 +279,12 @@ class Autografs:
 
         Raises
         ------
-        AssertionError
+        ValueError
             If any required slot is not present in the mappings.
         """
         for k in topology.mappings.keys():
-            assert k in mappings, f"Unfilled {k} slot."
+            if k not in mappings:
+                raise ValueError(f"Unfilled {k} slot in mappings.")
         #  make sure all strings are converted to the correct fragment
         for k, v in mappings.items():
             if isinstance(v, str):
@@ -306,8 +312,8 @@ class Autografs:
             Custom SBUs with the same name as defaults will override them.
         """
         t0 = time.time()
-        default_path = os.path.join(autografs.data.__path__[0], "defaults.xyz")
-        sbu = autografs.utils.xyz_to_sbu(default_path)
+        default_path = Path(autografs.data.__path__[0]) / "defaults.xyz"
+        sbu = autografs.utils.xyz_to_sbu(str(default_path))
         logger.info(
             f"\t[x] loaded {len(sbu)} default building units in {time.time() - t0:.0f} seconds."
         )
@@ -335,7 +341,7 @@ class Autografs:
         """
         t0 = time.time()
         if topofile is None:
-            topofile = os.path.join(autografs.data.__path__[0], "topologies.pkl")
+            topofile = Path(autografs.data.__path__[0]) / "topologies.pkl"
         with open(topofile, "rb") as topo:
             topologies = dill.load(topo)
         logger.info(
@@ -493,7 +499,9 @@ class Autografs:
             all_aligned_fragments.append(aligned_fragment)
             denominator = len(slot.atoms) * len(topology.mappings[slot])
             if denominator == 0:
-                logger.warning(f"Empty slot encountered at index {slot_index}, skipping score calculation")
+                logger.warning(
+                    f"Empty slot encountered at index {slot_index}, skipping score calculation"
+                )
                 continue
             score = slot_weight * rmse / denominator
             sum_rmse += score
