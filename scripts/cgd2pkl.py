@@ -236,16 +236,10 @@ def analyze(
         if arm < 1e-6:
             raise TopologyExtractionError("Degenerate fragment geometry.")
         normalized = Molecule(["He"] * len(fragment), centered / arm)
+        # the point group is metadata only: slot/SBU compatibility is
+        # geometric (directional matching), so low-symmetry (C1)
+        # vertices are perfectly usable and no longer reject the net
         pg = PointGroupAnalyzer(normalized, tolerance=0.1)
-        # C1 on a high-connectivity vertex means either broken geometry
-        # or a slot no symbol-matched SBU could ever fill; reject the
-        # net. Fragments with <= 3 dummies are exempt: compatibility
-        # ignores their point group entirely, so a twisted edge or
-        # 3-c vertex is perfectly usable.
-        if pg.sch_symbol == "C1" and len(fragment_sites) > 3:
-            raise TopologyExtractionError(
-                f"No symmetry detected (C1) in {len(fragment_sites)}-c fragment."
-            )
         fragments.append(Fragment(atoms=fragment, symmetry=pg, name="slot"))
     return fragments
 

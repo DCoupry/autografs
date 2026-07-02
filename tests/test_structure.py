@@ -267,6 +267,59 @@ class TestFragmentSymmetryCompatibility:
         assert not frag_sq.has_compatible_symmetry(frag_td)
         assert not frag_td.has_compatible_symmetry(frag_sq)
 
+    def test_near_symmetric_fragment_accepted(self):
+        """A slightly distorted square fits a square slot.
+
+        The old Schoenflies-symbol gate rejected this: the distorted
+        SBU's detected point group differs from D4h, and symbol
+        equality was the only path to compatibility for >3 dummies.
+        Geometric matching sees the small directional mismatch.
+        """
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        distorted = [[1, 0.06, 0], [-0.05, 1, 0.04], [-1, 0.02, 0], [0.03, -1, 0]]
+        frag_sq = self._fragment_from_dummy_coords(square, "square")
+        frag_dist = self._fragment_from_dummy_coords(distorted, "distorted")
+        assert frag_sq.pointgroup != frag_dist.pointgroup  # symbols differ
+        assert frag_sq.has_compatible_symmetry(frag_dist)
+
+    def test_low_symmetry_fragment_matches_itself(self):
+        """A C1 star is compatible with an identical (rotated) star.
+
+        Under symbol matching, C1 slots could never be filled; this is
+        what makes low-symmetry RCSR vertices usable.
+        """
+        import math
+
+        chiral = [
+            [1.0, 0.1, 0.3],
+            [-0.9, 1.1, -0.2],
+            [0.2, -1.0, 1.4],
+            [0.5, 0.7, -1.2],
+        ]
+        frag_a = self._fragment_from_dummy_coords(chiral, "c1_a")
+        theta = math.radians(40.0)
+        rot = [
+            [math.cos(theta), -math.sin(theta), 0.0],
+            [math.sin(theta), math.cos(theta), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        rotated = [
+            [sum(rot[r][c] * v[c] for c in range(3)) for r in range(3)]
+            for v in chiral
+        ]
+        frag_b = self._fragment_from_dummy_coords(rotated, "c1_b")
+        assert frag_a.has_compatible_symmetry(frag_b)
+
+    def test_explicit_threshold_is_respected(self):
+        """A tighter max_rmsd rejects marginal shapes the default allows."""
+        trigonal = [[1, 0, 0], [-0.5, 0.866, 0], [-0.5, -0.866, 0]]
+        t_shape = [[1.5, 0, 0], [-1.5, 0, 0], [0, 1.5, 0]]
+        frag_tri = self._fragment_from_dummy_coords(trigonal, "trigonal")
+        frag_t = self._fragment_from_dummy_coords(t_shape, "t_shape")
+        # T-vs-trigonal scores ~0.17: allowed by the permissive default
+        assert frag_tri.has_compatible_symmetry(frag_t)
+        assert not frag_tri.has_compatible_symmetry(frag_t, max_rmsd=0.1)
+
 
 class TestFragmentLazySymmetry:
     """Fragment can be built without a precomputed PointGroupAnalyzer."""

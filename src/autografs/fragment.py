@@ -39,6 +39,32 @@ logger = logging.getLogger(__name__)
 # Tolerance for point group symmetry detection on dummy arrangements
 SYMMETRY_TOLERANCE = 0.1
 
+# Default directional-RMSD threshold for slot/SBU compatibility.
+# Deliberately permissive: the sieve lists what is worth attempting,
+# and build(max_rmsd=...) is the strict acceptance gate. 0.25 accepts
+# mildly distorted stars (e.g. slightly pyramidalized trigonal
+# linkers) and rejects genuinely different vertex figures (square vs
+# tetrahedral scores ~0.6).
+COMPATIBILITY_MAX_RMSD = 0.25
+
+
+@functools.lru_cache(maxsize=None)
+def _match_rmsd_cached(this_bytes: bytes, that_bytes: bytes, size: int) -> float:
+    """Memoized directional match RMSD between two arm-unit sets.
+
+    Keyed on rounded coordinate bytes: the same star shapes recur
+    across the topology library (every Oh 6-c vertex, every linear
+    edge...), so the full matcher runs once per distinct shape pair.
+    """
+    # local import: alignment imports Fragment for construction, so
+    # fragment cannot import it at module level
+    from autografs.alignment import match_directions
+
+    this_units = np.frombuffer(this_bytes, dtype=float).reshape(size, 3)
+    that_units = np.frombuffer(that_bytes, dtype=float).reshape(size, 3)
+    _, _, rmsd = match_directions(this_units, that_units)
+    return rmsd
+
 
 def analyze_dummy_pointgroup(
     atoms: Molecule, tolerance: float = SYMMETRY_TOLERANCE
@@ -213,45 +239,83 @@ class Fragment:
             return 0.0
         return float(pdist(dummies).max())
 
-    def has_compatible_symmetry(self, other: Fragment) -> bool:
+    @functools.cached_property
+    def arm_units(self) -> np.ndarray:
+        """Unit vectors from the dummy centroid to each dummy.
+
+        These directions are the geometric identity of the fragment's
+        connectivity; compatibility and alignment both work on them.
         """
-        Checks whether another fragment can occupy this fragment's position,
-        based on dummy count and the point group of the dummy arrangement.
+        dummy_idx = list(self.atoms.indices_from_symbol("X"))
+        dummies = self.atoms.cart_coords[dummy_idx]
+        arms = dummies - dummies.mean(axis=0)
+        norms = np.linalg.norm(arms, axis=1, keepdims=True)
+        norms[norms < 1e-12] = 1.0
+        return arms / norms
 
-        Compatibility requires an equal number of dummies. Fragments with
-        three or fewer dummies are then always considered compatible;
-        larger ones must share the same Schoenflies symbol.
+    @functools.cached_property
+    def _shape_signature(self) -> np.ndarray:
+        """Sorted pairwise dots of arm units: rotation and permutation
+        invariant, used to reject mismatched shapes cheaply."""
+        units = self.arm_units
+        i, j = np.triu_indices(len(units), k=1)
+        return np.sort(np.einsum("ij,ij->i", units[i], units[j]))
 
-        Notes
-        -----
-        A true subgroup test (e.g. a square SBU fitting a rectangular slot)
-        is not implemented: an earlier version called
-        ``PointGroupAnalyzer.is_subgroup``, which does not exist in pymatgen,
-        so only exact symbol matches ever passed. Geometric (RMSD-based)
-        matching is planned to replace this gate entirely; see v3_plan §3.1.
+    def has_compatible_symmetry(
+        self, other: Fragment, max_rmsd: float = COMPATIBILITY_MAX_RMSD
+    ) -> bool:
+        """
+        Checks whether another fragment can occupy this fragment's
+        position, by geometrically matching the two sets of unit arm
+        vectors (see autografs.alignment.match_directions).
+
+        Compatibility requires an equal number of dummies; fragments
+        with one or two dummies are then always compatible (two arms
+        seen from their own centroid are always antiparallel). Larger
+        fragments are compatible when their arm directions match under
+        some proper rotation to within max_rmsd. Point group symbols
+        are no longer consulted: they over-rejected near-symmetric
+        SBUs, under-rejected same-symbol shape mismatches, and made
+        low-symmetry (C1) vertices unusable.
 
         Parameters
         ----------
         other : Fragment
             The fragment being compared
+        max_rmsd : float, optional
+            Directional RMSD threshold (dimensionless; 0 = identical
+            shapes). The default is permissive - the sieve lists what
+            is worth trying; build(max_rmsd=...) is the strict gate.
 
         Returns
         -------
         bool
             True if other is considered compatible with self
         """
-        this_size = len(self.atoms.indices_from_symbol("X"))
-        that_size = len(other.atoms.indices_from_symbol("X"))
-        if this_size != that_size:
+        this_units = self.arm_units
+        that_units = other.arm_units
+        if len(this_units) != len(that_units):
             return False
-        if this_size <= 3:
+        if len(this_units) <= 2:
             return True
-        return self.pointgroup == other.pointgroup
+        # cheap rotation/permutation-invariant prefilter: grossly
+        # different pairwise-angle multisets cannot match
+        gap = float(
+            np.abs(self._shape_signature - other._shape_signature).max()
+        )
+        if gap > 4.0 * max_rmsd:
+            return False
+        return _match_rmsd_cached(
+            np.round(this_units, 6).tobytes(),
+            np.round(that_units, 6).tobytes(),
+            len(this_units),
+        ) <= max_rmsd
 
-    def _clear_max_dummy_distance_cache(self) -> None:
-        """Clear the cached max_dummy_distance value."""
-        if "max_dummy_distance" in self.__dict__:
-            del self.__dict__["max_dummy_distance"]
+    def _clear_geometry_caches(self) -> None:
+        """Clear cached geometry after coordinates change."""
+        for name in ("max_dummy_distance", "arm_units", "_shape_signature"):
+            if name in self.__dict__:
+                del self.__dict__[name]
 
     def rotate(self, theta: float) -> None:
         """
@@ -272,8 +336,7 @@ class Fragment:
             self.atoms.rotate_sites(
                 indices=sites, theta=theta, axis=axis, anchor=anchor
             )
-            # Clear cached max_dummy_distance since coordinates have changed
-            self._clear_max_dummy_distance_cache()
+            self._clear_geometry_caches()
         return None
 
     def flip(self) -> None:
@@ -303,7 +366,7 @@ class Fragment:
                     new_coords,
                     site_properties=self.atoms.site_properties,
                 )
-                self._clear_max_dummy_distance_cache()
+                self._clear_geometry_caches()
                 return
         raise ValueError("No reflection plane found in symmetry operations")
 
@@ -330,4 +393,5 @@ class Fragment:
             if index < idx:
                 idx -= 1
             self.atoms[idx].species = "X"
+        self._clear_geometry_caches()
         return None
