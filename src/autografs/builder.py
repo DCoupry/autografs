@@ -36,6 +36,7 @@ from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
 import autografs.data
+import autografs.topology_io
 import autografs.utils
 from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
@@ -378,22 +379,38 @@ class Autografs:
         return None
 
     def _setup_topologies(self, topofile: str | None = None) -> None:
-        """Load topologies from a pickle file.
+        """Load topologies from a serialized library file.
 
-        Loads topology blueprints from a serialized pickle file containing
-        pre-processed RCSR or custom topologies.
+        Loads topology blueprints from a JSON library (see
+        autografs.topology_io) or, for backward compatibility, from a
+        legacy dill pickle.
 
         Parameters
         ----------
         topofile : str or None, optional
-            Path to a pickle file containing topologies.
-            If None, loads from the default package data location.
+            Path to a topology library (.json / .json.gz / legacy .pkl).
+            If None, loads from the default package data location,
+            preferring the JSON library when present.
         """
         t0 = time.time()
         if topofile is None:
-            topofile = Path(autografs.data.__path__[0]) / "topologies.pkl"
-        with open(topofile, "rb") as topo:
-            topologies = dill.load(topo)
+            data_dir = Path(autografs.data.__path__[0])
+            json_default = data_dir / "topologies.json.gz"
+            if json_default.exists():
+                topofile = json_default
+            else:
+                topofile = data_dir / "topologies.pkl"
+        topofile = Path(topofile)
+        if topofile.name.endswith((".json", ".json.gz")):
+            topologies = autografs.topology_io.load_topologies(topofile)
+        else:
+            logger.warning(
+                "Loading topologies from a pickle file. Pickles can execute "
+                "arbitrary code and break across pymatgen versions; convert "
+                "to JSON with autografs.topology_io.save_topologies."
+            )
+            with open(topofile, "rb") as topo:
+                topologies = dill.load(topo)
         logger.info(
             f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."
         )

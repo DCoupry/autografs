@@ -54,6 +54,7 @@ __all__ = [
     "utils",
     "fragment",
     "topology",
+    "topology_io",
     "builder",
     "exceptions",
     "Autografs",
