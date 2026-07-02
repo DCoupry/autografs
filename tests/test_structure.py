@@ -243,6 +243,30 @@ class TestFragmentSymmetryCompatibility:
 
         assert frag1.has_compatible_symmetry(frag2)
 
+    @staticmethod
+    def _fragment_from_dummy_coords(coords, name):
+        """Build a Fragment with a C center and dummies at coords."""
+        mol = Molecule(["C"] + ["X"] * len(coords), [[0, 0, 0]] + coords)
+        symm_mol = Molecule(["H"] * len(coords), coords, charge=len(coords))
+        pg = PointGroupAnalyzer(symm_mol, tolerance=0.1)
+        return Fragment(atoms=mol, symmetry=pg, name=name)
+
+    def test_large_fragments_same_pointgroup_compatible(self):
+        """Two square-planar (D4h) 4-dummy fragments are compatible."""
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        frag1 = self._fragment_from_dummy_coords(square, "square1")
+        frag2 = self._fragment_from_dummy_coords(square, "square2")
+        assert frag1.has_compatible_symmetry(frag2)
+
+    def test_large_fragments_different_pointgroup_incompatible(self):
+        """Square-planar (D4h) and tetrahedral (Td) 4-dummy fragments differ."""
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        tetra = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]
+        frag_sq = self._fragment_from_dummy_coords(square, "square")
+        frag_td = self._fragment_from_dummy_coords(tetra, "tetra")
+        assert not frag_sq.has_compatible_symmetry(frag_td)
+        assert not frag_td.has_compatible_symmetry(frag_sq)
+
 
 class TestFragmentRotate:
     """Test Fragment.rotate method."""

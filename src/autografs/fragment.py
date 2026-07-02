@@ -149,11 +149,20 @@ class Fragment:
 
     def has_compatible_symmetry(self, other: Fragment) -> bool:
         """
-        Verifies that the symmetry elements of another fragment are part of
-        the symmetry elements of the present one. This is the only condition
-        for compatibility in Autografs, and is sufficient to ensure:
-            * the equality of connectivity
-            * that square fragments are compatible with rectangular slots...
+        Checks whether another fragment can occupy this fragment's position,
+        based on dummy count and the point group of the dummy arrangement.
+
+        Compatibility requires an equal number of dummies. Fragments with
+        three or fewer dummies are then always considered compatible;
+        larger ones must share the same Schoenflies symbol.
+
+        Notes
+        -----
+        A true subgroup test (e.g. a square SBU fitting a rectangular slot)
+        is not implemented: an earlier version called
+        ``PointGroupAnalyzer.is_subgroup``, which does not exist in pymatgen,
+        so only exact symbol matches ever passed. Geometric (RMSD-based)
+        matching is planned to replace this gate entirely; see v3_plan §3.1.
 
         Parameters
         ----------
@@ -163,20 +172,15 @@ class Fragment:
         Returns
         -------
         bool
-            True, if all symmmetries of self are present in other
+            True if other is considered compatible with self
         """
-        try:
-            this_size = len(self.extract_dummies())
-            that_size = len(other.extract_dummies())
-            if not this_size == that_size:
-                return False
-            elif this_size <= 3:
-                return True
-            if self.symmetry.sch_symbol == other.symmetry.sch_symbol:
-                return True
-            return self.symmetry.is_subgroup(other.symmetry)
-        except Exception:
+        this_size = len(self.atoms.indices_from_symbol("X"))
+        that_size = len(other.atoms.indices_from_symbol("X"))
+        if this_size != that_size:
             return False
+        if this_size <= 3:
+            return True
+        return self.symmetry.sch_symbol == other.symmetry.sch_symbol
 
     def _clear_max_dummy_distance_cache(self) -> None:
         """Clear the cached max_dummy_distance value."""
