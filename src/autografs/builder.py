@@ -240,21 +240,22 @@ class Autografs:
             if verbose:
                 logger.info("\t[x] No cell refinement performed.")
             best_scales = x0
-        best_alignment, _ = self._align_all_mappings(topology, mappings, best_scales)
+        # align on a copy: scaling must not mutate the caller's topology
+        final_topology = topology.copy()
+        best_alignment, _ = self._align_all_mappings(
+            final_topology, mappings, best_scales
+        )
         if verbose:
             logger.info("\t[x] Best cell parameters:")
             logger.info(f"\t\ta = {best_scales[0]:<.1f}")
             logger.info(f"\t\tb = {best_scales[1]:<.1f}")
             logger.info(f"\t\tc = {best_scales[2]:<.1f}")
             logger.info(
-                f"\t[x] Aligned {len(topology.slots)} fragments in {time.time() - t0:.1f} seconds"
+                f"\t[x] Aligned {len(final_topology.slots)} fragments in {time.time() - t0:.1f} seconds"
             )
         graph = autografs.utils.fragments_to_networkx(
-            best_alignment, cell=topology.cell.matrix
+            best_alignment, cell=final_topology.cell.matrix
         )
-        # except Exception as e:
-        # logger.debug(e)
-        # graph = None
         return graph
 
     def _validate_mappings(
@@ -275,28 +276,34 @@ class Autografs:
         Returns
         -------
         dict[int, Fragment]
-            Normalized mappings from slot indices to Fragment objects.
+            Normalized mappings from slot indices to private Fragment
+            copies. Neither the input dict nor the library fragments
+            are aliased: alignment mutates fragments in place, and
+            shared references would corrupt the SBU library.
 
         Raises
         ------
         ValueError
-            If any required slot is not present in the mappings.
+            If any topology slot is left uncovered by the mappings.
         """
-        for k in topology.mappings.keys():
-            if k not in mappings:
-                raise ValueError(f"Unfilled {k} slot in mappings.")
-        #  make sure all strings are converted to the correct fragment
+
+        def to_fragment(value: Fragment | str) -> Fragment:
+            return self.sbu[value] if isinstance(value, str) else value
+
+        # slot-type keys first, so that index keys override them
+        true_mappings: dict[int, Fragment] = {}
         for k, v in mappings.items():
-            if isinstance(v, str):
-                mappings[k] = self.sbu[v]
-        #  now check and convert all keys to the slot indices
-        true_mappings = {}
+            if not isinstance(k, int):
+                fragment = to_fragment(v)
+                for i in topology.mappings[k]:
+                    true_mappings[i] = fragment.copy()
         for k, v in mappings.items():
             if isinstance(k, int):
-                true_mappings[k] = v
-            else:
-                for i in topology.mappings[k]:
-                    true_mappings[i] = copy.deepcopy(v)
+                true_mappings[k] = to_fragment(v).copy()
+        all_indices = set(itertools.chain(*topology.mappings.values()))
+        missing = all_indices - true_mappings.keys()
+        if missing:
+            raise ValueError(f"Unfilled slots in mappings: {sorted(missing)}")
         return true_mappings
 
     def _setup_sbu(self, xyzfile: str | None = None) -> None:
@@ -546,7 +553,11 @@ class Autografs:
         m1.replace_species({"X": "H"})
         _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
         new_coords = fragment.atoms.cart_coords.dot(U) + V
-        fragment.atoms = Molecule(fragment.atoms.species, coords=new_coords)
+        fragment.atoms = Molecule(
+            fragment.atoms.species,
+            coords=new_coords,
+            site_properties=fragment.atoms.site_properties,
+        )
         fragment_tags = np.array(
             [
                 -1,

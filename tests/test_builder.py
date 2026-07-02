@@ -272,6 +272,70 @@ class TestListTopologiesFiltering:
             synthetic_mofgen.list_topologies(subset=["no_such_net"])
 
 
+class TestBuildIsolation:
+    """build() must not mutate its inputs or the SBU library."""
+
+    def test_build_with_int_keys_does_not_mutate_library(self, synthetic_mofgen):
+        """Regression: int-keyed mappings aliased the library fragment,
+        and alignment then rotated/translated the library copy in place."""
+        ref_coords = synthetic_mofgen.sbu["lin_sbu"].atoms.cart_coords.copy()
+        topo = synthetic_mofgen.topologies["linear_topo"]
+
+        graph = synthetic_mofgen.build(
+            topo, mappings={0: "lin_sbu", 1: "lin_sbu"}, refine_cell=False
+        )
+
+        assert graph is not None
+        np.testing.assert_array_almost_equal(
+            synthetic_mofgen.sbu["lin_sbu"].atoms.cart_coords, ref_coords
+        )
+
+    def test_build_does_not_mutate_topology(self, synthetic_mofgen):
+        """Regression: the final alignment scaled the caller's topology
+        (cell and slot coordinates) in place."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        ref_cell = topo.cell.matrix.copy()
+        ref_slot_coords = topo.slots[0].atoms.cart_coords.copy()
+
+        synthetic_mofgen.build(
+            topo, mappings={0: "lin_sbu", 1: "lin_sbu"}, refine_cell=False
+        )
+
+        np.testing.assert_array_almost_equal(topo.cell.matrix, ref_cell)
+        np.testing.assert_array_almost_equal(
+            topo.slots[0].atoms.cart_coords, ref_slot_coords
+        )
+
+    def test_build_does_not_mutate_input_mappings(self, synthetic_mofgen):
+        """Regression: _validate_mappings rewrote string values to
+        Fragment objects inside the caller's dict."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        mappings = {0: "lin_sbu", 1: "lin_sbu"}
+
+        synthetic_mofgen.build(topo, mappings=mappings, refine_cell=False)
+
+        assert mappings == {0: "lin_sbu", 1: "lin_sbu"}
+
+    def test_int_keyed_mappings_accepted(self, synthetic_mofgen):
+        """Regression: the unfilled-slot check compared slot-type
+        Fragment keys against the mapping keys, so mappings keyed purely
+        by slot index were always rejected as unfilled."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        validated = synthetic_mofgen._validate_mappings(
+            topology=topo, mappings={0: "lin_sbu", 1: "lin_sbu"}
+        )
+        assert sorted(validated.keys()) == [0, 1]
+
+    def test_unfilled_slots_raise(self, synthetic_mofgen):
+        """Partially covered topologies are rejected with the missing
+        slot indices named."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        with pytest.raises(ValueError, match=r"Unfilled slots.*\[1\]"):
+            synthetic_mofgen._validate_mappings(
+                topology=topo, mappings={0: "lin_sbu"}
+            )
+
+
 # =============================================================================
 # list_building_units Tests
 # =============================================================================
