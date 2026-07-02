@@ -379,20 +379,29 @@ class Autografs:
         >>> all_topos = mofgen.list_topologies()
         >>> compatible = mofgen.list_topologies(sieve="Benzene_linear")
         """
-        full_list = sorted(self.topologies.keys())
         if subset is not None:
-            full_list = subset
+            unknown = set(subset) - self.topologies.keys()
+            if unknown:
+                raise ValueError(f"Unknown topologies in subset: {sorted(unknown)}")
+            full_list = sorted(subset)
+        else:
+            full_list = sorted(self.topologies.keys())
         if sieve is not None:
-            sieve = self.sbu[sieve]
+            candidate = self.sbu[sieve]
             if verbose:
                 logger.info(
-                    f"filtering topologies for compatibility with {sieve} building unit..."
+                    f"filtering topologies for compatibility with {candidate} building unit..."
                 )
-            for topology in self.topologies.values():
-                if topology.get_compatible_slots(candidate=sieve):
-                    continue
-                else:
-                    full_list.remove(topology.name)
+            full_list = [
+                name
+                for name in full_list
+                if any(
+                    indices
+                    for indices in self.topologies[name]
+                    .get_compatible_slots(candidate=candidate)
+                    .values()
+                )
+            ]
         if verbose:
             logger.info(f"\t[x] {len(full_list):>5} topologies available.")
         return full_list

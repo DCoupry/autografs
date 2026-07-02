@@ -97,6 +97,38 @@ def simple_topology(linear_fragment):
     return Topology(name="test_topo", slots=[frag1, frag2], cell=cell)
 
 
+@pytest.fixture
+def synthetic_mofgen(linear_fragment, trigonal_fragment):
+    """Autografs instance with synthetic libraries; needs no data files."""
+    from pymatgen.core.lattice import Lattice
+
+    from autografs.builder import Autografs
+
+    lin = linear_fragment.copy()
+    lin.atoms.add_site_property("tags", [0, 1, 2, 0, 0])
+    tri = trigonal_fragment.copy()
+    tri.atoms.add_site_property("tags", [0, 1, 2, 3])
+
+    mofgen = Autografs.__new__(Autografs)
+    mofgen.topologies = {
+        "linear_topo": Topology(
+            name="linear_topo",
+            slots=[lin.copy(), lin.copy()],
+            cell=Lattice.cubic(10.0),
+        ),
+        "trigonal_topo": Topology(
+            name="trigonal_topo",
+            slots=[tri.copy(), tri.copy()],
+            cell=Lattice.cubic(10.0),
+        ),
+    }
+    mofgen.sbu = {
+        "lin_sbu": linear_fragment.copy(),
+        "tri_sbu": trigonal_fragment.copy(),
+    }
+    return mofgen
+
+
 # =============================================================================
 # Import Tests
 # =============================================================================
@@ -201,6 +233,43 @@ class TestListTopologies:
         subset = all_topos[:3] if len(all_topos) >= 3 else all_topos
         result = mofgen.list_topologies(subset=subset)
         assert result == subset
+
+
+class TestListTopologiesFiltering:
+    """Filtering behavior of list_topologies, on synthetic libraries."""
+
+    def test_sieve_filters_incompatible(self, synthetic_mofgen):
+        """Incompatible topologies are removed by the sieve.
+
+        Regression: the old truthiness check on get_compatible_slots
+        (a dict with one key per slot type, values possibly empty) was
+        always true, so the sieve never filtered anything.
+        """
+        assert synthetic_mofgen.list_topologies(sieve="lin_sbu") == ["linear_topo"]
+        assert synthetic_mofgen.list_topologies(sieve="tri_sbu") == ["trigonal_topo"]
+
+    def test_sieve_with_subset(self, synthetic_mofgen):
+        """Sieve and subset combine without crashing.
+
+        Regression: filtering used to call full_list.remove() for every
+        incompatible topology, raising ValueError as soon as one was
+        outside the subset.
+        """
+        result = synthetic_mofgen.list_topologies(
+            sieve="lin_sbu", subset=["linear_topo"]
+        )
+        assert result == ["linear_topo"]
+
+    def test_subset_not_mutated(self, synthetic_mofgen):
+        """The caller's subset list is left untouched."""
+        subset = ["trigonal_topo", "linear_topo"]
+        synthetic_mofgen.list_topologies(sieve="lin_sbu", subset=subset)
+        assert subset == ["trigonal_topo", "linear_topo"]
+
+    def test_unknown_subset_raises(self, synthetic_mofgen):
+        """Unknown topology names in subset fail loudly."""
+        with pytest.raises(ValueError, match="Unknown topologies"):
+            synthetic_mofgen.list_topologies(subset=["no_such_net"])
 
 
 # =============================================================================
