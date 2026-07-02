@@ -204,16 +204,17 @@ class TestXyzToSbu:
 class TestLoadUffLib:
     """Test load_uff_lib function."""
 
-    def test_returns_dataframe_and_list(self, temp_xyz_file):
+    def test_returns_entries_and_list(self, temp_xyz_file):
         """Test that function returns correct types."""
         from pymatgen.core.structure import Molecule
+
+        from autografs.data.uff4mof import UFFType
 
         mol = Molecule(["C", "H", "H"], [[0, 0, 0], [1, 0, 0], [0, 1, 0]])
         uff_lib, uff_symbs = utils.load_uff_lib(mol)
 
-        import pandas
-
-        assert isinstance(uff_lib, pandas.DataFrame)
+        assert all(isinstance(entry, UFFType) for entry in uff_lib)
+        assert {entry.symbol[:2] for entry in uff_lib} == {"C_", "H_"}
         assert isinstance(uff_symbs, list)
         assert len(uff_symbs) == len(mol)
 

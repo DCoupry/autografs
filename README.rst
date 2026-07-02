@@ -50,7 +50,7 @@ Requirements
 ------------
 
 - Python >= 3.13
-- ase, scipy, numpy, networkx, pandas, pymatgen, dill
+- ase, scipy, numpy, networkx, pymatgen, dill
 
 Examples
 --------

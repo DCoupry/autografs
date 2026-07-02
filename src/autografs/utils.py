@@ -41,7 +41,6 @@ from pathlib import Path
 
 import networkx
 import numpy as np
-import pandas
 from pymatgen.analysis.graphs import MoleculeGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_order
@@ -49,6 +48,7 @@ from pymatgen.core.structure import Molecule
 from pymatgen.io.xyz import XYZ
 
 import autografs.data
+from autografs.data.uff4mof import UFF4MOF, UFFType
 from autografs.fragment import Fragment, analyze_dummy_pointgroup
 
 
@@ -170,20 +170,13 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     return sbu
 
 
-@functools.lru_cache(maxsize=1)
-def _load_uff_full_library() -> pandas.DataFrame:
-    """Load and cache the full UFF4MOF library.
-
-    Returns
-    -------
-    pandas.DataFrame
-        The complete UFF4MOF parameter library.
-    """
-    path = Path(autografs.data.__path__[0]) / "uff4mof.csv"
-    return pandas.read_csv(path)
+@functools.lru_cache(maxsize=None)
+def _uff_types_for_prefix(prefix: str) -> tuple[UFFType, ...]:
+    """All UFF4MOF types whose symbol starts with the element prefix."""
+    return tuple(t for t in UFF4MOF if t.symbol.startswith(prefix))
 
 
-def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
+def load_uff_lib(mol: Molecule) -> tuple[tuple[UFFType, ...], list[str]]:
     """Load UFF force field parameters relevant to a molecule.
 
     Extracts UFF4MOF parameters for elements present in the molecule,
@@ -196,23 +189,24 @@ def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
 
     Returns
     -------
-    tuple[pandas.DataFrame, list[str]]
+    tuple[tuple[UFFType, ...], list[str]]
         A tuple containing:
-        - DataFrame with UFF parameters for relevant elements.
+        - UFF parameter entries for the relevant elements.
         - List of UFF symbol prefixes for each atom in the molecule.
     """
     uff_symbs = [
         s.symbol if len(s.symbol) == 2 else f"{s.symbol}_" for s in mol.species
     ]
-    full_lib = _load_uff_full_library()
-    uff_lib = pandas.concat(
-        [full_lib[full_lib.symbol.str.startswith(s)] for s in set(uff_symbs)]
+    uff_lib = tuple(
+        entry
+        for prefix in sorted(set(uff_symbs))
+        for entry in _uff_types_for_prefix(prefix)
     )
     return uff_lib, uff_symbs
 
 
 def find_element_cutoffs(
-    uff_lib: pandas.DataFrame, uff_symbs: list[str]
+    uff_lib: tuple[UFFType, ...], uff_symbs: list[str]
 ) -> dict[tuple[str, str], float]:
     """Calculate bond distance cutoffs from UFF atomic radii.
 
@@ -221,8 +215,8 @@ def find_element_cutoffs(
 
     Parameters
     ----------
-    uff_lib : pandas.DataFrame
-        DataFrame containing UFF parameters including radii.
+    uff_lib : tuple[UFFType, ...]
+        UFF parameter entries including radii.
     uff_symbs : list[str]
         List of UFF symbol prefixes for atoms in the molecule.
 
@@ -237,19 +231,19 @@ def find_element_cutoffs(
     >>> cutoffs = find_element_cutoffs(uff_lib, uff_symbs)
     >>> print(cutoffs[("C", "N")])  # Bond cutoff for C-N
     """
-    radii = uff_lib[["symbol", "radius"]].copy()
-    radii["symbol"] = radii["symbol"].str[:2]
-    radii = radii.groupby("symbol").max()
+    # largest radius among each element's UFF types
+    max_radius: dict[str, float] = {}
+    for entry in uff_lib:
+        prefix = entry.symbol[:2]
+        max_radius[prefix] = max(max_radius.get(prefix, 0.0), entry.radius)
     cuts = {}
     for e0, e1 in itertools.product(uff_symbs, uff_symbs):
-        r0 = radii.loc[e0, "radius"]
-        r1 = radii.loc[e1, "radius"]
-        cuts[(e0.strip("_"), e1.strip("_"))] = r0 + r1
+        cuts[(e0.strip("_"), e1.strip("_"))] = max_radius[e0] + max_radius[e1]
     return cuts
 
 
 def find_mmtypes(
-    molgraph: MoleculeGraph, uff_lib: pandas.DataFrame, uff_symbs: list[str]
+    molgraph: MoleculeGraph, uff_lib: tuple[UFFType, ...], uff_symbs: list[str]
 ) -> list[str]:
     """Determine UFF atom types from molecular connectivity.
 
@@ -260,8 +254,8 @@ def find_mmtypes(
     ----------
     molgraph : MoleculeGraph
         A pymatgen MoleculeGraph with connectivity information.
-    uff_lib : pandas.DataFrame
-        DataFrame containing UFF parameters.
+    uff_lib : tuple[UFFType, ...]
+        UFF parameter entries to choose from.
     uff_symbs : list[str]
         List of UFF symbol prefixes for atoms in the molecule.
 
@@ -274,9 +268,9 @@ def find_mmtypes(
     for i, symb in enumerate(uff_symbs):
         conn = molgraph.get_connected_sites(i)
         ncoord = len(conn)
-        atom_compat = uff_lib[uff_lib.symbol.str.startswith(symb)]
+        atom_compat = [t for t in uff_lib if t.symbol.startswith(symb)]
         if len(atom_compat) == 1:
-            mmtypes.append(atom_compat.symbol.values[0])
+            mmtypes.append(atom_compat[0].symbol)
             continue
         if ncoord >= 2:
             c0 = molgraph.molecule.sites[i].coords
@@ -293,16 +287,16 @@ def find_mmtypes(
             angle = np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
         else:
             angle = 180.0
-        coordinations_compat = atom_compat[atom_compat.coordination == ncoord]
+        coordinations_compat = [t for t in atom_compat if t.coordination == ncoord]
         if len(coordinations_compat) == 1:
-            mmtypes.append(coordinations_compat.symbol.values[0])
+            mmtypes.append(coordinations_compat[0].symbol)
             continue
-        elif len(coordinations_compat) == 0:
+        if not coordinations_compat:
             # problem with the coordinations. use angles
             coordinations_compat = atom_compat
-        angle_diff = (coordinations_compat.angle - angle).abs()
         # TODO: if < 10% diff in angle error, use radii error
-        mmtypes.append(coordinations_compat.loc[angle_diff.idxmin(), "symbol"])
+        best = min(coordinations_compat, key=lambda t: abs(t.angle - angle))
+        mmtypes.append(best.symbol)
     return mmtypes
 
 

@@ -30,7 +30,6 @@ Requirements
 - scipy >= 1.7.0
 - numpy >= 1.20.0
 - networkx >= 2.6.0
-- pandas >= 1.3.0
 - pymatgen >= 2022.0.0
 
 Basic Usage

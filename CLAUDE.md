@@ -31,7 +31,7 @@ Four modules in `src/autografs/`:
 - **`fragment.py`** — `Fragment`: a pymatgen `Molecule` plus a `PointGroupAnalyzer`. Connection points are dummy atoms with symbol `"X"`; the symmetry analyzer describes the dummy-atom arrangement only, not the whole molecule. Fragments represent both SBUs and topology slots.
 - **`topology.py`** — `Topology`: a named periodic blueprint = a pymatgen `Lattice` plus an array of `Fragment` slots. `mappings` groups symmetry-equivalent slots so one SBU choice covers all equivalent positions.
 - **`builder.py`** — `Autografs`: the main entry point. Loads the SBU library (from `data/defaults.xyz` or a user XYZ file) and the topology library (from `data/topologies.pkl` via dill). `build(topology, mappings)` aligns each SBU onto its slot (Hungarian matching via pymatgen's `HungarianOrderMatcher`) while optimizing the cell parameters with Nelder-Mead, then returns a `networkx.Graph` of the periodic structure. `build_all()` enumerates every compatible SBU/topology combination.
-- **`utils.py`** — XYZ parsing, UFF atom typing / force-field parameters (from `data/uff4mof.csv` and `data/covalent_radii.csv`), Fragment→MoleculeGraph/networkx conversion, GULP export.
+- **`utils.py`** — XYZ parsing, UFF atom typing / force-field parameters (constants in `data/uff4mof.py`), Fragment→MoleculeGraph/networkx conversion, GULP export.
 
 Pipeline: SBU/topology libraries → shape-compatibility sieve (`list_building_units(sieve=...)`) → slot-to-SBU mapping → cell-scale optimization + per-slot alignment → networkx graph output.
 
