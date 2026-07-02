@@ -79,9 +79,12 @@ class Topology:
         self.slots = np.array(slots, dtype=object)
         sizes = [len(fragment.atoms) for fragment in self.slots]
         self.sizes = np.array(sizes, dtype=np.int32)
-        mappings = {}
-        for slot_type in set(slots):
-            mappings[slot_type] = [i for i, s in enumerate(slots) if s == slot_type]
+        # group equivalent slots, keyed by first occurrence: iterating a
+        # set here would make the key order depend on hash randomization
+        # and vary between processes
+        mappings: dict[Fragment, list[int]] = {}
+        for i, slot_type in enumerate(slots):
+            mappings.setdefault(slot_type, []).append(i)
         self.mappings = mappings
         return None
 

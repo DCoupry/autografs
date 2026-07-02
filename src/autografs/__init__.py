@@ -55,7 +55,10 @@ __all__ = [
     "fragment",
     "topology",
     "builder",
+    "exceptions",
     "Autografs",
+    "AlignmentError",
+    "AutografsError",
     "Fragment",
     "Topology",
 ]
@@ -63,6 +66,7 @@ __all__ = [
 import logging
 
 from autografs.builder import Autografs
+from autografs.exceptions import AlignmentError, AutografsError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 

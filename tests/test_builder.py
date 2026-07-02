@@ -336,6 +336,64 @@ class TestBuildIsolation:
             )
 
 
+class TestBuildDeterminism:
+    """Identical inputs must produce identical structures."""
+
+    @staticmethod
+    def _node_coords(graph):
+        return np.array(
+            [graph.nodes[n]["coord"] for n in sorted(graph.nodes())]
+        )
+
+    def test_build_is_deterministic(self, synthetic_mofgen):
+        """Regression: alignment used unseeded Molecule.perturb, so the
+        same build gave different coordinates on every call."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        mappings = {0: "lin_sbu", 1: "lin_sbu"}
+
+        g1 = synthetic_mofgen.build(topo, mappings=dict(mappings), refine_cell=False)
+        g2 = synthetic_mofgen.build(topo, mappings=dict(mappings), refine_cell=False)
+
+        np.testing.assert_array_almost_equal(
+            self._node_coords(g1), self._node_coords(g2), decimal=10
+        )
+
+
+class TestBuildRmsdGate:
+    """The max_rmsd gate rejects bad alignments loudly."""
+
+    def test_generous_threshold_passes(self, synthetic_mofgen):
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        graph = synthetic_mofgen.build(
+            topo,
+            mappings={0: "lin_sbu", 1: "lin_sbu"},
+            refine_cell=False,
+            max_rmsd=10.0,
+        )
+        assert graph is not None
+
+    def test_tight_threshold_raises(self, synthetic_mofgen):
+        from autografs.exceptions import AlignmentError
+
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        with pytest.raises(AlignmentError, match="max_rmsd"):
+            synthetic_mofgen.build(
+                topo,
+                mappings={0: "lin_sbu", 1: "lin_sbu"},
+                refine_cell=False,
+                max_rmsd=1e-12,
+            )
+
+    def test_default_is_ungated(self, synthetic_mofgen):
+        """max_rmsd=None (default) preserves the old accept-everything
+        behavior."""
+        topo = synthetic_mofgen.topologies["linear_topo"]
+        graph = synthetic_mofgen.build(
+            topo, mappings={0: "lin_sbu", 1: "lin_sbu"}, refine_cell=False
+        )
+        assert graph is not None
+
+
 # =============================================================================
 # list_building_units Tests
 # =============================================================================

@@ -37,6 +37,7 @@ from tqdm.auto import tqdm
 
 import autografs.data
 import autografs.utils
+from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 
@@ -46,6 +47,13 @@ logger = logging.getLogger(__name__)
 NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
 NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
 NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
+
+# Symmetric dummy arrangements make the Hungarian assignment degenerate;
+# a small displacement of every dummy breaks the ties. The displacements
+# come from a fixed-seed generator so that builds are reproducible and
+# the cell optimization objective is noise-free.
+DEGENERACY_BREAK_DISTANCE = 0.01  # Angstrom
+DEGENERACY_BREAK_SEED = 20140925
 
 
 class Autografs:
@@ -120,6 +128,7 @@ class Autografs:
         sbu_subset: list[str] | None = None,
         topology_subset: list[str] | None = None,
         refine_cell: bool = True,
+        max_rmsd: float | None = None,
     ) -> list[networkx.Graph]:
         """
         Builds all available structures based on the SBU and Topologies libraries
@@ -130,6 +139,11 @@ class Autografs:
             The subset of SBU to build on, by default None
         topology_subset : list[str] | None, optional
             the subset of topologies to build on, by default None
+        refine_cell : bool, optional
+            If True, optimizes cell parameters for each build, by default True
+        max_rmsd : float or None, optional
+            Per-slot alignment RMSD gate forwarded to build(); rejected
+            structures are counted as errors, by default None
 
         Returns
         -------
@@ -158,11 +172,16 @@ class Autografs:
             results_graphs = []
             for build_args in tqdm(maps):
                 try:
-                    g = self.build(*build_args, refine_cell=refine_cell, verbose=False)
+                    g = self.build(
+                        *build_args,
+                        refine_cell=refine_cell,
+                        max_rmsd=max_rmsd,
+                        verbose=False,
+                    )
                     results_graphs.append(g)
-                except AssertionError:
-                    # probably an unfilled slot in a topology
-                    # need to be a graceful failure here
+                except (AssertionError, AlignmentError, ValueError):
+                    # expected failures: gated alignments, unfillable
+                    # slots. Anything else is a bug and propagates.
                     continue
             graphs += [g for g in results_graphs if g is not None]
         logger.info(f"\t[x] Generated a total of {len(graphs):^6} periodic graphs.")
@@ -175,6 +194,7 @@ class Autografs:
         mappings: dict[Fragment | int, Fragment | str],
         refine_cell: bool = True,
         verbose: bool = False,
+        max_rmsd: float | None = None,
     ) -> networkx.Graph:
         """
         Generates a graph from a mapping of SBU to topology slots.
@@ -185,13 +205,27 @@ class Autografs:
             the topology to consider
         mappings : dict[Fragment | int, Fragment | str]
             the mappings to go from a slot to a compatible SBU
+        refine_cell : bool, optional
+            If True, optimizes the cell parameters, by default True
         verbose : bool, optional
             If True, will log additional information, by default False
+        max_rmsd : float or None, optional
+            Maximum acceptable per-slot alignment RMSD in Angstrom.
+            If any slot exceeds it, AlignmentError is raised instead of
+            silently returning a distorted structure. None (default)
+            disables the gate.
 
         Returns
         -------
         networkx.Graph
             The connected molecular graph of the constructed structure
+
+        Raises
+        ------
+        AlignmentError
+            If max_rmsd is set and any slot alignment exceeds it.
+        ValueError
+            If the mappings leave topology slots unfilled.
         """
         mappings = self._validate_mappings(topology=topology, mappings=mappings)
         if verbose:
@@ -216,7 +250,7 @@ class Autografs:
             """
             this_topology = topology.copy()
             this_mapping = copy.deepcopy(mappings)
-            _, rmse = self._align_all_mappings(this_topology, this_mapping, scales)
+            _, rmse, _ = self._align_all_mappings(this_topology, this_mapping, scales)
             return rmse
 
         t0 = time.time()
@@ -242,9 +276,18 @@ class Autografs:
             best_scales = x0
         # align on a copy: scaling must not mutate the caller's topology
         final_topology = topology.copy()
-        best_alignment, _ = self._align_all_mappings(
+        best_alignment, _, slot_rmsds = self._align_all_mappings(
             final_topology, mappings, best_scales
         )
+        if max_rmsd is not None:
+            bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
+            if bad_slots:
+                worst = max(bad_slots.values())
+                raise AlignmentError(
+                    f"{len(bad_slots)} of {len(slot_rmsds)} slots exceed "
+                    f"max_rmsd={max_rmsd:.3f} A (worst: {worst:.3f} A) "
+                    f"on topology {topology.name}: {sorted(bad_slots)}"
+                )
         if verbose:
             logger.info("\t[x] Best cell parameters:")
             logger.info(f"\t\ta = {best_scales[0]:<.1f}")
@@ -500,29 +543,34 @@ class Autografs:
 
         Returns
         -------
-        tuple[list[Fragment], float]
+        tuple[list[Fragment], float, dict[int, float]]
             A tuple containing:
             - List of aligned Fragment objects.
             - Total weighted RMSE of the alignment.
+            - Raw per-slot alignment RMSD (Angstrom), keyed by slot index.
         """
         all_aligned_fragments = []
+        slot_rmsds: dict[int, float] = {}
         topology.scale_slots(scales)
         sum_rmse = 0.0
-        for slot_index, this_fragment in mappings.items():
+        # sorted so that float accumulation order does not depend on
+        # dict insertion order
+        for slot_index, this_fragment in sorted(mappings.items()):
             slot = topology.slots[slot_index]
             slot_weight = this_fragment.max_dummy_distance / slot.max_dummy_distance
-            aligned_fragment, rmse = self._align_slot(slot, this_fragment)
+            aligned_fragment, rmsd = self._align_slot(slot, this_fragment)
             all_aligned_fragments.append(aligned_fragment)
+            slot_rmsds[slot_index] = rmsd
             denominator = len(slot.atoms) * len(topology.mappings[slot])
             if denominator == 0:
                 logger.warning(
                     f"Empty slot encountered at index {slot_index}, skipping score calculation"
                 )
                 continue
-            score = slot_weight * rmse / denominator
+            score = slot_weight * rmsd / denominator
             sum_rmse += score
         logger.debug(f"Cell scaled with RMSE = {sum_rmse}")
-        return all_aligned_fragments, sum_rmse
+        return all_aligned_fragments, sum_rmse, slot_rmsds
 
     def _align_slot(self, slot: Fragment, fragment: Fragment) -> tuple[Fragment, float]:
         """Align a single fragment to a topology slot.
@@ -544,13 +592,15 @@ class Autografs:
             - The aligned fragment with updated coordinates and tags.
             - RMSD of the alignment.
         """
-        # m0 = slot.atoms.copy()
-        m0 = slot.extract_dummies()
-        m0.perturb(distance=0.01)
-        m0.replace_species({"X": "H"})
-        m1 = fragment.extract_dummies()
-        m1.perturb(distance=0.01)
-        m1.replace_species({"X": "H"})
+        slot_dummies = slot.extract_dummies()
+        frag_dummies = fragment.extract_dummies()
+        n0, n1 = len(slot_dummies), len(frag_dummies)
+        rng = np.random.default_rng(DEGENERACY_BREAK_SEED)
+        noise = rng.normal(size=(n0 + n1, 3))
+        noise /= np.linalg.norm(noise, axis=1, keepdims=True)
+        noise *= DEGENERACY_BREAK_DISTANCE
+        m0 = Molecule(["H"] * n0, slot_dummies.cart_coords + noise[:n0])
+        m1 = Molecule(["H"] * n1, frag_dummies.cart_coords + noise[n0:])
         _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
         new_coords = fragment.atoms.cart_coords.dot(U) + V
         fragment.atoms = Molecule(
