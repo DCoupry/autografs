@@ -53,8 +53,10 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore")
 
 # Nets with vertices above this connectivity are skipped: some RCSR
-# entries have enormous coordination figures that are not usable as slots.
-MAX_FRAGMENT_SITES = 12
+# entries have enormous coordination figures that are not usable as
+# slots. 24 keeps the highest-connectivity MOF chemistry (e.g. the
+# 24-c rht net); override with --max-connectivity.
+MAX_FRAGMENT_SITES = 24
 
 # Placeholder species for dummies during spglib analysis: dummies have
 # Z=0 which spglib cannot handle, and He is already taken (it encodes
@@ -186,7 +188,11 @@ def topology_from_string(
     return name, topology, spacegroup.int_number
 
 
-def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
+def analyze(
+    topology: Structure,
+    skin: float = 5e-3,
+    max_sites: int = MAX_FRAGMENT_SITES,
+) -> List[Molecule]:
     # containers for the output
     fragments = []
     # we iterate over non-dummies
@@ -211,10 +217,10 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
         fragment_center = topology.sites[not_dummies[center_idx]]
         fragment_sites = topology.get_neighbors(fragment_center, r=cutoff)
         # some topologies in the RCSR have a crazy size: skip them
-        if len(fragment_sites) > MAX_FRAGMENT_SITES:
+        if len(fragment_sites) > max_sites:
             raise TopologyExtractionError(
                 f"Fragment size {len(fragment_sites)} larger than "
-                f"limit of {MAX_FRAGMENT_SITES}."
+                f"limit of {max_sites}."
             )
         # store as molecule to use the point group analysis
         fragment = Molecule.from_sites(
@@ -231,8 +237,15 @@ def analyze(topology: Structure, skin: float = 5e-3) -> List[Molecule]:
             raise TopologyExtractionError("Degenerate fragment geometry.")
         normalized = Molecule(["He"] * len(fragment), centered / arm)
         pg = PointGroupAnalyzer(normalized, tolerance=0.1)
-        if pg.sch_symbol == "C1":
-            raise TopologyExtractionError("No symmetry detected (C1) in fragment.")
+        # C1 on a high-connectivity vertex means either broken geometry
+        # or a slot no symbol-matched SBU could ever fill; reject the
+        # net. Fragments with <= 3 dummies are exempt: compatibility
+        # ignores their point group entirely, so a twisted edge or
+        # 3-c vertex is perfectly usable.
+        if pg.sch_symbol == "C1" and len(fragment_sites) > 3:
+            raise TopologyExtractionError(
+                f"No symmetry detected (C1) in {len(fragment_sites)}-c fragment."
+            )
         fragments.append(Fragment(atoms=fragment, symmetry=pg, name="slot"))
     return fragments
 
@@ -269,7 +282,9 @@ def orbit_equivalence_classes(
     return classes
 
 
-def read_cgd_data(cgd: str) -> Dict[str, Topology]:
+def read_cgd_data(
+    cgd: str, max_sites: int = MAX_FRAGMENT_SITES
+) -> Dict[str, Topology]:
     # the final object is a dictionary of crystal structures
     # in pymatgen format representing net topologies, accessible by name
     topologies = {}
@@ -298,7 +313,7 @@ def read_cgd_data(cgd: str) -> Dict[str, Topology]:
             unknown_symbols.append(name)
             continue
         try:
-            fragments = analyze(struct, skin=5e-3)
+            fragments = analyze(struct, skin=5e-3, max_sites=max_sites)
         except TopologyExtractionError as exc:
             extraction_errors[name] = str(exc)
             continue
@@ -350,6 +365,15 @@ def main(args: argparse.Namespace = None) -> None:
             action="store_true",
             help="Flag to download and use the RCSR nets in addition to the given inputs.",
         )
+        parser.add_argument(
+            "--max-connectivity",
+            type=int,
+            default=MAX_FRAGMENT_SITES,
+            help=(
+                "skip nets whose vertices exceed this connectivity "
+                f"(default {MAX_FRAGMENT_SITES}; the rht net needs 24)."
+            ),
+        )
         args = parser.parse_args()
 
     topologies = {}
@@ -360,12 +384,12 @@ def main(args: argparse.Namespace = None) -> None:
         # cgd string contining all the RCSR nets
         cgd = download_cgd("http://rcsr.anu.edu.au/downloads/RCSRnets-2019-06-01.cgd")
         # converting defaults to autografs topologies
-        topologies.update(read_cgd_data(cgd))
+        topologies.update(read_cgd_data(cgd, max_sites=args.max_connectivity))
     if args.input is not None:
         assert os.path.isfile(args.input)
         with open(args.input, "rb") as inpt:
             cgd = inpt.read().decode("utf8")
-            topologies.update(read_cgd_data(cgd))
+            topologies.update(read_cgd_data(cgd, max_sites=args.max_connectivity))
     # saving to data folder
     if args.output.endswith((".json", ".json.gz")):
         topology_io.save_topologies(topologies, args.output)
