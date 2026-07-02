@@ -193,7 +193,8 @@ class TestFragmentExtractDummies:
         """Test that extracted dummies have X species."""
         dummies = linear_fragment.extract_dummies()
         for site in dummies:
-            assert str(site.specie) == "X"
+            # str(DummySpecies) renders as "X0+", so compare symbols
+            assert site.specie.symbol == "X"
 
     def test_extract_dummies_trigonal(self, trigonal_fragment):
         """Test extraction for trigonal fragment."""
@@ -279,10 +280,28 @@ class TestFragmentRotate:
 class TestFragmentFlip:
     """Test Fragment.flip method."""
 
-    def test_flip_not_implemented(self, linear_fragment):
-        """Test that flip raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            linear_fragment.flip()
+    def test_flip_applies_reflection(self, linear_fragment):
+        """Test that flip applies a reflection when one exists (D*h)."""
+        n_atoms = len(linear_fragment.atoms)
+        linear_fragment.flip()
+        assert len(linear_fragment.atoms) == n_atoms
+
+    def test_flip_without_reflection_raises(self):
+        """Test that flip raises ValueError when no reflection exists."""
+        # Chiral dummy arrangement -> C1 point group, identity only
+        coords = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.1, 0.3],
+            [-0.9, 1.1, -0.2],
+            [0.2, -1.0, 1.4],
+            [0.5, 0.7, -1.2],
+        ]
+        mol = Molecule(["C", "X", "X", "X", "X"], coords)
+        symm_mol = Molecule(["H"] * 4, coords[1:], charge=4)
+        pg = PointGroupAnalyzer(symm_mol, tolerance=0.1)
+        frag = Fragment(atoms=mol, symmetry=pg, name="chiral")
+        with pytest.raises(ValueError, match="No reflection plane"):
+            frag.flip()
 
 
 # =============================================================================

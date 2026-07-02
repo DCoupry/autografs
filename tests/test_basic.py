@@ -42,11 +42,17 @@ class TestSubmoduleImports:
 
         assert utils is not None
 
-    def test_structure_import(self):
-        """Test structure module import."""
-        from autografs import structure
+    def test_fragment_import(self):
+        """Test fragment module import."""
+        from autografs import fragment
 
-        assert structure is not None
+        assert fragment is not None
+
+    def test_topology_import(self):
+        """Test topology module import."""
+        from autografs import topology
+
+        assert topology is not None
 
     def test_builder_import(self):
         """Test builder module import."""
