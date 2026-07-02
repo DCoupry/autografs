@@ -359,16 +359,36 @@ class TestBuildRmsdGate:
         )
         assert graph is not None
 
-    def test_tight_threshold_raises(self, synthetic_mofgen):
+    def test_shape_mismatch_raises(self, synthetic_mofgen):
+        """A T-shaped 3-connected SBU cannot fill a trigonal slot: the
+        directional RMSD is large and the gate rejects the build.
+
+        (2-connected SBUs can never fail directionally: two arms seen
+        from their own centroid are always antiparallel, so the
+        mismatch test needs three or more connections.)
+        """
+        from pymatgen.core.structure import Molecule
+
         from autografs.exceptions import AlignmentError
 
-        topo = synthetic_mofgen.topologies["linear_topo"]
+        t_shape = Molecule(
+            ["C", "X", "X", "X"],
+            [
+                [0.0, 0.0, 0.0],
+                [1.5, 0.0, 0.0],
+                [-1.5, 0.0, 0.0],
+                [0.0, 1.5, 0.0],
+            ],
+        )
+        synthetic_mofgen.sbu["t_sbu"] = Fragment(atoms=t_shape, name="t_sbu")
+
+        topo = synthetic_mofgen.topologies["trigonal_topo"]
         with pytest.raises(AlignmentError, match="max_rmsd"):
             synthetic_mofgen.build(
                 topo,
-                mappings={0: "lin_sbu", 1: "lin_sbu"},
+                mappings={0: "t_sbu", 1: "t_sbu"},
                 refine_cell=False,
-                max_rmsd=1e-12,
+                max_rmsd=0.1,
             )
 
     def test_default_is_ungated(self, synthetic_mofgen):
@@ -545,66 +565,6 @@ class TestBuild:
                     break
                 except Exception:
                     continue
-
-
-# =============================================================================
-# _align_slot Tests
-# =============================================================================
-
-
-class TestAlignSlot:
-    """Test Autografs._align_slot method."""
-
-    @requires_data
-    def test_returns_fragment_and_rmsd(self, full_mofgen):
-        """Test that _align_slot returns a Fragment and RMSD."""
-        mofgen = full_mofgen
-        topos = mofgen.list_topologies()
-
-        for topo_name in topos:
-            topo = mofgen.topologies[topo_name]
-            if len(topo) > 5:
-                continue
-
-            sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if all(sbu_dict.values()):
-                slot = topo.slots[0]
-                # Find a compatible SBU
-                for slot_type, sbu_names in sbu_dict.items():
-                    if sbu_names:
-                        sbu = mofgen.sbu[sbu_names[0]].copy()
-                        try:
-                            result, rmsd = mofgen._align_slot(slot, sbu)
-                            assert isinstance(result, Fragment)
-                            assert isinstance(rmsd, float)
-                            assert rmsd >= 0
-                            return
-                        except Exception:
-                            continue
-
-    @requires_data
-    def test_rmsd_is_non_negative(self, full_mofgen):
-        """Test that RMSD is always non-negative."""
-        mofgen = full_mofgen
-        topos = mofgen.list_topologies()
-
-        for topo_name in topos[:20]:
-            topo = mofgen.topologies[topo_name]
-            if len(topo) > 5:
-                continue
-
-            sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if all(sbu_dict.values()):
-                slot = topo.slots[0]
-                for slot_type, sbu_names in sbu_dict.items():
-                    if sbu_names:
-                        sbu = mofgen.sbu[sbu_names[0]].copy()
-                        try:
-                            _, rmsd = mofgen._align_slot(slot, sbu)
-                            assert rmsd >= 0, f"RMSD should be non-negative, got {rmsd}"
-                            return
-                        except Exception:
-                            continue
 
 
 # =============================================================================

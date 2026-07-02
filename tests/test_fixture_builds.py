@@ -87,21 +87,18 @@ class TestGoldenBuilds:
     def test_mof5_like_build(self, mofgen):
         """pcu + Zn4O + benzene = the MOF-5 prototype.
 
-        NOTE: the current alignment objective compares SBU dummies to
-        blueprint quarter-edge positions, so the radial (arm-length)
-        mismatch pollutes the score. With refine_cell=True this drives
-        the optimizer to a badly anisotropic cell (~21 x 8 x 8 A) for
-        this cubic net. Until the directional matcher and the
-        crystal-system-constrained cell optimization land (v3_plan
-        3.1/3.3), this golden test builds with the isotropic initial
-        guess and asserts structural bookkeeping only. Tighten it to
-        assert a cubic ~12.9 A cell once those land.
+        Golden regression for the directional alignment core: the
+        pair-coincidence objective must find the cubic MOF-5 cell
+        (experimental a = 12.9 A; the dummy-overlap convention of the
+        SBU library gives ~12.8).
         """
         topology = mofgen.topologies["pcu"]
         mappings = self._mappings_by_connectivity(
             topology, {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}
         )
-        graph = mofgen.build(topology, mappings=mappings, refine_cell=False)
+        graph = mofgen.build(
+            topology, mappings=mappings, refine_cell=True, max_rmsd=0.5
+        )
 
         # expected atom count: sum over slots of (atoms - dummies)
         expected = 0
@@ -111,11 +108,12 @@ class TestGoldenBuilds:
             expected += n_real * len(indices)
         assert graph.number_of_nodes() == expected
 
-        # cubic blueprint scaled isotropically stays cubic
+        # the optimized cell of this cubic net must be cubic and sized
+        # like MOF-5
         cell = graph.graph["cell"]
         abc = np.linalg.norm(cell, axis=1)
-        np.testing.assert_allclose(abc, abc[0], rtol=1e-6)
-        assert abc[0] > 5.0  # physically sized, not the 1 A blueprint
+        np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
+        assert 12.0 < abc[0] < 13.5
         # every atom bonded: no isolated nodes
         degrees = [d for _, d in graph.degree()]
         assert min(degrees) >= 1
@@ -137,7 +135,7 @@ class TestGoldenBuilds:
         np.testing.assert_array_almost_equal(coords(), coords(), decimal=10)
 
     def test_dia_build(self, mofgen):
-        """dia + tetrahedral SBU + linear linker builds cleanly."""
+        """dia + tetrahedral SBU + linear linker: cubic optimized cell."""
         topology = mofgen.topologies["dia"]
         available = mofgen.list_building_units(sieve="dia")
         by_conn = {
@@ -150,6 +148,10 @@ class TestGoldenBuilds:
         graph = mofgen.build(
             topology,
             mappings={key4: sorted(sbus4)[0], key2: "Benzene_linear"},
-            refine_cell=False,
+            refine_cell=True,
+            max_rmsd=0.5,
         )
         assert graph.number_of_nodes() > 0
+        abc = np.linalg.norm(graph.graph["cell"], axis=1)
+        np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
+        assert abc[0] > 10.0

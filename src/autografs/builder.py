@@ -21,7 +21,6 @@ Examples
 
 from __future__ import annotations
 
-import copy
 import itertools
 import logging
 import time
@@ -30,11 +29,10 @@ from pathlib import Path
 import dill
 import networkx
 import numpy as np
-from pymatgen.analysis.molecule_matcher import HungarianOrderMatcher
-from pymatgen.core.structure import Molecule
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
+import autografs.alignment
 import autografs.data
 import autografs.topology_io
 import autografs.utils
@@ -48,13 +46,6 @@ logger = logging.getLogger(__name__)
 NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
 NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
 NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
-
-# Symmetric dummy arrangements make the Hungarian assignment degenerate;
-# a small displacement of every dummy breaks the ties. The displacements
-# come from a fixed-seed generator so that builds are reproducible and
-# the cell optimization objective is noise-free.
-DEGENERACY_BREAK_DISTANCE = 0.01  # Angstrom
-DEGENERACY_BREAK_SEED = 20140925
 
 
 class Autografs:
@@ -211,12 +202,16 @@ class Autografs:
         mappings : dict[Fragment | int, Fragment | str]
             the mappings to go from a slot to a compatible SBU
         refine_cell : bool, optional
-            If True, optimizes the cell parameters, by default True
+            If True, optimizes the cell parameters so that bonded dummy
+            pairs coincide, by default True. The analytic starting cell
+            is already exact for uninodal isotropic nets.
         verbose : bool, optional
             If True, will log additional information, by default False
         max_rmsd : float or None, optional
-            Maximum acceptable per-slot alignment RMSD in Angstrom.
-            If any slot exceeds it, AlignmentError is raised instead of
+            Maximum acceptable per-slot directional RMSD: the shape
+            mismatch between the SBU's unit arm vectors and the slot's,
+            independent of size (0 = perfect, 2 = opposite). If any
+            slot exceeds it, AlignmentError is raised instead of
             silently returning a distorted structure. None (default)
             disables the gate.
 
@@ -228,7 +223,8 @@ class Autografs:
         Raises
         ------
         AlignmentError
-            If max_rmsd is set and any slot alignment exceeds it.
+            If an SBU's connection count does not match its slot, or if
+            max_rmsd is set and any slot alignment exceeds it.
         ValueError
             If the mappings leave topology slots unfilled.
         """
@@ -238,34 +234,16 @@ class Autografs:
             logger.info(f"\tTopology =  {topology}")
             formatted_mappings = autografs.utils.format_mappings(mappings)
             logger.info(f"\tMappings =  {formatted_mappings}")
-            logger.info(f"Aligning with cell scaling...")
-
-        def opt_fun(scales: tuple[float, float, float]) -> float:
-            """Objective function for cell parameter optimization.
-
-            Parameters
-            ----------
-            scales : tuple[float, float, float]
-                Cell vector lengths (a, b, c) to evaluate.
-
-            Returns
-            -------
-            float
-                Root mean square error of fragment alignment.
-            """
-            this_topology = topology.copy()
-            this_mapping = copy.deepcopy(mappings)
-            _, rmse, _ = self._align_all_mappings(this_topology, this_mapping, scales)
-            return rmse
+            logger.info("Aligning with cell scaling...")
 
         t0 = time.time()
-        # Initialize search from average dummy distance
-        abc_norm = sum([f.max_dummy_distance for f in mappings.values()]) / 3.0
-        x0 = np.ones(3) * abc_norm
-        if refine_cell:
-            # Use Nelder-Mead for gradient-free optimization
+        plan = autografs.alignment.prepare_build(topology, mappings)
+        x0 = plan.initial_scales()
+        if refine_cell and plan.has_pairs:
+            # Nelder-Mead on the pair-coincidence residual; the
+            # objective is pure numpy, no object copies per evaluation
             result = minimize(
-                opt_fun,
+                plan.residual,
                 x0,
                 method="Nelder-Mead",
                 options={
@@ -274,23 +252,19 @@ class Autografs:
                     "maxiter": NELDER_MEAD_MAXITER,
                 },
             )
-            best_scales = result.x
+            best_scales = np.abs(result.x)
         else:
             if verbose:
                 logger.info("\t[x] No cell refinement performed.")
             best_scales = x0
-        # align on a copy: scaling must not mutate the caller's topology
-        final_topology = topology.copy()
-        best_alignment, _, slot_rmsds = self._align_all_mappings(
-            final_topology, mappings, best_scales
-        )
+        best_alignment, lattice, slot_rmsds = plan.finalize(best_scales)
         if max_rmsd is not None:
             bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
             if bad_slots:
                 worst = max(bad_slots.values())
                 raise AlignmentError(
                     f"{len(bad_slots)} of {len(slot_rmsds)} slots exceed "
-                    f"max_rmsd={max_rmsd:.3f} A (worst: {worst:.3f} A) "
+                    f"max_rmsd={max_rmsd:.3f} (worst: {worst:.3f}) "
                     f"on topology {topology.name}: {sorted(bad_slots)}"
                 )
         if verbose:
@@ -299,10 +273,10 @@ class Autografs:
             logger.info(f"\t\tb = {best_scales[1]:<.1f}")
             logger.info(f"\t\tc = {best_scales[2]:<.1f}")
             logger.info(
-                f"\t[x] Aligned {len(final_topology.slots)} fragments in {time.time() - t0:.1f} seconds"
+                f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
             )
         graph = autografs.utils.fragments_to_networkx(
-            best_alignment, cell=final_topology.cell.matrix
+            best_alignment, cell=lattice.matrix
         )
         return graph
 
@@ -541,161 +515,3 @@ class Autografs:
                 if k not in out_dict:
                     logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
         return out_dict
-
-    def _align_all_mappings(
-        self,
-        topology: Topology,
-        mappings: dict[int, Fragment],
-        scales: tuple[float, float, float],
-    ) -> tuple[list[Fragment], float]:
-        """Align all SBU fragments to their corresponding topology slots.
-
-        Scales the topology cell and aligns each fragment to its designated
-        slot using the Hungarian algorithm for optimal atom matching.
-
-        Parameters
-        ----------
-        topology : Topology
-            The topology blueprint (will be modified in-place by scaling).
-        mappings : dict[int, Fragment]
-            Mapping from slot indices to Fragment objects.
-        scales : tuple[float, float, float]
-            Cell vector lengths (a, b, c) to apply.
-
-        Returns
-        -------
-        tuple[list[Fragment], float, dict[int, float]]
-            A tuple containing:
-            - List of aligned Fragment objects.
-            - Total weighted RMSE of the alignment.
-            - Raw per-slot alignment RMSD (Angstrom), keyed by slot index.
-        """
-        all_aligned_fragments = []
-        slot_rmsds: dict[int, float] = {}
-        topology.scale_slots(scales)
-        sum_rmse = 0.0
-        # sorted so that float accumulation order does not depend on
-        # dict insertion order
-        for slot_index, this_fragment in sorted(mappings.items()):
-            slot = topology.slots[slot_index]
-            slot_weight = this_fragment.max_dummy_distance / slot.max_dummy_distance
-            aligned_fragment, rmsd = self._align_slot(slot, this_fragment)
-            all_aligned_fragments.append(aligned_fragment)
-            slot_rmsds[slot_index] = rmsd
-            denominator = len(slot.atoms) * len(topology.mappings[slot])
-            if denominator == 0:
-                logger.warning(
-                    f"Empty slot encountered at index {slot_index}, skipping score calculation"
-                )
-                continue
-            score = slot_weight * rmsd / denominator
-            sum_rmse += score
-        logger.debug(f"Cell scaled with RMSE = {sum_rmse}")
-        return all_aligned_fragments, sum_rmse, slot_rmsds
-
-    def _align_slot(self, slot: Fragment, fragment: Fragment) -> tuple[Fragment, float]:
-        """Align a single fragment to a topology slot.
-
-        Uses the Hungarian algorithm to find the optimal rotation and
-        translation that minimizes the RMSD between dummy atoms.
-
-        Parameters
-        ----------
-        slot : Fragment
-            The topology slot defining the target orientation and position.
-        fragment : Fragment
-            The SBU fragment to align (modified in-place).
-
-        Returns
-        -------
-        tuple[Fragment, float]
-            A tuple containing:
-            - The aligned fragment with updated coordinates and tags.
-            - RMSD of the alignment.
-        """
-        slot_dummies = slot.extract_dummies()
-        frag_dummies = fragment.extract_dummies()
-        n0, n1 = len(slot_dummies), len(frag_dummies)
-        rng = np.random.default_rng(DEGENERACY_BREAK_SEED)
-        noise = rng.normal(size=(n0 + n1, 3))
-        noise /= np.linalg.norm(noise, axis=1, keepdims=True)
-        noise *= DEGENERACY_BREAK_DISTANCE
-        m0 = Molecule(["H"] * n0, slot_dummies.cart_coords + noise[:n0])
-        m1 = Molecule(["H"] * n1, frag_dummies.cart_coords + noise[n0:])
-        _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
-        new_coords = fragment.atoms.cart_coords.dot(U) + V
-        fragment.atoms = Molecule(
-            fragment.atoms.species,
-            coords=new_coords,
-            site_properties=fragment.atoms.site_properties,
-        )
-        fragment_tags = np.array(
-            [
-                -1,
-            ]
-            * len(fragment.atoms)
-        )
-        for j, frag_tag in enumerate(fragment_tags):
-            fragment.atoms[j].properties["tags"] = frag_tag
-        slot_tags = slot.atoms.site_properties["tags"]
-        for i, slot_tag in enumerate(slot_tags):
-            tag_by_dist = []
-            for j in fragment.atoms.indices_from_symbol("X"):
-                d = slot.atoms[i].coords - fragment.atoms[j].coords
-                tag_by_dist.append((np.linalg.norm(d), j))
-            _, best_match = sorted(tag_by_dist)[0]
-            fragment.atoms[best_match].properties["tags"] = slot_tag
-        return fragment, rmsd
-
-
-if __name__ == "__main__":
-    from pprint import pprint
-
-    molgen = Autografs()
-    # pprint(molgen.list_topologies())
-    # pprint(sorted(molgen.sbu.keys()))
-    # sbu = 'Persulfurated_benzene_hexagonal', 'Zn_imidazolate_carboxylated_tetrahedral', 'Al_trimeric_prism', 'Benzene_pentagonal',
-    #  'Benzene_pentagram', 'CuCN_trigonal_bipyramid' 'Ni_pyrazole_cubic_cluster' 'UIO66_Zr_icosahedral'
-    # print(molgen.sbu['Persulfurated_benzene_hexagonal'])
-    # for name, topology in molgen.topologies.items():
-    #     if len(topology) > 15:
-    #         continue
-    #     try:
-    #         maps = molgen.list_building_units(sieve=name, verbose=True)
-    #         g = molgen.build(topology=topology, mappings={k: random.choice(v) for k, v in maps.items()}, verbose=True, refine_cell=True)
-    #         autografs.utils.view_graph(g)
-    #     except AssertionError:
-    #         continue
-    # pprint(topos)
-    # raise
-    # topos = molgen.list_topologies()
-    # i = 0
-    # while i < 5:
-    #     name = random.choice(topos)
-    #     topology = molgen.topologies[name]
-    #     if len(topology) > 50:
-    #         continue
-    #     else:
-    #         i += 1
-    #         maps = molgen.list_building_units(sieve=name, verbose=True)
-    #         g = molgen.build(topology=topology, mappings={k: random.choice(v) for k, v in maps.items()}, verbose=True, refine_cell=False)
-    # autografs.utils.networkx_to_gulp(g, name=name, write_to_file=True)
-    # autografs.utils.view_graph(g)
-    # pprint(sbu_names)
-    # print(list(molgen.topologies.keys()))
-    # benz = molgen.sbu["Benzene_linear"].copy()
-    # benz.rotate(theta=0.79)
-    # hidx = benz.atoms.indices_from_symbol("H")
-    # benz.functionalize(hidx[2], "nitro")
-    # maps = {0: "Zn_mof5_octahedral", 1:"Bipyridine_linear", 2:"Acetylene_linear", 3:benz}
-    # g = molgen.build(topology=topology, mappings=maps, verbose=True)
-    # # autografs.utils.view_graph(g)
-
-    # autografs.utils.networkx_to_gulp(g, name="zul", write_to_file=True)
-    graphs = molgen.build_all(refine_cell=False)
-    with open("all_generated.bin", "wb") as uit:
-        dill.dump(graphs, uit)
-    # autografs.utils.view_graph(graphs[0])
-    # for graph in graphs:
-    #     autografs.utils.view_graph(graph)
-    #     break
