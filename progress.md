@@ -91,6 +91,11 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
 
 ## Step 6 — Tooling sweep (v3_plan §5.3)
 - [x] requires-python widened to >=3.11 (done by Damien, committed with groundwork)
+- [x] Hatchling build backend; MANIFEST.in deleted; wheel/editable verified
+      (fc73428)
+- [x] pandas dependency dropped: UFF4MOF params are Python constants in
+      data/uff4mof.py; unused covalent_radii.csv deleted (b3472dc)
+- [x] pymatgen deprecation fixed: from_local_env_strategy (9022378)
 - [ ] ruff replacing black+isort+flake8; pre-commit
 - [ ] mypy in CI; CI matrix 3.11-3.13
 - [ ] Declare tqdm dependency; console entry points
@@ -133,3 +138,18 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
      rest are nonstandard monoclinic settings (Cmca, I12/m1, P121/n1).
   Also fixed in passing: MoleculeGraph.with_local_env_strategy
   deprecation (9022378). Fixture regeneration confirmed byte-identical.
+- **2026-07-02 (cont.)**: Damien confirmed his CGD download matches the
+  mirror (no diff needed) and approved: shipping data, diffable JSON,
+  hatchling, and constants-over-CSV. Executed (fcd80f4..b3472dc):
+  plain .json now pretty-printed (.gz stays compact; 48 MB raw is why
+  the shipped library is gzipped); topologies.json.gz (1717 nets,
+  5.5 MB) ships in the wheel - Autografs() now works out of the box;
+  the 19 data-skipped tests run against a session-scoped full_mofgen
+  fixture; found+fixed a build_all completeness bug (slot types with
+  zero compatible SBUs are absent from list_building_units, so
+  all(values) was a false guard); hatchling backend replaces
+  setuptools+MANIFEST.in (wheel verified); UFF4MOF params moved to
+  data/uff4mof.py constants and pandas dropped from dependencies.
+  Suite: 147 tests, 5 slow-marked skips, all green.
+  Next: Step 3, the numpy directional alignment core (fixes the
+  MOF-5 anisotropic cell, unlocks 747 C1 nets).
