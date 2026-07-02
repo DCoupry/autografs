@@ -330,7 +330,7 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     uff_lib, uff_symbs = load_uff_lib(mol)
     # obtaining cutoffs from the maximum UFF radius
     strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
-    mg = MoleculeGraph.with_local_env_strategy(mol, strategy=strategy)
+    mg = MoleculeGraph.from_local_env_strategy(mol, strategy=strategy)
     # add mmtypes
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)
     for i, mmtype in enumerate(mmtypes):
