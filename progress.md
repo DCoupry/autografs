@@ -77,10 +77,35 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   MOF-5 golden test asserts bookkeeping only until steps 3+5 land;
   tighten it then.
 
-## Step 3 — Numpy alignment core (v3_plan §3.1 + §4.1)
-- [ ] Geometric matching (linear_sum_assignment + Kabsch on arrays)
-- [ ] Chirality handling (proper rotations only)
-- [ ] Remove deepcopy hot loop from opt_fun
+## Step 3 — Numpy alignment core (v3_plan §3.1 + §4.1) — COMPLETE
+- [x] autografs.alignment: Kabsch (proper only), match_directions with
+      deterministic 24-rotation multi-start, BuildPlan precomputing all
+      geometry once (dbba882)
+- [x] Pair-coincidence cell objective: paired (tag-shared) dummy images
+      coincide — the physically correct target. MOF-5 golden test:
+      a=b=c=12.77 A (exp. 12.9), was 21x8.3x8.4 garbage. Build with
+      refinement: 0.04 s, was ~10 s (~250x)
+- [x] Chirality: det=+1 constraint; mirror-image stars score ~0.4
+      instead of silently matching
+- [x] Geometric compatibility sieve replacing Schoenflies symbols
+      (863b833): cached arm_units + pairwise-dot prefilter + memoized
+      matcher (~23 ms/topology warm). max_rmsd now gates dimensionless
+      directional shape mismatch
+- [x] C1 gate removed from cgd2pkl; library regenerated and shipped:
+      **2464 topologies** (was 1717; original pipeline ~1400 with
+      silent origin-choice corruption) (05c0b09)
+
+### Step 3 knowledge
+- 2-c SBUs can never fail directional matching (two arms from their own
+  centroid are always antiparallel); shape gates need 3+ connections.
+- The SBU library's dummy-overlap convention gives MOF-5 at 12.77 vs
+  experimental 12.9 A; a bond-length-aware pair target (offset by the
+  X-neighbor distances) is a possible refinement (backlog).
+- initial_scales() is analytically exact for uninodal isotropic nets;
+  NM refinement mostly polishes multinodal/anisotropic cases.
+- Autografs() init is now ~19 s with the 2464-net library — SBU PGA
+  analysis + JSON reconstruction; lazy topology loading is the next
+  perf item (backlog, Step 7).
 
 ## Step 4 — Output layer (v3_plan §3.5)
 - [ ] Framework result class (pymatgen Structure + bonds + mmtypes)
