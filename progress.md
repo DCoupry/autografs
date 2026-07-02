@@ -119,3 +119,17 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   (~2665 nets expected vs 1420 before), spot-check known nets (tbo,
   pto, rht, nbo), and consider shipping the .json.gz as package data.
   After that: Step 3 (numpy directional alignment core).
+- **2026-07-02 (cont.)**: Full-scale conversion validated on the mirrored
+  RCSR file (2932 entries): **1717 usable topologies** in 5.6 MB .json.gz
+  (scratchpad: topologies_full2.json.gz). Gate relaxation (d2bc130):
+  connectivity cap 12→24 rescued rht (Oh 24-c, textbook orbits); C1
+  rejection now only applies to >3-c fragments. Spot checks all correct:
+  tbo, pto, nbo, bcu, fcu, rht, soc, spn, ftw, csq, she.
+  Remaining conversion blockers by yield:
+  1. 747 nets with C1 >3-c vertices — unusable under symbol matching;
+     the Step 3 geometric matcher makes them viable (drop the gate then).
+  2. 461 untranslatable GROUP symbols — ~200 are 2D plane groups (p6mm,
+     c2mm...) = the hcb/COF layer nets (map plane→extruded space group);
+     rest are nonstandard monoclinic settings (Cmca, I12/m1, P121/n1).
+  Also fixed in passing: MoleculeGraph.with_local_env_strategy
+  deprecation (9022378). Fixture regeneration confirmed byte-identical.
