@@ -269,6 +269,76 @@ class TestFindElementCutoffs:
 
 
 # =============================================================================
+# find_mmtypes Tests
+# =============================================================================
+
+
+class TestFindMmtypes:
+    """Test find_mmtypes function."""
+
+    @staticmethod
+    def _molgraph_with_edges(mol, edges):
+        """Build a MoleculeGraph with explicit connectivity."""
+        from pymatgen.analysis.graphs import MoleculeGraph
+
+        mg = MoleculeGraph.from_empty_graph(mol)
+        for i, j in edges:
+            mg.add_edge(i, j)
+        return mg
+
+    def test_one_type_per_atom_in_order(self):
+        """Types are returned for every atom, aligned with atom indices."""
+        from pymatgen.core.structure import Molecule
+
+        # methane: sp3 C (4 neighbors -> C_3), four 1-coordinated H -> H_
+        d = 0.63
+        mol = Molecule(
+            ["C", "H", "H", "H", "H"],
+            [
+                [0, 0, 0],
+                [d, d, d],
+                [d, -d, -d],
+                [-d, d, -d],
+                [-d, -d, d],
+            ],
+        )
+        mg = self._molgraph_with_edges(mol, [(0, i) for i in range(1, 5)])
+        uff_lib, uff_symbs = utils.load_uff_lib(mol)
+        mmtypes = utils.find_mmtypes(mg, uff_lib, uff_symbs)
+
+        assert len(mmtypes) == len(mol)
+        assert mmtypes[0] == "C_3"
+        assert mmtypes[1:] == ["H_"] * 4
+
+    def test_angle_match_uses_absolute_difference(self):
+        """The closest ideal angle wins, not the most negative difference.
+
+        A 3-coordinated O with its two closest neighbors at 145.5 deg must
+        be typed O_3_z (ideal 145.5) rather than O_3 (ideal 104.51), which
+        a signed-difference sort would wrongly select.
+        """
+        import math
+
+        from pymatgen.core.structure import Molecule
+
+        half = math.radians(145.5 / 2.0)
+        mol = Molecule(
+            ["O", "H", "H", "H"],
+            [
+                [0.0, 0.0, 0.0],
+                [math.cos(half), math.sin(half), 0.0],
+                [math.cos(half), -math.sin(half), 0.0],
+                [-1.5, 0.0, 0.0],
+            ],
+        )
+        mg = self._molgraph_with_edges(mol, [(0, 1), (0, 2), (0, 3)])
+        uff_lib, uff_symbs = utils.load_uff_lib(mol)
+        mmtypes = utils.find_mmtypes(mg, uff_lib, uff_symbs)
+
+        assert mmtypes[0] == "O_3_z"
+
+
+# =============================================================================
 # networkx_to_gulp Tests
 # =============================================================================
 

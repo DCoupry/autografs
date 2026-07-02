@@ -282,15 +282,15 @@ def find_mmtypes(
     Returns
     -------
     list[str]
-        List of assigned UFF atom type symbols.
+        List of assigned UFF atom type symbols, one per atom, in atom order.
     """
     mmtypes = []
     for i, symb in enumerate(uff_symbs):
         conn = molgraph.get_connected_sites(i)
         ncoord = len(conn)
         atom_compat = uff_lib[uff_lib.symbol.str.startswith(symb)]
-        molgraph.molecule[i].properties["ufftype"] = atom_compat.symbol.values[0]
         if len(atom_compat) == 1:
+            mmtypes.append(atom_compat.symbol.values[0])
             continue
         if ncoord >= 2:
             c0 = molgraph.molecule.sites[i].coords
@@ -302,22 +302,21 @@ def find_mmtypes(
             cosine_angle = np.dot(c01, c02) / (
                 np.linalg.norm(c01) * np.linalg.norm(c02)
             )
-            angle = np.degrees(np.arccos(cosine_angle))
+            # clip to the valid arccos domain: collinear neighbors can
+            # give |cos| marginally above 1.0 from floating point error
+            angle = np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
         else:
             angle = 180.0
         coordinations_compat = atom_compat[atom_compat.coordination == ncoord]
         if len(coordinations_compat) == 1:
-            molgraph.molecule[i].properties["ufftype"] = (
-                coordinations_compat.symbol.values[0]
-            )
+            mmtypes.append(coordinations_compat.symbol.values[0])
             continue
         elif len(coordinations_compat) == 0:
             # problem with the coordinations. use angles
             coordinations_compat = atom_compat
-        coordinations_compat["angle_diff"] = coordinations_compat.angle - angle
-        best_angle = coordinations_compat.sort_values(by="angle_diff").iloc[0]
+        angle_diff = (coordinations_compat.angle - angle).abs()
         # TODO: if < 10% diff in angle error, use radii error
-        mmtypes.append(best_angle.symbol)
+        mmtypes.append(coordinations_compat.loc[angle_diff.idxmin(), "symbol"])
     return mmtypes
 
 
