@@ -38,7 +38,8 @@ from tqdm.auto import tqdm
 
 import autografs.data
 import autografs.utils
-from autografs.structure import Fragment, Topology
+from autografs.fragment import Fragment
+from autografs.topology import Topology
 
 logger = logging.getLogger(__name__)
 

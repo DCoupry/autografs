@@ -39,7 +39,8 @@ import dill
 import numpy
 import pymatgen.symmetry
 import requests
-from autografs.structure import Fragment, Topology
+from autografs.fragment import Fragment
+from autografs.topology import Topology
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.periodic_table import get_el_sp
 from pymatgen.core.structure import Molecule, Structure

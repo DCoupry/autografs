@@ -12,7 +12,7 @@ import pytest
 from hypothesis import given, strategies as st, settings, assume
 
 from autografs import utils
-from autografs.structure import Fragment
+from autografs.fragment import Fragment
 
 
 # =============================================================================

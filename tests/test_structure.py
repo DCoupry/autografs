@@ -15,7 +15,8 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
-from autografs.structure import Fragment, Topology
+from autografs.fragment import Fragment
+from autografs.topology import Topology
 
 
 # =============================================================================

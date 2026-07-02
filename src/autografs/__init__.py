@@ -11,8 +11,10 @@ Modules
 -------
 builder
     Main framework builder class for generating structures.
-structure
-    Fragment and Topology data structures.
+fragment
+    Fragment data structure for molecular fragments.
+topology
+    Topology data structure for periodic blueprints.
 utils
     Utility functions for file I/O, graph manipulation, and visualization.
 
@@ -48,12 +50,13 @@ __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
 __version__ = "3.0.0"
 __status__ = "production"
-__all__ = ["utils", "structure", "builder", "Autografs", "Fragment", "Topology"]
+__all__ = ["utils", "fragment", "topology", "builder", "Autografs", "Fragment", "Topology"]
 
 import logging
 
 from autografs.builder import Autografs
-from autografs.structure import Fragment, Topology
+from autografs.fragment import Fragment
+from autografs.topology import Topology
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())
 logging.basicConfig(
