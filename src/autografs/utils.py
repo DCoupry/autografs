@@ -55,9 +55,6 @@ from autografs.fragment import Fragment
 
 logger = logging.getLogger(__name__)
 
-# suppress false positive SettingWithCopyWarning
-pandas.options.mode.chained_assignment = None
-
 # Constants for molecular analysis
 SYMMETRY_TOLERANCE = 0.1  # Tolerance for point group symmetry detection
 BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
@@ -251,8 +248,8 @@ def find_element_cutoffs(
     >>> cutoffs = find_element_cutoffs(uff_lib, uff_symbs)
     >>> print(cutoffs[("C", "N")])  # Bond cutoff for C-N
     """
-    radii = uff_lib[["symbol", "radius"]]
-    radii.symbol = radii.symbol.str[:2]
+    radii = uff_lib[["symbol", "radius"]].copy()
+    radii["symbol"] = radii["symbol"].str[:2]
     radii = radii.groupby("symbol").max()
     cuts = {}
     for e0, e1 in itertools.product(uff_symbs, uff_symbs):
