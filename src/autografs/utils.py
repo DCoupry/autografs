@@ -47,16 +47,14 @@ from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_order
 from pymatgen.core.structure import Molecule
 from pymatgen.io.xyz import XYZ
-from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
 import autografs.data
-from autografs.fragment import Fragment
+from autografs.fragment import Fragment, analyze_dummy_pointgroup
 
 
 logger = logging.getLogger(__name__)
 
 # Constants for molecular analysis
-SYMMETRY_TOLERANCE = 0.1  # Tolerance for point group symmetry detection
 BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
 BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
 
@@ -167,16 +165,7 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     names = get_xyz_names(path)
     sbu = {}
     for molecule, name in zip(xyz.all_molecules, names):
-        dummies_idx = molecule.indices_from_symbol("X")
-        symmetric_mol = Molecule(
-            [
-                "H",
-            ]
-            * len(dummies_idx),
-            [molecule[idx].coords for idx in dummies_idx],
-            charge=len(dummies_idx),
-        )
-        symmetry = PointGroupAnalyzer(symmetric_mol, tolerance=SYMMETRY_TOLERANCE)
+        symmetry = analyze_dummy_pointgroup(molecule)
         sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
     return sbu
 

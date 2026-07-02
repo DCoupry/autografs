@@ -268,6 +268,97 @@ class TestFragmentSymmetryCompatibility:
         assert not frag_td.has_compatible_symmetry(frag_sq)
 
 
+class TestFragmentLazySymmetry:
+    """Fragment can be built without a precomputed PointGroupAnalyzer."""
+
+    def test_pointgroup_without_analyzer(self):
+        """Providing only the Schoenflies symbol avoids the analysis."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag = Fragment(atoms=mol, pointgroup="D*h", name="from_symbol")
+        assert frag.pointgroup == "D*h"
+        assert frag._symmetry is None  # analysis was not run
+
+    def test_symmetry_computed_lazily(self):
+        """The analyzer is derived from the dummies on first access."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag = Fragment(atoms=mol, name="lazy")
+        assert frag.pointgroup == "D*h"
+        assert frag.symmetry.sch_symbol == "D*h"
+
+    def test_lazy_matches_explicit(self, linear_fragment):
+        """Lazy analysis agrees with the explicitly provided analyzer."""
+        mol = linear_fragment.atoms.copy()
+        lazy = Fragment(atoms=mol, name="lazy_twin")
+        assert lazy.pointgroup == linear_fragment.pointgroup
+
+
+class TestFragmentEquivalenceClass:
+    """Crystallographic orbit ids separate otherwise-identical slots."""
+
+    def test_distinct_classes_are_unequal(self):
+        """Same point group + size but different orbits: distinct types."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag_a = Fragment(atoms=mol.copy(), name="a", equivalence_class=0)
+        frag_b = Fragment(atoms=mol.copy(), name="b", equivalence_class=1)
+        assert frag_a != frag_b
+        assert hash(frag_a) != hash(frag_b)
+        # as dict keys, both survive
+        assert len({frag_a: None, frag_b: None}) == 2
+
+    def test_same_class_is_equal(self):
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag_a = Fragment(atoms=mol.copy(), name="a", equivalence_class=3)
+        frag_b = Fragment(atoms=mol.copy(), name="b", equivalence_class=3)
+        assert frag_a == frag_b
+
+    def test_topology_groups_by_equivalence_class(self):
+        """Topology mappings keep inequivalent orbits apart."""
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        mol.add_site_property("tags", [0, 1, 2])
+        slots = [
+            Fragment(atoms=mol.copy(), name="slot") for _ in range(4)
+        ]
+        topo = Topology(
+            name="binodal",
+            slots=slots,
+            cell=Lattice.cubic(10.0),
+            equivalence_classes=[0, 0, 1, 1],
+        )
+        groups = sorted(sorted(v) for v in topo.mappings.values())
+        assert groups == [[0, 1], [2, 3]]
+
+    def test_topology_without_classes_groups_by_type(self):
+        """Legacy behavior: no classes means grouping by point group+size."""
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        mol.add_site_property("tags", [0, 1, 2])
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(4)]
+        topo = Topology(name="uninodal", slots=slots, cell=Lattice.cubic(10.0))
+        assert [sorted(v) for v in topo.mappings.values()] == [[0, 1, 2, 3]]
+
+    def test_class_count_mismatch_raises(self):
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(2)]
+        with pytest.raises(ValueError, match="equivalence classes"):
+            Topology(
+                name="bad",
+                slots=slots,
+                cell=Lattice.cubic(10.0),
+                equivalence_classes=[0],
+            )
+
+
 class TestFragmentRotate:
     """Test Fragment.rotate method."""
 

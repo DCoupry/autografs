@@ -36,6 +36,39 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Tolerance for point group symmetry detection on dummy arrangements
+SYMMETRY_TOLERANCE = 0.1
+
+
+def analyze_dummy_pointgroup(
+    atoms: Molecule, tolerance: float = SYMMETRY_TOLERANCE
+) -> PointGroupAnalyzer:
+    """Analyze the point group of a fragment's dummy-atom arrangement.
+
+    Builds a helper molecule containing only the dummy positions
+    (as hydrogens, since dummies have no mass and break symmetrization)
+    and runs pymatgen's point group analysis on it.
+
+    Parameters
+    ----------
+    atoms : Molecule
+        A pymatgen Molecule containing dummy atoms ("X").
+    tolerance : float, optional
+        Distance tolerance for symmetry detection.
+
+    Returns
+    -------
+    PointGroupAnalyzer
+        Analyzer for the dummy arrangement only.
+    """
+    dummies_idx = atoms.indices_from_symbol("X")
+    symm_mol = Molecule(
+        ["H"] * len(dummies_idx),
+        [atoms[idx].coords for idx in dummies_idx],
+        charge=len(dummies_idx),
+    )
+    return PointGroupAnalyzer(symm_mol, tolerance=tolerance)
+
 
 class Fragment:
     """Molecular fragment with symmetry information for topology mapping.
@@ -49,63 +82,96 @@ class Fragment:
     atoms : Molecule
         A pymatgen Molecule object containing the atomic structure.
         Dummy atoms are represented by the symbol "X".
-    symmetry : PointGroupAnalyzer
-        Point group symmetry analyzer for the dummy atom arrangement.
+    pointgroup : str
+        Schoenflies symbol of the dummy arrangement's point group.
     name : str
         Human-readable identifier for this fragment.
+    equivalence_class : int or None
+        Crystallographic orbit id for topology slots: slots in the same
+        orbit share one id. None for SBUs and legacy topologies.
 
     Examples
     --------
     >>> from pymatgen.core.structure import Molecule
-    >>> from pymatgen.symmetry.analyzer import PointGroupAnalyzer
     >>> mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
-    >>> symm_mol = Molecule(["H", "H"], [[1, 0, 0], [-1, 0, 0]], charge=2)
-    >>> pg = PointGroupAnalyzer(symm_mol)
-    >>> frag = Fragment(atoms=mol, symmetry=pg, name="linear_carbon")
+    >>> frag = Fragment(atoms=mol, name="linear_carbon")
     >>> print(frag)  # D*h 2
     """
 
     def __init__(
-        self, atoms: Molecule, symmetry: PointGroupAnalyzer, name: str = ""
+        self,
+        atoms: Molecule,
+        symmetry: PointGroupAnalyzer | None = None,
+        name: str = "",
+        pointgroup: str | None = None,
+        equivalence_class: int | None = None,
     ) -> None:
         """
         Parameters
         ----------
         atoms : Molecule
             A pymatgen Molecule object, complete with dummies
-        symmetry : PointGroupAnalyzer
+        symmetry : PointGroupAnalyzer or None, optional
             A pymatgen PointGroupAnalyzer containing the symmetry information
-            for the dummy connectivity only
+            for the dummy connectivity only. When omitted, it is computed
+            lazily from the dummies on first access.
         name : str, optional
             The name of this fragment, by default ''
+        pointgroup : str or None, optional
+            Schoenflies symbol of the dummy arrangement. Providing it
+            (e.g. from a serialized topology) avoids running the point
+            group analysis. Derived from `symmetry` when that is given.
+        equivalence_class : int or None, optional
+            Crystallographic orbit id for topology slots.
         """
-        self.symmetry = symmetry
+        self._symmetry = symmetry
+        if symmetry is not None:
+            self._pointgroup = symmetry.sch_symbol
+        else:
+            self._pointgroup = pointgroup
         self.atoms = atoms
         self.name = name
+        self.equivalence_class = equivalence_class
         return None
 
+    @property
+    def symmetry(self) -> PointGroupAnalyzer:
+        """Point group analyzer of the dummy arrangement, computed lazily."""
+        if self._symmetry is None:
+            self._symmetry = analyze_dummy_pointgroup(self.atoms)
+        return self._symmetry
+
+    @symmetry.setter
+    def symmetry(self, value: PointGroupAnalyzer) -> None:
+        self._symmetry = value
+        self._pointgroup = value.sch_symbol
+
+    @property
+    def pointgroup(self) -> str:
+        """Schoenflies symbol of the dummy arrangement's point group."""
+        if self._pointgroup is None:
+            self._pointgroup = self.symmetry.sch_symbol
+        return self._pointgroup
+
     def __str__(self) -> str:
-        return f"{self.symmetry.sch_symbol} {len(self.atoms.indices_from_symbol('X'))}"
+        return f"{self.pointgroup} {len(self.atoms.indices_from_symbol('X'))}"
 
     def __repr__(self) -> str:
         return f"{self.name} : {self.__str__()} valent"
 
     def __eq__(self, other: object) -> bool:
-        # for now only considers symmetries
+        # equality means interchangeable as a slot type: same point
+        # group, same size, and same crystallographic orbit (when known)
         if not isinstance(other, Fragment):
             return NotImplemented
-        symm = self.symmetry.sch_symbol == other.symmetry.sch_symbol
-        size = len(self.atoms) == len(other.atoms)
-        return symm and size
-
-    def __ne__(self, other: object) -> bool:
-        result = self.__eq__(other)
-        if result is NotImplemented:
-            return NotImplemented
-        return not result
+        return (
+            self.pointgroup == other.pointgroup
+            and len(self.atoms) == len(other.atoms)
+            and self.equivalence_class == other.equivalence_class
+        )
 
     def __hash__(self):
-        return hash(f"SYMM={self.symmetry.sch_symbol}/NAT={len(self.atoms)}")
+        return hash((self.pointgroup, len(self.atoms), self.equivalence_class))
 
     def copy(self) -> Fragment:
         """
@@ -180,7 +246,7 @@ class Fragment:
             return False
         if this_size <= 3:
             return True
-        return self.symmetry.sch_symbol == other.symmetry.sch_symbol
+        return self.pointgroup == other.pointgroup
 
     def _clear_max_dummy_distance_cache(self) -> None:
         """Clear the cached max_dummy_distance value."""
