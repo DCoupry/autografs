@@ -165,6 +165,10 @@ class Autografs:
             sbu_dict = self.list_building_units(
                 sieve=topology_name, verbose=False, subset=sbu_subset
             )
+            # slot types with no compatible SBU are absent from the
+            # dict entirely, so completeness needs an explicit check
+            if len(sbu_dict) != len(topology.mappings):
+                continue
             if not all(sbu_dict.values()):
                 continue
             for sbus in list(itertools.product(*sbu_dict.values())):

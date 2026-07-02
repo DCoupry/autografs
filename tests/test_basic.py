@@ -120,10 +120,8 @@ class TestMetadata:
 class TestAutografsInit:
     """Test Autografs initialization."""
 
-    @pytest.mark.skip(reason="Requires full installation with data files")
-    def test_autografs_init(self):
-        """Test that Autografs can be initialized."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
-        assert mofgen is not None
+    def test_autografs_init(self, full_mofgen):
+        """Test that Autografs initializes with the shipped libraries."""
+        assert full_mofgen is not None
+        assert len(full_mofgen.topologies) > 1500
+        assert len(full_mofgen.sbu) > 50

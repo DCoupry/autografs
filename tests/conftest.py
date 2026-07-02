@@ -158,10 +158,34 @@ def simple_topology(linear_fragment):
     return Topology(name="test_topo", slots=[frag1, frag2], cell=cell)
 
 
+def _topology_library_path():
+    """Path of the default topology library, or None if absent."""
+    import autografs.data
+
+    data_dir = autografs.data.__path__[0]
+    for name in ("topologies.json.gz", "topologies.pkl"):
+        path = os.path.join(data_dir, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 @pytest.fixture
 def data_files_available():
     """Check if topology data files are available."""
-    import autografs.data
+    return _topology_library_path() is not None
 
-    topo_path = os.path.join(autografs.data.__path__[0], "topologies.pkl")
-    return os.path.exists(topo_path)
+
+@pytest.fixture(scope="session")
+def full_mofgen():
+    """One shared Autografs with the full shipped libraries.
+
+    Session-scoped: initialization loads and analyzes the whole SBU
+    library plus ~1700 topologies (about 10 s), so tests share it and
+    must not mutate it.
+    """
+    if _topology_library_path() is None:
+        pytest.skip("Requires topology data files")
+    from autografs import Autografs
+
+    return Autografs()

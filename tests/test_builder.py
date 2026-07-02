@@ -22,16 +22,13 @@ from autografs.topology import Topology
 # =============================================================================
 
 # Mark for tests requiring full installation with data files
+_DATA_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "src", "autografs", "data"
+)
 requires_data = pytest.mark.skipif(
-    not os.path.exists(
-        os.path.join(
-            os.path.dirname(__file__),
-            "..",
-            "src",
-            "autografs",
-            "data",
-            "topologies.pkl",
-        )
+    not any(
+        os.path.exists(os.path.join(_DATA_DIR, name))
+        for name in ("topologies.json.gz", "topologies.pkl")
     ),
     reason="Requires topology data files",
 )
@@ -179,20 +176,16 @@ class TestAutografsInit:
         assert "Simple_Tetrahedral" in mofgen.sbu
 
     @requires_data
-    def test_sbu_are_fragments(self):
+    def test_sbu_are_fragments(self, full_mofgen):
         """Test that SBUs are Fragment objects."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         for name, sbu in mofgen.sbu.items():
             assert isinstance(sbu, Fragment), f"{name} is not a Fragment"
 
     @requires_data
-    def test_topologies_are_topology(self):
+    def test_topologies_are_topology(self, full_mofgen):
         """Test that topologies are Topology objects."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         for name, topo in mofgen.topologies.items():
             assert isinstance(topo, Topology), f"{name} is not a Topology"
 
@@ -206,29 +199,23 @@ class TestListTopologies:
     """Test Autografs.list_topologies method."""
 
     @requires_data
-    def test_returns_list(self):
+    def test_returns_list(self, full_mofgen):
         """Test that method returns a list."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         result = mofgen.list_topologies()
         assert isinstance(result, list)
 
     @requires_data
-    def test_returns_sorted(self):
+    def test_returns_sorted(self, full_mofgen):
         """Test that list is sorted."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         result = mofgen.list_topologies()
         assert result == sorted(result)
 
     @requires_data
-    def test_subset_filter(self):
+    def test_subset_filter(self, full_mofgen):
         """Test subset parameter filters results."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         all_topos = mofgen.list_topologies()
         subset = all_topos[:3] if len(all_topos) >= 3 else all_topos
         result = mofgen.list_topologies(subset=subset)
@@ -403,22 +390,18 @@ class TestListBuildingUnits:
     """Test Autografs.list_building_units method."""
 
     @requires_data
-    def test_returns_dict(self):
+    def test_returns_dict(self, full_mofgen):
         """Test that method returns a dictionary."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
         if topos:
             result = mofgen.list_building_units(sieve=topos[0])
             assert isinstance(result, dict)
 
     @requires_data
-    def test_without_sieve_returns_empty(self):
+    def test_without_sieve_returns_empty(self, full_mofgen):
         """Test that without sieve parameter returns empty dict."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         result = mofgen.list_building_units()
         assert result == {}
 
@@ -432,18 +415,18 @@ class TestValidateMappings:
     """Test Autografs._validate_mappings method."""
 
     @requires_data
-    def test_converts_string_to_fragment(self):
+    def test_converts_string_to_fragment(self, full_mofgen):
         """Test that string SBU names are converted to Fragment objects."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
-        for topo_name in topos[:5]:  # Test first 5
+        for topo_name in topos:
             topo = mofgen.topologies[topo_name]
             sbu_dict = mofgen.list_building_units(sieve=topo_name)
 
-            if all(sbu_dict.values()):
+            # slot types with no compatible SBU are absent from the
+            # dict, so completeness needs both checks
+            if len(sbu_dict) == len(topo.mappings) and all(sbu_dict.values()):
                 # Create string mappings
                 string_mappings = {k: v[0] for k, v in sbu_dict.items()}
                 result = mofgen._validate_mappings(topo, string_mappings)
@@ -452,13 +435,13 @@ class TestValidateMappings:
                 for v in result.values():
                     assert isinstance(v, Fragment)
                 break
+        else:
+            pytest.skip("No fully mappable topology in the library")
 
     @requires_data
-    def test_raises_on_missing_slot(self):
-        """Test that missing slot raises AssertionError."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+    def test_raises_on_missing_slot(self, full_mofgen):
+        """Test that an incomplete mapping raises ValueError."""
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos[:10]:
@@ -470,7 +453,7 @@ class TestValidateMappings:
                     incomplete = {
                         list(sbu_dict.keys())[0]: list(sbu_dict.values())[0][0]
                     }
-                    with pytest.raises(AssertionError):
+                    with pytest.raises(ValueError, match="Unfilled"):
                         mofgen._validate_mappings(topo, incomplete)
                     break
 
@@ -485,12 +468,11 @@ class TestBuild:
 
     @requires_data
     @pytest.mark.slow
-    def test_build_returns_graph(self):
+    def test_build_returns_graph(self, full_mofgen):
         """Test that build returns a networkx Graph."""
         import networkx
-        from autografs import Autografs
 
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos:
@@ -512,11 +494,9 @@ class TestBuild:
 
     @requires_data
     @pytest.mark.slow
-    def test_build_graph_has_cell(self):
+    def test_build_graph_has_cell(self, full_mofgen):
         """Test that built graph has cell attribute."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos:
@@ -538,11 +518,9 @@ class TestBuild:
 
     @requires_data
     @pytest.mark.slow
-    def test_build_graph_has_nodes(self):
+    def test_build_graph_has_nodes(self, full_mofgen):
         """Test that built graph has nodes with correct attributes."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos:
@@ -578,11 +556,9 @@ class TestAlignSlot:
     """Test Autografs._align_slot method."""
 
     @requires_data
-    def test_returns_fragment_and_rmsd(self):
+    def test_returns_fragment_and_rmsd(self, full_mofgen):
         """Test that _align_slot returns a Fragment and RMSD."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos:
@@ -607,11 +583,9 @@ class TestAlignSlot:
                             continue
 
     @requires_data
-    def test_rmsd_is_non_negative(self):
+    def test_rmsd_is_non_negative(self, full_mofgen):
         """Test that RMSD is always non-negative."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
+        mofgen = full_mofgen
         topos = mofgen.list_topologies()
 
         for topo_name in topos[:20]:
@@ -643,13 +617,11 @@ class TestIntegration:
 
     @requires_data
     @pytest.mark.slow
-    def test_full_workflow(self):
+    def test_full_workflow(self, full_mofgen):
         """Test complete workflow from initialization to graph output."""
         import networkx
-        from autografs import Autografs
 
-        # Initialize
-        mofgen = Autografs()
+        mofgen = full_mofgen
 
         # List topologies
         topos = mofgen.list_topologies()
@@ -684,10 +656,9 @@ class TestIntegration:
 
     @requires_data
     @pytest.mark.slow
-    def test_verbose_mode_runs(self):
+    def test_verbose_mode_runs(self, full_mofgen):
         """Test that verbose mode runs without errors."""
         import logging
-        from autografs import Autografs
 
         # Temporarily increase log level
         logger = logging.getLogger("autografs")
@@ -695,7 +666,7 @@ class TestIntegration:
         logger.setLevel(logging.DEBUG)
 
         try:
-            mofgen = Autografs()
+            mofgen = full_mofgen
             topos = mofgen.list_topologies()
 
             for topo_name in topos:

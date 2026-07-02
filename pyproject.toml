@@ -73,7 +73,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-autografs = ["data/*.csv", "data/*.xyz", "data/*.pkl"]
+autografs = ["data/*.csv", "data/*.xyz", "data/*.pkl", "data/*.json.gz"]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
