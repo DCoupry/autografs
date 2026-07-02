@@ -126,7 +126,10 @@ def save_topologies(topologies: dict[str, Topology], path: str | Path) -> None:
     topologies : dict[str, Topology]
         The library, keyed by topology name.
     path : str or Path
-        Output path. Written gzip-compressed if it ends in .gz.
+        Output path. Written gzip-compressed and compact if it ends in
+        .gz; pretty-printed otherwise, so plain .json files (e.g. test
+        fixtures) stay diffable. Output ordering is deterministic
+        either way, so even .gz libraries diff cleanly after zcat.
     """
     path = Path(path)
     payload = {
@@ -136,11 +139,12 @@ def save_topologies(topologies: dict[str, Topology], path: str | Path) -> None:
             for name, topology in sorted(topologies.items())
         },
     }
-    text = json.dumps(payload, separators=(",", ":"))
     if path.suffix == ".gz":
+        text = json.dumps(payload, separators=(",", ":"))
         with gzip.open(path, "wt", encoding="utf-8") as handle:
             handle.write(text)
     else:
+        text = json.dumps(payload, indent=1)
         path.write_text(text, encoding="utf-8")
     logger.info(f"Saved {len(topologies)} topologies to {path}")
 
