@@ -52,7 +52,9 @@ __version__ = "3.0.0"
 __status__ = "production"
 __all__ = [
     "utils",
+    "alignment",
     "fragment",
+    "framework",
     "topology",
     "topology_io",
     "builder",
@@ -61,6 +63,7 @@ __all__ = [
     "AlignmentError",
     "AutografsError",
     "Fragment",
+    "Framework",
     "Topology",
 ]
 
@@ -69,6 +72,7 @@ import logging
 from autografs.builder import Autografs
 from autografs.exceptions import AlignmentError, AutografsError
 from autografs.fragment import Fragment
+from autografs.framework import Framework
 from autografs.topology import Topology
 
 # Add NullHandler to prevent "No handler found" warnings

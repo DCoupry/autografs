@@ -391,10 +391,21 @@ def fragments_to_networkx(
                 )
                 full_graph.add_edge(i + offset, j + offset, bond_order=bo)
         offset += this_len
-    # interfragment edges
-    for (n0, d0), (n1, d1) in itertools.combinations(full_graph.nodes(data=True), 2):
-        if d0["tag"] == d1["tag"] > 0:
-            full_graph.add_edge(n0, n1)
+    # interfragment edges: atoms sharing a positive tag are the two
+    # sides of a blueprint dummy and bond together
+    nodes_by_tag: dict[int, list[int]] = defaultdict(list)
+    for node, data in full_graph.nodes(data=True):
+        if data["tag"] > 0:
+            nodes_by_tag[data["tag"]].append(node)
+    for tag, nodes in nodes_by_tag.items():
+        if len(nodes) == 2:
+            full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
+        elif len(nodes) > 2:
+            logger.warning(
+                f"Tag {tag} present on {len(nodes)} atoms; bonding the "
+                "first two."
+            )
+            full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
     return full_graph
 
 

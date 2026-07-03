@@ -342,7 +342,7 @@ class TestBuildDeterminism:
         g2 = synthetic_mofgen.build(topo, mappings=dict(mappings), refine_cell=False)
 
         np.testing.assert_array_almost_equal(
-            self._node_coords(g1), self._node_coords(g2), decimal=10
+            self._node_coords(g1.graph), self._node_coords(g2.graph), decimal=10
         )
 
 
@@ -486,85 +486,57 @@ class TestValidateMappings:
 class TestBuild:
     """Test Autografs.build method."""
 
-    @requires_data
-    @pytest.mark.slow
-    def test_build_returns_graph(self, full_mofgen):
-        """Test that build returns a networkx Graph."""
-        import networkx
+    @staticmethod
+    def _first_framework(mofgen):
+        """Build the first small, fully mappable topology.
 
-        mofgen = full_mofgen
-        topos = mofgen.list_topologies()
+        Assertions live in the tests, outside any try block: the old
+        pattern caught Exception around the asserts, so failures were
+        silently skipped.
+        """
+        from autografs.exceptions import AlignmentError
 
-        for topo_name in topos:
+        for topo_name in mofgen.list_topologies():
             topo = mofgen.topologies[topo_name]
             if len(topo) > 10:
-                continue  # Skip large topologies
-
+                continue  # skip large topologies
             sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if all(sbu_dict.values()):
-                mappings = {k: v[0] for k, v in sbu_dict.items()}
-                try:
-                    result = mofgen.build(
-                        topo.copy(), mappings, refine_cell=False, verbose=False
-                    )
-                    assert isinstance(result, networkx.Graph)
-                    break
-                except Exception:
-                    continue
-
-    @requires_data
-    @pytest.mark.slow
-    def test_build_graph_has_cell(self, full_mofgen):
-        """Test that built graph has cell attribute."""
-        mofgen = full_mofgen
-        topos = mofgen.list_topologies()
-
-        for topo_name in topos:
-            topo = mofgen.topologies[topo_name]
-            if len(topo) > 10:
+            if len(sbu_dict) != len(topo.mappings) or not all(sbu_dict.values()):
                 continue
+            mappings = {k: v[0] for k, v in sbu_dict.items()}
+            try:
+                return mofgen.build(topo, mappings, refine_cell=False)
+            except (AlignmentError, ValueError):
+                continue
+        pytest.skip("No buildable small topology found")
 
-            sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if all(sbu_dict.values()):
-                mappings = {k: v[0] for k, v in sbu_dict.items()}
-                try:
-                    result = mofgen.build(
-                        topo.copy(), mappings, refine_cell=False, verbose=False
-                    )
-                    assert "cell" in result.graph
-                    break
-                except Exception:
-                    continue
+    @requires_data
+    @pytest.mark.slow
+    def test_build_returns_framework(self, full_mofgen):
+        """Test that build returns a Framework."""
+        from autografs import Framework
+
+        result = self._first_framework(full_mofgen)
+        assert isinstance(result, Framework)
+        assert len(result) > 0
+
+    @requires_data
+    @pytest.mark.slow
+    def test_build_framework_has_cell(self, full_mofgen):
+        """Test that the built framework carries a 3x3 cell."""
+        result = self._first_framework(full_mofgen)
+        assert result.cell.shape == (3, 3)
 
     @requires_data
     @pytest.mark.slow
     def test_build_graph_has_nodes(self, full_mofgen):
-        """Test that built graph has nodes with correct attributes."""
-        mofgen = full_mofgen
-        topos = mofgen.list_topologies()
-
-        for topo_name in topos:
-            topo = mofgen.topologies[topo_name]
-            if len(topo) > 10:
-                continue
-
-            sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if all(sbu_dict.values()):
-                mappings = {k: v[0] for k, v in sbu_dict.items()}
-                try:
-                    result = mofgen.build(
-                        topo.copy(), mappings, refine_cell=False, verbose=False
-                    )
-                    assert result.number_of_nodes() > 0
-
-                    # Check node attributes
-                    for node, data in result.nodes(data=True):
-                        assert "symbol" in data
-                        assert "coord" in data
-                        assert "tag" in data
-                    break
-                except Exception:
-                    continue
+        """Test that the bond graph has the expected node attributes."""
+        result = self._first_framework(full_mofgen)
+        assert result.graph.number_of_nodes() > 0
+        for node, data in result.graph.nodes(data=True):
+            assert "symbol" in data
+            assert "coord" in data
+            assert "tag" in data
 
 
 # =============================================================================
@@ -578,41 +550,18 @@ class TestIntegration:
     @requires_data
     @pytest.mark.slow
     def test_full_workflow(self, full_mofgen):
-        """Test complete workflow from initialization to graph output."""
-        import networkx
+        """Test complete workflow from initialization to framework output."""
+        from autografs import Framework
 
         mofgen = full_mofgen
+        assert len(mofgen.list_topologies()) > 0
 
-        # List topologies
-        topos = mofgen.list_topologies()
-        assert len(topos) > 0
-
-        # Find a topology with available SBUs
-        for topo_name in topos:
-            topo = mofgen.topologies[topo_name]
-            if len(topo) > 10:
-                continue
-
-            sbu_dict = mofgen.list_building_units(sieve=topo_name)
-            if not all(sbu_dict.values()):
-                continue
-
-            # Build
-            mappings = {k: v[0] for k, v in sbu_dict.items()}
-            try:
-                graph = mofgen.build(
-                    topo.copy(), mappings, refine_cell=False, verbose=False
-                )
-
-                # Verify output
-                assert isinstance(graph, networkx.Graph)
-                assert graph.number_of_nodes() > 0
-                assert "cell" in graph.graph
-                return
-            except Exception:
-                continue
-
-        pytest.skip("Could not find suitable topology for integration test")
+        framework = TestBuild._first_framework(mofgen)
+        assert isinstance(framework, Framework)
+        assert len(framework) > 0
+        assert framework.cell.shape == (3, 3)
+        # the structure view agrees with the graph
+        assert len(framework.structure) == len(framework)
 
     @requires_data
     @pytest.mark.slow

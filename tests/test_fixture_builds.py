@@ -96,7 +96,7 @@ class TestGoldenBuilds:
         mappings = self._mappings_by_connectivity(
             topology, {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}
         )
-        graph = mofgen.build(
+        framework = mofgen.build(
             topology, mappings=mappings, refine_cell=True, max_rmsd=0.5
         )
 
@@ -106,16 +106,15 @@ class TestGoldenBuilds:
             sbu = mofgen.sbu[mappings[key]]
             n_real = len(sbu.atoms) - len(sbu.atoms.indices_from_symbol("X"))
             expected += n_real * len(indices)
-        assert graph.number_of_nodes() == expected
+        assert len(framework) == expected
 
         # the optimized cell of this cubic net must be cubic and sized
         # like MOF-5
-        cell = graph.graph["cell"]
-        abc = np.linalg.norm(cell, axis=1)
+        abc = np.linalg.norm(framework.cell, axis=1)
         np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
         assert 12.0 < abc[0] < 13.5
         # every atom bonded: no isolated nodes
-        degrees = [d for _, d in graph.degree()]
+        degrees = [d for _, d in framework.graph.degree()]
         assert min(degrees) >= 1
 
     def test_mof5_build_is_deterministic(self, mofgen):
@@ -125,12 +124,10 @@ class TestGoldenBuilds:
         )
 
         def coords():
-            graph = mofgen.build(
+            framework = mofgen.build(
                 topology, mappings=dict(mappings), refine_cell=False
             )
-            return np.array(
-                [graph.nodes[n]["coord"] for n in sorted(graph.nodes())]
-            )
+            return framework.cart_coords
 
         np.testing.assert_array_almost_equal(coords(), coords(), decimal=10)
 
@@ -145,13 +142,13 @@ class TestGoldenBuilds:
         assert 4 in by_conn, "no tetrahedral SBU matched dia nodes"
         key4, sbus4 = by_conn[4]
         key2, sbus2 = by_conn[2]
-        graph = mofgen.build(
+        framework = mofgen.build(
             topology,
             mappings={key4: sorted(sbus4)[0], key2: "Benzene_linear"},
             refine_cell=True,
             max_rmsd=0.5,
         )
-        assert graph.number_of_nodes() > 0
-        abc = np.linalg.norm(graph.graph["cell"], axis=1)
+        assert len(framework) > 0
+        abc = np.linalg.norm(framework.cell, axis=1)
         np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
         assert abc[0] > 10.0

@@ -38,6 +38,7 @@ import autografs.topology_io
 import autografs.utils
 from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
+from autografs.framework import Framework
 from autografs.topology import Topology
 
 logger = logging.getLogger(__name__)
@@ -121,7 +122,7 @@ class Autografs:
         topology_subset: list[str] | None = None,
         refine_cell: bool = True,
         max_rmsd: float | None = None,
-    ) -> list[networkx.Graph]:
+    ) -> list[Framework]:
         """
         Builds all available structures based on the SBU and Topologies libraries
 
@@ -139,8 +140,8 @@ class Autografs:
 
         Returns
         -------
-        list[networkx.Graph]
-            the list of connected graphs produced by the building method
+        list[Framework]
+            the frameworks produced by the building method
         """
         graphs = []
         logger.info("Building All Available Structures! This will take some time.")
@@ -217,8 +218,10 @@ class Autografs:
 
         Returns
         -------
-        networkx.Graph
-            The connected molecular graph of the constructed structure
+        Framework
+            The built framework: structure, bond graph, and exports
+            (write_cif, to_ase, to_gulp). The underlying networkx
+            graph is available as Framework.graph.
 
         Raises
         ------
@@ -278,7 +281,7 @@ class Autografs:
         graph = autografs.utils.fragments_to_networkx(
             best_alignment, cell=lattice.matrix
         )
-        return graph
+        return Framework(graph, name=topology.name)
 
     def _validate_mappings(
         self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]
