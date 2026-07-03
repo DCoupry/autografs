@@ -14,6 +14,11 @@ on:
           - testpypi
           - pypi
 
+# least privilege for GITHUB_TOKEN: read-only by default; the publish
+# jobs declare their own id-token: write for PyPI trusted publishing
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
