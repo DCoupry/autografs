@@ -85,6 +85,28 @@ class TestRoundtrip:
             assert slot.pointgroup  # symbol available regardless
 
 
+class TestLazyLibrary:
+    """load_topologies materializes entries only on access."""
+
+    def test_lazy_materialization(self, binodal_topology, tmp_path):
+        path = tmp_path / "topos.json"
+        topology_io.save_topologies(
+            {"net_a": binodal_topology, "net_b": binodal_topology}, path
+        )
+        library = topology_io.load_topologies(path)
+
+        assert len(library) == 2
+        assert len(library._cache) == 0
+        # iteration and membership do not materialize
+        assert sorted(library) == ["net_a", "net_b"]
+        assert "net_a" in library
+        assert len(library._cache) == 0
+        # access materializes exactly one, and caches it
+        first = library["net_a"]
+        assert len(library._cache) == 1
+        assert library["net_a"] is first
+
+
 class TestFormatVersion:
     def test_unsupported_version_raises(self, tmp_path):
         path = tmp_path / "topos.json"

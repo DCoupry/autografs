@@ -24,6 +24,7 @@ from __future__ import annotations
 import itertools
 import logging
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import dill
@@ -98,7 +99,7 @@ class Autografs:
         """
         super().__init__()
         # Initialize instance attributes to avoid sharing between instances
-        self.topologies: dict[str, Topology] = {}
+        self.topologies: Mapping[str, Topology] = {}
         self.sbu: dict[str, Fragment] = {}
         logger.info(f"{'*':*^78}")
         logger.info(f"*{'AuToGraFS':^76}*")
@@ -396,7 +397,9 @@ class Autografs:
         logger.info(
             f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."
         )
-        self.topologies.update(topologies)
+        # assignment, not dict.update(): the JSON loader returns a lazy
+        # mapping, and update() would materialize every topology
+        self.topologies = topologies
         return None
 
     def list_topologies(

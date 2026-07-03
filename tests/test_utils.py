@@ -195,6 +195,14 @@ class TestXyzToSbu:
         dummies = trigonal.extract_dummies()
         assert len(dummies) == 3
 
+    def test_loading_skips_symmetry_analysis(self, temp_xyz_file):
+        """Point group analysis is deferred, not run at load time."""
+        sbus = utils.xyz_to_sbu(temp_xyz_file)
+        for frag in sbus.values():
+            assert frag._symmetry is None
+        # the symbol is still available on demand
+        assert sbus["Test_Linear"].pointgroup == "D*h"
+
 
 # =============================================================================
 # load_uff_lib Tests

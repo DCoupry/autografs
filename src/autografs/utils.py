@@ -48,7 +48,7 @@ from pymatgen.core.structure import Molecule
 from pymatgen.io.xyz import XYZ
 
 from autografs.data.uff4mof import UFF4MOF, UFFType
-from autografs.fragment import Fragment, analyze_dummy_pointgroup
+from autografs.fragment import Fragment
 
 logger = logging.getLogger(__name__)
 
@@ -142,8 +142,12 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     """Load Secondary Building Units from an XYZ file.
 
     Reads a multi-structure XYZ file and creates Fragment objects for
-    each structure. Dummy atoms ("X") define connection points and are
-    used to determine the point group symmetry.
+    each structure. Dummy atoms ("X") define connection points.
+
+    Point group analysis is NOT run here: compatibility and alignment
+    are geometric (arm directions), so the symbol is pure metadata and
+    each Fragment computes it lazily on first access. This keeps
+    library loading at XYZ-parsing speed.
 
     Parameters
     ----------
@@ -162,11 +166,10 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     """
     xyz = XYZ.from_file(path)
     names = get_xyz_names(path)
-    sbu = {}
-    for molecule, name in zip(xyz.all_molecules, names, strict=True):
-        symmetry = analyze_dummy_pointgroup(molecule)
-        sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
-    return sbu
+    return {
+        name: Fragment(atoms=molecule, name=name)
+        for molecule, name in zip(xyz.all_molecules, names, strict=True)
+    }
 
 
 @functools.cache

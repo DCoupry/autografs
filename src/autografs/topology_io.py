@@ -22,6 +22,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import numpy as np
@@ -31,6 +32,43 @@ from autografs.fragment import Fragment
 from autografs.topology import Topology
 
 logger = logging.getLogger(__name__)
+
+
+class LazyTopologyLibrary(Mapping):
+    """A topology library that materializes entries on first access.
+
+    Reconstructing all ~2500 Topology objects (tens of thousands of
+    pymatgen Molecules) takes ~10 s, but a session typically touches a
+    handful of nets. This mapping keeps the parsed JSON payload and
+    builds each Topology the first time it is requested, caching the
+    result. Iteration and membership tests never materialize anything.
+    """
+
+    def __init__(self, payload: dict[str, dict]) -> None:
+        self._raw = payload
+        self._cache: dict[str, Topology] = {}
+
+    def __getitem__(self, name: str) -> Topology:
+        if name not in self._cache:
+            self._cache[name] = topology_from_dict(name, self._raw[name])
+        return self._cache[name]
+
+    def __contains__(self, name: object) -> bool:
+        # the Mapping default would materialize via __getitem__
+        return name in self._raw
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._raw)
+
+    def __len__(self) -> int:
+        return len(self._raw)
+
+    def __repr__(self) -> str:
+        return (
+            f"LazyTopologyLibrary({len(self._raw)} topologies, "
+            f"{len(self._cache)} materialized)"
+        )
+
 
 FORMAT_VERSION = 1
 
@@ -147,7 +185,7 @@ def save_topologies(topologies: dict[str, Topology], path: str | Path) -> None:
     logger.info(f"Saved {len(topologies)} topologies to {path}")
 
 
-def load_topologies(path: str | Path) -> dict[str, Topology]:
+def load_topologies(path: str | Path) -> LazyTopologyLibrary:
     """Load a topology library from a JSON file.
 
     Parameters
@@ -157,8 +195,9 @@ def load_topologies(path: str | Path) -> dict[str, Topology]:
 
     Returns
     -------
-    dict[str, Topology]
-        The library, keyed by topology name.
+    LazyTopologyLibrary
+        The library, keyed by topology name. Behaves as a read-only
+        mapping; entries are reconstructed on first access.
 
     Raises
     ------
@@ -177,7 +216,4 @@ def load_topologies(path: str | Path) -> dict[str, Topology]:
             f"Unsupported topology format version {version!r} in {path}; "
             f"this build of AuToGraFS reads version {FORMAT_VERSION}."
         )
-    return {
-        name: topology_from_dict(name, data)
-        for name, data in payload["topologies"].items()
-    }
+    return LazyTopologyLibrary(payload["topologies"])
