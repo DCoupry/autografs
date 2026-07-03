@@ -71,10 +71,10 @@ class Framework:
         return self.graph.number_of_nodes()
 
     def __repr__(self) -> str:
-        abc = np.round(self.lattice.abc, 2)
+        abc = tuple(round(float(x), 2) for x in self.lattice.abc)
         return (
-            f"Framework({self.name!r}, {self.structure.composition.formula}, "
-            f"abc={tuple(abc)})"
+            f"Framework({self.name!r}, {self.structure.composition.formula!r}, "
+            f"abc={abc})"
         )
 
     @property
