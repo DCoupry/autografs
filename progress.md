@@ -160,10 +160,33 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   few loose internal annotations); flip the CI typecheck job to
   blocking when clean.
 
-## Step 7 — Scale features (v3_plan §3.6, §4.4)
-- [ ] Parallel + sampling build_all
-- [ ] SBU library cache
-- [ ] 2D stacking for COFs; IZA import; RCSR refresh
+## Session log (final)
+- **2026-07-03**: Steps 1-7 all complete. Branch ready for PR to master:
+  36+ commits, 183 tests green (incl. slow), lint+format clean.
+  Headline numbers vs session start: usable topologies ~1400 (some
+  silently wrong) → 2464 shipped in-wheel; MOF-5 build broken
+  (21x8.3x8.4 cell) → correct cubic 12.77 A in 0.04 s; init crash
+  (missing pkl) → 3.8 s out-of-the-box; pandas dropped; pickles
+  replaced by versioned JSON; build() returns Framework with
+  CIF/ASE/GULP export.
+
+## Step 7 — Scale features (v3_plan §3.6, §4.4) — CORE COMPLETE
+- [x] Lazy loading (42bdea5): init 18.6 s → 3.8 s. SBU load skips point
+      group analysis entirely (geometric matching made it metadata);
+      LazyTopologyLibrary materializes topologies on first access.
+      Beware: dict.update() on the lazy mapping would materialize all —
+      _setup_topologies assigns instead.
+- [x] build_all scale-out (2ee0642): streaming enumeration,
+      max_per_topology with seeded sampling, n_jobs worker processes
+      via module-level build_framework() core (verified on Windows
+      spawn against serial results)
+- Deferred to post-PR branches (proper science features):
+  - 2D plane-group nets for COFs (~200 nets; needs plane→space group
+    mapping + frozen-c cell parametrization + stacking options)
+  - IZA zeolite framework import
+  - RCSR data refresh (post-2019 nets)
+  - bond-length-aware pair targets (MOF-5 12.77 vs exp 12.9)
+  - mypy burn-down (CI job advisory until clean)
 
 ## Session log
 - **2026-07-02**: Reviewed codebase, wrote v3_plan.md + CLAUDE.md. Confirmed
