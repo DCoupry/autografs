@@ -27,9 +27,9 @@ import logging
 from typing import TYPE_CHECKING
 
 import numpy as np
-from scipy.spatial.distance import pdist
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
+from scipy.spatial.distance import pdist
 
 if TYPE_CHECKING:
     pass
@@ -48,7 +48,7 @@ SYMMETRY_TOLERANCE = 0.1
 COMPATIBILITY_MAX_RMSD = 0.25
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _match_rmsd_cached(this_bytes: bytes, that_bytes: bytes, size: int) -> float:
     """Memoized directional match RMSD between two arm-unit sets.
 
@@ -300,16 +300,17 @@ class Fragment:
             return True
         # cheap rotation/permutation-invariant prefilter: grossly
         # different pairwise-angle multisets cannot match
-        gap = float(
-            np.abs(self._shape_signature - other._shape_signature).max()
-        )
+        gap = float(np.abs(self._shape_signature - other._shape_signature).max())
         if gap > 4.0 * max_rmsd:
             return False
-        return _match_rmsd_cached(
-            np.round(this_units, 6).tobytes(),
-            np.round(that_units, 6).tobytes(),
-            len(this_units),
-        ) <= max_rmsd
+        return (
+            _match_rmsd_cached(
+                np.round(this_units, 6).tobytes(),
+                np.round(that_units, 6).tobytes(),
+                len(this_units),
+            )
+            <= max_rmsd
+        )
 
     def _clear_geometry_caches(self) -> None:
         """Clear cached geometry after coordinates change."""

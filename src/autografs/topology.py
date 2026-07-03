@@ -97,7 +97,7 @@ class Topology:
                     f"{len(equivalence_classes)} equivalence classes for "
                     f"{len(slots)} slots in topology {name}."
                 )
-            for slot, eq_class in zip(slots, equivalence_classes):
+            for slot, eq_class in zip(slots, equivalence_classes, strict=True):
                 slot.equivalence_class = int(eq_class)
         self.spacegroup_number = spacegroup_number
         self.slots = np.array(slots, dtype=object)

@@ -141,8 +141,7 @@ class TestGoldenBuilds:
         topology = mofgen.topologies["dia"]
         available = mofgen.list_building_units(sieve="dia")
         by_conn = {
-            len(k.atoms.indices_from_symbol("X")): (k, v)
-            for k, v in available.items()
+            len(k.atoms.indices_from_symbol("X")): (k, v) for k, v in available.items()
         }
         assert 4 in by_conn, "no tetrahedral SBU matched dia nodes"
         key4, sbus4 = by_conn[4]
@@ -167,8 +166,7 @@ class TestGoldenBuilds:
         topology = mofgen.topologies["acs"]
         available = mofgen.list_building_units(sieve="acs")
         by_conn = {
-            len(k.atoms.indices_from_symbol("X")): (k, v)
-            for k, v in available.items()
+            len(k.atoms.indices_from_symbol("X")): (k, v) for k, v in available.items()
         }
         assert 6 in by_conn, "no 6-c SBU matched acs nodes"
         key6, sbus6 = by_conn[6]

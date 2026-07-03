@@ -95,9 +95,7 @@ class Framework:
     @property
     def cart_coords(self) -> np.ndarray:
         """Unwrapped cartesian coordinates in node order."""
-        return np.array(
-            [self.graph.nodes[n]["coord"] for n in sorted(self.graph)]
-        )
+        return np.array([self.graph.nodes[n]["coord"] for n in sorted(self.graph)])
 
     @property
     def mmtypes(self) -> list[str]:
@@ -166,7 +164,7 @@ class Framework:
         logger.info(f"Wrote {self!r} to {path}")
         return path
 
-    def to_ase(self) -> "ase.Atoms":
+    def to_ase(self) -> ase.Atoms:
         """The framework as an ASE Atoms object (wrapped, periodic)."""
         from ase import Atoms
 

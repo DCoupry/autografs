@@ -5,10 +5,8 @@ This module provides shared fixtures and configuration for all test modules.
 """
 
 import os
-import tempfile
 
 import pytest
-
 
 # =============================================================================
 # Pytest Configuration

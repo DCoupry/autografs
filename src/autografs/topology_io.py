@@ -105,9 +105,7 @@ def topology_from_dict(name: str, data: dict) -> Topology:
         )
         equivalence_classes.append(slot_data.get("equivalence_class"))
     known_classes = (
-        equivalence_classes
-        if all(c is not None for c in equivalence_classes)
-        else None
+        equivalence_classes if all(c is not None for c in equivalence_classes) else None
     )
     return Topology(
         name=name,

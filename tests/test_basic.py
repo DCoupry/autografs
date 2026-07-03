@@ -5,8 +5,6 @@ This module contains unit tests verifying package imports, version
 information, and basic module accessibility.
 """
 
-import pytest
-
 
 class TestPackageImports:
     """Test package import functionality."""

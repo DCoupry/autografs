@@ -5,19 +5,18 @@ Tests cover the Fragment and Topology classes with their methods,
 using pytest and hypothesis for property-based testing.
 """
 
-import copy
 import math
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, assume, settings
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
 from autografs.fragment import Fragment
 from autografs.topology import Topology
-
 
 # =============================================================================
 # Fixtures
@@ -304,8 +303,7 @@ class TestFragmentSymmetryCompatibility:
             [0.0, 0.0, 1.0],
         ]
         rotated = [
-            [sum(rot[r][c] * v[c] for c in range(3)) for r in range(3)]
-            for v in chiral
+            [sum(rot[r][c] * v[c] for c in range(3)) for r in range(3)] for v in chiral
         ]
         frag_b = self._fragment_from_dummy_coords(rotated, "c1_b")
         assert frag_a.has_compatible_symmetry(frag_b)
@@ -372,9 +370,7 @@ class TestFragmentEquivalenceClass:
 
         mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
         mol.add_site_property("tags", [0, 1, 2])
-        slots = [
-            Fragment(atoms=mol.copy(), name="slot") for _ in range(4)
-        ]
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(4)]
         topo = Topology(
             name="binodal",
             slots=slots,
@@ -548,7 +544,7 @@ class TestTopologyGetCompatibleSlots:
         """Test that incompatible slots return empty lists."""
         result = simple_topology.get_compatible_slots(tetrahedral_fragment)
         # All values should be empty lists
-        for slot_type, indices in result.items():
+        for _slot_type, indices in result.items():
             assert indices == []
 
 
@@ -557,7 +553,6 @@ class TestTopologyScaleSlots:
 
     def test_scale_changes_cell(self, simple_topology):
         """Test that scaling changes cell parameters."""
-        original_abc = simple_topology.cell.abc
         simple_topology.scale_slots(scales=(20.0, 20.0, 20.0))
         new_abc = simple_topology.cell.abc
         assert new_abc[0] == 20.0
@@ -574,7 +569,6 @@ class TestTopologyScaleSlots:
 
     def test_scale_default_values(self, simple_topology):
         """Test scaling with default values (1.0, 1.0, 1.0)."""
-        original_abc = simple_topology.cell.abc
         simple_topology.scale_slots()  # Use defaults
         new_abc = simple_topology.cell.abc
         np.testing.assert_array_almost_equal(new_abc, (1.0, 1.0, 1.0))

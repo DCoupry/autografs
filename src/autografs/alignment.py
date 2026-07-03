@@ -109,9 +109,7 @@ def match_directions(
     """
     n = len(targets)
     if len(arms) != n:
-        raise AlignmentError(
-            f"Cannot match {len(arms)} arms onto {n} slot dummies."
-        )
+        raise AlignmentError(f"Cannot match {len(arms)} arms onto {n} slot dummies.")
     best: tuple[float, np.ndarray, np.ndarray] | None = None
     for start in _CUBE_ROTATIONS:
         rotation = start
@@ -230,15 +228,11 @@ class CellParametrization:
         if system == "monoclinic":
             a, b, c, unique = free
             angles = [90.0, 90.0, 90.0]
-            angles[self._unique_angle_index] = float(
-                np.clip(unique, *_ANGLE_BOUNDS)
-            )
+            angles[self._unique_angle_index] = float(np.clip(unique, *_ANGLE_BOUNDS))
             return (a, b, c, *angles)
         if system == "triclinic":
             a, b, c, alpha, beta, gamma = free
-            alpha, beta, gamma = np.clip(
-                (alpha, beta, gamma), *_ANGLE_BOUNDS
-            )
+            alpha, beta, gamma = np.clip((alpha, beta, gamma), *_ANGLE_BOUNDS)
             return (a, b, c, float(alpha), float(beta), float(gamma))
         # unknown: free lengths, blueprint angles
         a, b, c = free
@@ -346,9 +340,7 @@ class BuildPlan:
             current += np.linalg.norm(separation)
         if not self.pairs or current < 1e-9:
             # no shared dummies: fall back to matching mean arm lengths
-            arms = np.concatenate(
-                [p.arm_lengths for p in self.placements]
-            ).mean()
+            arms = np.concatenate([p.arm_lengths for p in self.placements]).mean()
             slot_arms = np.concatenate(
                 [
                     np.linalg.norm(p.frac_arms @ blueprint, axis=1)
@@ -397,9 +389,7 @@ class BuildPlan:
         slot_rmsds: dict[int, float] = {}
         for placement in self.placements:
             directions = _unit(placement.frac_arms @ matrix)
-            rotation, perm, rmsd = match_directions(
-                directions, placement.arm_units
-            )
+            rotation, perm, rmsd = match_directions(directions, placement.arm_units)
             placement.arm_for_target = perm
             slot_rmsds[placement.slot_index] = rmsd
             center = placement.frac_center @ matrix
@@ -424,9 +414,7 @@ class BuildPlan:
         return fragments, lattice, slot_rmsds
 
 
-def prepare_build(
-    topology: Topology, mappings: dict[int, Fragment]
-) -> BuildPlan:
+def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPlan:
     """Precompute all geometry for building one framework.
 
     Parameters
@@ -456,9 +444,7 @@ def prepare_build(
         dummy_idx = [
             i for i, site in enumerate(slot.atoms) if site.specie.symbol == "X"
         ]
-        slot_frac = blueprint.get_fractional_coords(
-            slot.atoms.cart_coords[dummy_idx]
-        )
+        slot_frac = blueprint.get_fractional_coords(slot.atoms.cart_coords[dummy_idx])
         frac_center = slot_frac.mean(axis=0)
         slot_tags = [int(slot.atoms[i].properties["tags"]) for i in dummy_idx]
 
@@ -494,7 +480,9 @@ def prepare_build(
         placement.arm_for_target = perm
         index = len(placements)
         placements.append(placement)
-        for target_index, (tag, frac) in enumerate(zip(slot_tags, slot_frac)):
+        for target_index, (tag, frac) in enumerate(
+            zip(slot_tags, slot_frac, strict=True)
+        ):
             tag_sites.setdefault(tag, []).append((index, target_index, frac))
 
     pairs: list[tuple[int, int, int, int, np.ndarray]] = []
@@ -505,8 +493,7 @@ def prepare_build(
             continue
         if len(entries) > 2:
             logger.warning(
-                f"Tag {tag} shared by {len(entries)} slots; using the "
-                "first two."
+                f"Tag {tag} shared by {len(entries)} slots; using the first two."
             )
         (index_a, target_a, frac_a), (index_b, target_b, frac_b) = entries[:2]
         offset = np.round(frac_a - frac_b)

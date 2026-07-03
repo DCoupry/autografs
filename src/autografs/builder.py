@@ -27,8 +27,6 @@ import time
 from pathlib import Path
 
 import dill
-import networkx
-import numpy as np
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
@@ -164,7 +162,7 @@ class Autografs:
             if not all(sbu_dict.values()):
                 continue
             for sbus in list(itertools.product(*sbu_dict.values())):
-                maps.append((topology, dict(zip(sbu_dict.keys(), sbus))))
+                maps.append((topology, dict(zip(sbu_dict.keys(), sbus, strict=True))))
             total_len += len(maps)
             results_graphs = []
             for build_args in tqdm(maps):
@@ -182,7 +180,7 @@ class Autografs:
                     continue
             graphs += [g for g in results_graphs if g is not None]
         logger.info(f"\t[x] Generated a total of {len(graphs):^6} periodic graphs.")
-        logger.info(f"\t[x] Rate of error: {1.0 - len(graphs)/total_len:2.2%}.")
+        logger.info(f"\t[x] Rate of error: {1.0 - len(graphs) / total_len:2.2%}.")
         return graphs
 
     def build(
@@ -192,9 +190,9 @@ class Autografs:
         refine_cell: bool = True,
         verbose: bool = False,
         max_rmsd: float | None = None,
-    ) -> networkx.Graph:
+    ) -> Framework:
         """
-        Generates a graph from a mapping of SBU to topology slots.
+        Generates a framework from a mapping of SBU to topology slots.
 
         Parameters
         ----------
@@ -277,9 +275,7 @@ class Autografs:
             alpha, beta, gamma = lattice.angles
             logger.info("\t[x] Best cell parameters:")
             logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
-            logger.info(
-                f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}"
-            )
+            logger.info(f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}")
             logger.info(
                 f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
             )
@@ -464,7 +460,7 @@ class Autografs:
         sieve: str | None = None,
         verbose: bool = False,
         subset: list[str] | None = None,
-    ) -> dict[str, Fragment]:
+    ) -> dict[Fragment, list[str]]:
         """List available SBUs, optionally filtered by topology compatibility.
 
         Parameters
@@ -479,9 +475,11 @@ class Autografs:
 
         Returns
         -------
-        dict[str, list[str]]
-            Dictionary mapping slot identifiers to lists of compatible SBU names.
-            If no sieve is provided, returns an empty dict.
+        dict[Fragment, list[str]]
+            Compatible SBU names keyed by slot type (the topology's
+            representative slot Fragments). Slot types with no
+            compatible SBU are absent from the dict; without a sieve
+            the dict is empty.
 
         Examples
         --------
@@ -490,36 +488,29 @@ class Autografs:
         >>> for slot, sbus in sbu_dict.items():
         ...     print(f"Slot {slot}: {len(sbus)} compatible SBUs")
         """
-        full_list = []
         if subset is not None:
             sbus = [self.sbu[k] for k in subset]
         else:
             sbus = list(self.sbu.values())
-        if sieve is not None:
-            sieve = self.topologies[sieve]
+        building_units: dict[Fragment, set[str]] = {}
+        topology = self.topologies[sieve] if sieve is not None else None
+        if topology is not None:
             if verbose:
                 logger.info(
-                    f"filtering building units for compatibility with {sieve} topology..."
+                    f"filtering building units for compatibility with {topology} topology..."
                 )
             for sbu in sbus:
-                mappings = sieve.get_compatible_slots(candidate=sbu)
-                full_list += [(k, sbu.name) for k, v in mappings.items() if v]
-        slot_groups = itertools.groupby(full_list, lambda x: x[0])
-        building_units = {}
-        for k, v in slot_groups:
-            v = list(list(zip(*v))[1])
-            if k not in building_units:
-                building_units[k] = v
-            else:
-                building_units[k] += v
-        out_dict = {}
-        for k, v in building_units.items():
-            out_dict[k] = list(set(v))
-            if verbose:
-                logger.info(f"\t[x] {len(out_dict[k]):>5} SBU available for slot {k}")
-        # now check that all the slots from the sieves are filled
-        if sieve is not None and verbose:
-            for k in sieve.mappings.keys():
-                if k not in out_dict:
-                    logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
+                compatible = topology.get_compatible_slots(candidate=sbu)
+                for slot_type, indices in compatible.items():
+                    if indices:
+                        building_units.setdefault(slot_type, set()).add(sbu.name)
+        out_dict = {k: sorted(v) for k, v in building_units.items()}
+        if verbose:
+            for k, v in out_dict.items():
+                logger.info(f"\t[x] {len(v):>5} SBU available for slot {k}")
+            # report slot types that no SBU can fill
+            if topology is not None:
+                for k in topology.mappings:
+                    if k not in out_dict:
+                        logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
         return out_dict

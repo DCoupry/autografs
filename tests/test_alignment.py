@@ -18,9 +18,7 @@ TETRAHEDRON = np.array(
     [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]], dtype=float
 ) / np.sqrt(3)
 
-SQUARE = np.array(
-    [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], dtype=float
-)
+SQUARE = np.array([[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], dtype=float)
 
 
 class TestKabsch:

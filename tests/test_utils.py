@@ -9,11 +9,11 @@ import tempfile
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from autografs import utils
 from autografs.fragment import Fragment
-
 
 # =============================================================================
 # Fixtures
@@ -178,7 +178,7 @@ class TestXyzToSbu:
     def test_fragment_types(self, temp_xyz_file):
         """Test that returned values are Fragment objects."""
         sbus = utils.xyz_to_sbu(temp_xyz_file)
-        for name, frag in sbus.items():
+        for frag in sbus.values():
             assert isinstance(frag, Fragment)
 
     def test_linear_has_two_dummies(self, temp_xyz_file):

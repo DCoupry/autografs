@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 """
 AuToGraFS: Automatic Topological Generator for Framework Structures.
@@ -42,6 +41,7 @@ References
        AuToGraFS: Automatic Topological Generator for Framework Structures.
        The Journal of Physical Chemistry A, 118(40), 9607-14.
 """
+
 from __future__ import annotations
 
 __author__ = "Damien Coupry"

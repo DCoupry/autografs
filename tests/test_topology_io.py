@@ -15,9 +15,7 @@ from autografs.topology import Topology
 @pytest.fixture
 def binodal_topology():
     """A two-orbit topology with tagged slots, like cgd2pkl produces."""
-    lin = Molecule(
-        ["C", "X", "X"], [[0, 0, 0], [0.25, 0, 0], [-0.25, 0, 0]]
-    )
+    lin = Molecule(["C", "X", "X"], [[0, 0, 0], [0.25, 0, 0], [-0.25, 0, 0]])
     lin.add_site_property("tags", [0, 1, 2])
     tri = Molecule(
         ["N", "X", "X", "X"],
@@ -54,7 +52,7 @@ class TestRoundtrip:
         )
         assert topo.spacegroup_number == 221
         assert len(topo.slots) == 3
-        for original, restored in zip(binodal_topology.slots, topo.slots):
+        for original, restored in zip(binodal_topology.slots, topo.slots, strict=True):
             assert restored.pointgroup == original.pointgroup
             assert restored.equivalence_class == original.equivalence_class
             assert (
@@ -73,9 +71,7 @@ class TestRoundtrip:
         topology_io.save_topologies({"test_net": binodal_topology}, path)
         topo = topology_io.load_topologies(path)["test_net"]
 
-        original_groups = sorted(
-            sorted(v) for v in binodal_topology.mappings.values()
-        )
+        original_groups = sorted(sorted(v) for v in binodal_topology.mappings.values())
         restored_groups = sorted(sorted(v) for v in topo.mappings.values())
         assert restored_groups == original_groups == [[0, 1], [2]]
 

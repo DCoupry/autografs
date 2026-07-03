@@ -47,10 +47,8 @@ from pymatgen.core.bonds import get_bond_order
 from pymatgen.core.structure import Molecule
 from pymatgen.io.xyz import XYZ
 
-import autografs.data
 from autografs.data.uff4mof import UFF4MOF, UFFType
 from autografs.fragment import Fragment, analyze_dummy_pointgroup
-
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +93,8 @@ def format_mappings(mappings: dict[int, str]) -> str:
     out_mappings = []
     for k, v in new_dict.items():
         v = sorted(v)
-        grouped_indices = groupby(v, lambda n, c=count(): n - next(c))
+        # fresh count() per lambda: consecutive-run grouping idiom
+        grouped_indices = groupby(v, lambda n, c=count(): n - next(c))  # noqa: B008
         v = ",".join(format_indices(g) for _, g in grouped_indices)
         out_mappings.append(f"{k} : {v}")
     return "; ".join(out_mappings)
@@ -125,7 +124,7 @@ def get_xyz_names(path: str) -> list[str]:
     names = []
     white_space = r"[ \t\r\f\v]"
     natoms_line = white_space + r"*\d+" + white_space + r"*\n"
-    with open(path, "r") as xyz_file:
+    with open(path) as xyz_file:
         data = re.split(natoms_line, xyz_file.read())
         comment_lines = [
             list(y)[0] for x, y in itertools.groupby(data, lambda z: z == "") if not x
@@ -164,13 +163,13 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     xyz = XYZ.from_file(path)
     names = get_xyz_names(path)
     sbu = {}
-    for molecule, name in zip(xyz.all_molecules, names):
+    for molecule, name in zip(xyz.all_molecules, names, strict=True):
         symmetry = analyze_dummy_pointgroup(molecule)
         sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
     return sbu
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def _uff_types_for_prefix(prefix: str) -> tuple[UFFType, ...]:
     """All UFF4MOF types whose symbol starts with the element prefix."""
     return tuple(t for t in UFF4MOF if t.symbol.startswith(prefix))
@@ -378,7 +377,9 @@ def fragments_to_networkx(
         coords = subgraph.molecule.cart_coords
         tags = subgraph.molecule.site_properties["tags"]
         mmtypes = subgraph.molecule.site_properties["ufftype"]
-        for i, (s, c, t, m) in enumerate(zip(species, coords, tags, mmtypes)):
+        for i, (s, c, t, m) in enumerate(
+            zip(species, coords, tags, mmtypes, strict=True)
+        ):
             full_graph.add_node(i + offset, symbol=s, coord=c, tag=t, ufftype=m)
         for i in range(this_len):
             for j, ij_dist in [
@@ -402,8 +403,7 @@ def fragments_to_networkx(
             full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
         elif len(nodes) > 2:
             logger.warning(
-                f"Tag {tag} present on {len(nodes)} atoms; bonding the "
-                "first two."
+                f"Tag {tag} present on {len(nodes)} atoms; bonding the first two."
             )
             full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
     return full_graph
@@ -499,7 +499,7 @@ def networkx_to_gulp(
             bo = "double"
         else:
             bo = "triple"
-        lines.append(f"connect {b0+1:<4} {b1+1:<4} {bo}")
+        lines.append(f"connect {b0 + 1:<4} {b1 + 1:<4} {bo}")
 
     # Species mapping
     lines.append("")

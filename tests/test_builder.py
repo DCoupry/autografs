@@ -11,20 +11,16 @@ import tempfile
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, assume
 
 from autografs.fragment import Fragment
 from autografs.topology import Topology
-
 
 # =============================================================================
 # Test Markers
 # =============================================================================
 
 # Mark for tests requiring full installation with data files
-_DATA_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "src", "autografs", "data"
-)
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "autografs", "data")
 requires_data = pytest.mark.skipif(
     not any(
         os.path.exists(os.path.join(_DATA_DIR, name))
@@ -318,9 +314,7 @@ class TestBuildIsolation:
         slot indices named."""
         topo = synthetic_mofgen.topologies["linear_topo"]
         with pytest.raises(ValueError, match=r"Unfilled slots.*\[1\]"):
-            synthetic_mofgen._validate_mappings(
-                topology=topo, mappings={0: "lin_sbu"}
-            )
+            synthetic_mofgen._validate_mappings(topology=topo, mappings={0: "lin_sbu"})
 
 
 class TestBuildDeterminism:
@@ -328,9 +322,7 @@ class TestBuildDeterminism:
 
     @staticmethod
     def _node_coords(graph):
-        return np.array(
-            [graph.nodes[n]["coord"] for n in sorted(graph.nodes())]
-        )
+        return np.array([graph.nodes[n]["coord"] for n in sorted(graph.nodes())])
 
     def test_build_is_deterministic(self, synthetic_mofgen):
         """Regression: alignment used unseeded Molecule.perturb, so the
@@ -533,7 +525,7 @@ class TestBuild:
         """Test that the bond graph has the expected node attributes."""
         result = self._first_framework(full_mofgen)
         assert result.graph.number_of_nodes() > 0
-        for node, data in result.graph.nodes(data=True):
+        for _node, data in result.graph.nodes(data=True):
             assert "symbol" in data
             assert "coord" in data
             assert "tag" in data

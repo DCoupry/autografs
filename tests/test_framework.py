@@ -44,7 +44,7 @@ class TestFrameworkViews:
         assert mof5.cart_coords.shape == (len(mof5), 3)
         assert len(mof5.mmtypes) == len(mof5)
         # every mmtype starts with its element symbol
-        for symbol, mmtype in zip(mof5.symbols, mof5.mmtypes):
+        for symbol, mmtype in zip(mof5.symbols, mof5.mmtypes, strict=True):
             assert mmtype.startswith(symbol[0])
 
     def test_bonds(self, mof5):
