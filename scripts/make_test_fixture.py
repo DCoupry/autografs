@@ -19,10 +19,9 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from autografs import topology_io  # noqa: E402
-from cgd2pkl import read_cgd_data  # noqa: E402
+from autografs.cgd import read_cgd_data  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 

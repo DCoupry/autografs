@@ -14,3 +14,7 @@ class AutografsError(Exception):
 
 class AlignmentError(AutografsError):
     """Raised when aligning SBUs onto topology slots exceeds tolerance."""
+
+
+class TopologyExtractionError(AutografsError):
+    """Raised when a net cannot be converted into an AuToGraFS topology."""

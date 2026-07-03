@@ -41,16 +41,19 @@ dependencies = [
     "networkx>=3.0",
     "pymatgen>=2024.1.1",
     "dill>=0.3.8",
+    "tqdm>=4.60",
+    "requests>=2.28",
 ]
+
+[project.scripts]
+autografs-topologies = "autografs.cgd:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "hypothesis>=6.100.0",
-    "black>=24.0.0",
-    "isort>=5.13.0",
-    "flake8>=7.0.0",
+    "ruff>=0.5.0",
     "mypy>=1.8.0",
 ]
 docs = [
@@ -103,32 +106,29 @@ exclude_lines = [
     "raise NotImplementedError",
 ]
 
-[tool.black]
+[tool.ruff]
 line-length = 88
-target-version = ["py313"]
-include = '\.pyi?$'
-exclude = '''
-/(
-    \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | _build
-  | buck-out
-  | build
-  | dist
-)/
-'''
+target-version = "py311"
+src = ["src", "tests", "scripts"]
 
-[tool.isort]
-profile = "black"
-line_length = 88
-known_first_party = ["autografs"]
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+]
+ignore = [
+    "E501",  # line length is the formatter's job; long strings allowed
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["autografs"]
 
 [tool.mypy]
-python_version = "3.13"
+python_version = "3.11"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true
