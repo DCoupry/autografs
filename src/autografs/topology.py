@@ -58,7 +58,12 @@ class Topology:
     """
 
     def __init__(
-        self, name: str, slots: list[Fragment], cell: np.ndarray | Lattice
+        self,
+        name: str,
+        slots: list[Fragment],
+        cell: np.ndarray | Lattice,
+        equivalence_classes: list[int] | None = None,
+        spacegroup_number: int | None = None,
     ) -> None:
         """
         Parameters
@@ -70,18 +75,40 @@ class Topology:
             connectivity of slots in the topology.
         cell : np.ndarray
             The information on periodicity in matrix form (3x3)
+        equivalence_classes : list[int] or None, optional
+            Crystallographic orbit id for each slot. Slots sharing an id
+            are symmetry-equivalent and grouped under one slot type, and
+            crystallographically distinct orbits stay distinct even when
+            their local point group and size coincide. When omitted,
+            slots are grouped by point group and size alone (legacy
+            behavior).
+        spacegroup_number : int or None, optional
+            International spacegroup number of the source net, kept for
+            provenance and symmetry-constrained cell optimization.
         """
         self.name = name
         if isinstance(cell, Lattice):
             self.cell = cell
         else:
             self.cell = Lattice(cell)
+        if equivalence_classes is not None:
+            if len(equivalence_classes) != len(slots):
+                raise ValueError(
+                    f"{len(equivalence_classes)} equivalence classes for "
+                    f"{len(slots)} slots in topology {name}."
+                )
+            for slot, eq_class in zip(slots, equivalence_classes, strict=True):
+                slot.equivalence_class = int(eq_class)
+        self.spacegroup_number = spacegroup_number
         self.slots = np.array(slots, dtype=object)
         sizes = [len(fragment.atoms) for fragment in self.slots]
-        self.sizes = np.array(sizes, dtype=np.int8)
-        mappings = {}
-        for slot_type in set(slots):
-            mappings[slot_type] = [i for i, s in enumerate(slots) if s == slot_type]
+        self.sizes = np.array(sizes, dtype=np.int32)
+        # group equivalent slots, keyed by first occurrence: iterating a
+        # set here would make the key order depend on hash randomization
+        # and vary between processes
+        mappings: dict[Fragment, list[int]] = {}
+        for i, slot_type in enumerate(slots):
+            mappings.setdefault(slot_type, []).append(i)
         self.mappings = mappings
         return None
 

@@ -30,35 +30,29 @@ networkx_to_gulp
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
-import os
 import re
 from collections import defaultdict
 from collections.abc import Iterable
 from itertools import count, groupby
+from pathlib import Path
 
 import networkx
 import numpy as np
-import pandas
 from pymatgen.analysis.graphs import MoleculeGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_order
 from pymatgen.core.structure import Molecule
 from pymatgen.io.xyz import XYZ
-from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
-import autografs.data
+from autografs.data.uff4mof import UFF4MOF, UFFType
 from autografs.fragment import Fragment
-
 
 logger = logging.getLogger(__name__)
 
-# suppress false positive SettingWithCopyWarning
-pandas.options.mode.chained_assignment = None
-
 # Constants for molecular analysis
-SYMMETRY_TOLERANCE = 0.1  # Tolerance for point group symmetry detection
 BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
 BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
 
@@ -99,7 +93,8 @@ def format_mappings(mappings: dict[int, str]) -> str:
     out_mappings = []
     for k, v in new_dict.items():
         v = sorted(v)
-        grouped_indices = groupby(v, lambda n, c=count(): n - next(c))
+        # fresh count() per lambda: consecutive-run grouping idiom
+        grouped_indices = groupby(v, lambda n, c=count(): n - next(c))  # noqa: B008
         v = ",".join(format_indices(g) for _, g in grouped_indices)
         out_mappings.append(f"{k} : {v}")
     return "; ".join(out_mappings)
@@ -129,7 +124,7 @@ def get_xyz_names(path: str) -> list[str]:
     names = []
     white_space = r"[ \t\r\f\v]"
     natoms_line = white_space + r"*\d+" + white_space + r"*\n"
-    with open(path, "r") as xyz_file:
+    with open(path) as xyz_file:
         data = re.split(natoms_line, xyz_file.read())
         comment_lines = [
             list(y)[0] for x, y in itertools.groupby(data, lambda z: z == "") if not x
@@ -147,8 +142,12 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     """Load Secondary Building Units from an XYZ file.
 
     Reads a multi-structure XYZ file and creates Fragment objects for
-    each structure. Dummy atoms ("X") define connection points and are
-    used to determine the point group symmetry.
+    each structure. Dummy atoms ("X") define connection points.
+
+    Point group analysis is NOT run here: compatibility and alignment
+    are geometric (arm directions), so the symbol is pure metadata and
+    each Fragment computes it lazily on first access. This keeps
+    library loading at XYZ-parsing speed.
 
     Parameters
     ----------
@@ -167,23 +166,19 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     """
     xyz = XYZ.from_file(path)
     names = get_xyz_names(path)
-    sbu = {}
-    for molecule, name in zip(xyz.all_molecules, names):
-        dummies_idx = molecule.indices_from_symbol("X")
-        symmetric_mol = Molecule(
-            [
-                "H",
-            ]
-            * len(dummies_idx),
-            [molecule[idx].coords for idx in dummies_idx],
-            charge=len(dummies_idx),
-        )
-        symmetry = PointGroupAnalyzer(symmetric_mol, tolerance=SYMMETRY_TOLERANCE)
-        sbu[name] = Fragment(atoms=molecule, symmetry=symmetry, name=name)
-    return sbu
+    return {
+        name: Fragment(atoms=molecule, name=name)
+        for molecule, name in zip(xyz.all_molecules, names, strict=True)
+    }
 
 
-def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
+@functools.cache
+def _uff_types_for_prefix(prefix: str) -> tuple[UFFType, ...]:
+    """All UFF4MOF types whose symbol starts with the element prefix."""
+    return tuple(t for t in UFF4MOF if t.symbol.startswith(prefix))
+
+
+def load_uff_lib(mol: Molecule) -> tuple[tuple[UFFType, ...], list[str]]:
     """Load UFF force field parameters relevant to a molecule.
 
     Extracts UFF4MOF parameters for elements present in the molecule,
@@ -196,24 +191,24 @@ def load_uff_lib(mol: Molecule) -> tuple[pandas.DataFrame, list[str]]:
 
     Returns
     -------
-    tuple[pandas.DataFrame, list[str]]
+    tuple[tuple[UFFType, ...], list[str]]
         A tuple containing:
-        - DataFrame with UFF parameters for relevant elements.
+        - UFF parameter entries for the relevant elements.
         - List of UFF symbol prefixes for each atom in the molecule.
     """
     uff_symbs = [
         s.symbol if len(s.symbol) == 2 else f"{s.symbol}_" for s in mol.species
     ]
-    path = os.path.join(autografs.data.__path__[0], "uff4mof.csv")
-    full_lib = pandas.read_csv(path)
-    uff_lib = pandas.concat(
-        [full_lib[full_lib.symbol.str.startswith(s)] for s in set(uff_symbs)]
+    uff_lib = tuple(
+        entry
+        for prefix in sorted(set(uff_symbs))
+        for entry in _uff_types_for_prefix(prefix)
     )
     return uff_lib, uff_symbs
 
 
 def find_element_cutoffs(
-    uff_lib: pandas.DataFrame, uff_symbs: list[str]
+    uff_lib: tuple[UFFType, ...], uff_symbs: list[str]
 ) -> dict[tuple[str, str], float]:
     """Calculate bond distance cutoffs from UFF atomic radii.
 
@@ -222,8 +217,8 @@ def find_element_cutoffs(
 
     Parameters
     ----------
-    uff_lib : pandas.DataFrame
-        DataFrame containing UFF parameters including radii.
+    uff_lib : tuple[UFFType, ...]
+        UFF parameter entries including radii.
     uff_symbs : list[str]
         List of UFF symbol prefixes for atoms in the molecule.
 
@@ -238,19 +233,19 @@ def find_element_cutoffs(
     >>> cutoffs = find_element_cutoffs(uff_lib, uff_symbs)
     >>> print(cutoffs[("C", "N")])  # Bond cutoff for C-N
     """
-    radii = uff_lib[["symbol", "radius"]]
-    radii.symbol = radii.symbol.str[:2]
-    radii = radii.groupby("symbol").max()
+    # largest radius among each element's UFF types
+    max_radius: dict[str, float] = {}
+    for entry in uff_lib:
+        prefix = entry.symbol[:2]
+        max_radius[prefix] = max(max_radius.get(prefix, 0.0), entry.radius)
     cuts = {}
     for e0, e1 in itertools.product(uff_symbs, uff_symbs):
-        r0 = radii.loc[e0, "radius"]
-        r1 = radii.loc[e1, "radius"]
-        cuts[(e0.strip("_"), e1.strip("_"))] = r0 + r1
+        cuts[(e0.strip("_"), e1.strip("_"))] = max_radius[e0] + max_radius[e1]
     return cuts
 
 
 def find_mmtypes(
-    molgraph: MoleculeGraph, uff_lib: pandas.DataFrame, uff_symbs: list[str]
+    molgraph: MoleculeGraph, uff_lib: tuple[UFFType, ...], uff_symbs: list[str]
 ) -> list[str]:
     """Determine UFF atom types from molecular connectivity.
 
@@ -261,23 +256,23 @@ def find_mmtypes(
     ----------
     molgraph : MoleculeGraph
         A pymatgen MoleculeGraph with connectivity information.
-    uff_lib : pandas.DataFrame
-        DataFrame containing UFF parameters.
+    uff_lib : tuple[UFFType, ...]
+        UFF parameter entries to choose from.
     uff_symbs : list[str]
         List of UFF symbol prefixes for atoms in the molecule.
 
     Returns
     -------
     list[str]
-        List of assigned UFF atom type symbols.
+        List of assigned UFF atom type symbols, one per atom, in atom order.
     """
     mmtypes = []
     for i, symb in enumerate(uff_symbs):
         conn = molgraph.get_connected_sites(i)
         ncoord = len(conn)
-        atom_compat = uff_lib[uff_lib.symbol.str.startswith(symb)]
-        molgraph.molecule[i].properties["ufftype"] = atom_compat.symbol.values[0]
+        atom_compat = [t for t in uff_lib if t.symbol.startswith(symb)]
         if len(atom_compat) == 1:
+            mmtypes.append(atom_compat[0].symbol)
             continue
         if ncoord >= 2:
             c0 = molgraph.molecule.sites[i].coords
@@ -289,22 +284,21 @@ def find_mmtypes(
             cosine_angle = np.dot(c01, c02) / (
                 np.linalg.norm(c01) * np.linalg.norm(c02)
             )
-            angle = np.degrees(np.arccos(cosine_angle))
+            # clip to the valid arccos domain: collinear neighbors can
+            # give |cos| marginally above 1.0 from floating point error
+            angle = np.degrees(np.arccos(np.clip(cosine_angle, -1.0, 1.0)))
         else:
             angle = 180.0
-        coordinations_compat = atom_compat[atom_compat.coordination == ncoord]
+        coordinations_compat = [t for t in atom_compat if t.coordination == ncoord]
         if len(coordinations_compat) == 1:
-            molgraph.molecule[i].properties["ufftype"] = (
-                coordinations_compat.symbol.values[0]
-            )
+            mmtypes.append(coordinations_compat[0].symbol)
             continue
-        elif len(coordinations_compat) == 0:
+        if not coordinations_compat:
             # problem with the coordinations. use angles
             coordinations_compat = atom_compat
-        coordinations_compat["angle_diff"] = coordinations_compat.angle - angle
-        best_angle = coordinations_compat.sort_values(by="angle_diff").iloc[0]
         # TODO: if < 10% diff in angle error, use radii error
-        mmtypes.append(best_angle.symbol)
+        best = min(coordinations_compat, key=lambda t: abs(t.angle - angle))
+        mmtypes.append(best.symbol)
     return mmtypes
 
 
@@ -332,7 +326,7 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     uff_lib, uff_symbs = load_uff_lib(mol)
     # obtaining cutoffs from the maximum UFF radius
     strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
-    mg = MoleculeGraph.with_local_env_strategy(mol, strategy=strategy)
+    mg = MoleculeGraph.from_local_env_strategy(mol, strategy=strategy)
     # add mmtypes
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)
     for i, mmtype in enumerate(mmtypes):
@@ -386,7 +380,9 @@ def fragments_to_networkx(
         coords = subgraph.molecule.cart_coords
         tags = subgraph.molecule.site_properties["tags"]
         mmtypes = subgraph.molecule.site_properties["ufftype"]
-        for i, (s, c, t, m) in enumerate(zip(species, coords, tags, mmtypes)):
+        for i, (s, c, t, m) in enumerate(
+            zip(species, coords, tags, mmtypes, strict=True)
+        ):
             full_graph.add_node(i + offset, symbol=s, coord=c, tag=t, ufftype=m)
         for i in range(this_len):
             for j, ij_dist in [
@@ -399,10 +395,20 @@ def fragments_to_networkx(
                 )
                 full_graph.add_edge(i + offset, j + offset, bond_order=bo)
         offset += this_len
-    # interfragment edges
-    for (n0, d0), (n1, d1) in itertools.combinations(full_graph.nodes(data=True), 2):
-        if d0["tag"] == d1["tag"] > 0:
-            full_graph.add_edge(n0, n1)
+    # interfragment edges: atoms sharing a positive tag are the two
+    # sides of a blueprint dummy and bond together
+    nodes_by_tag: dict[int, list[int]] = defaultdict(list)
+    for node, data in full_graph.nodes(data=True):
+        if data["tag"] > 0:
+            nodes_by_tag[data["tag"]].append(node)
+    for tag, nodes in nodes_by_tag.items():
+        if len(nodes) == 2:
+            full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
+        elif len(nodes) > 2:
+            logger.warning(
+                f"Tag {tag} present on {len(nodes)} atoms; bonding the first two."
+            )
+            full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)
     return full_graph
 
 
@@ -460,48 +466,63 @@ def networkx_to_gulp(
     >>> # Creates my_mof.gin in current directory
     """
     logger.info("Creating Gulp file from graph.")
-    out_string = ""
-    out_string += "opti conp molmec noautobond cartesian noelectrostatics ocell\n"
-    # out_string += 'maxcyc 1000\nswitch bfgs gnorm 0.5\n'
+    lines = []
+
+    # Header and cell vectors
     cell = graph.graph["cell"]
-    out_string += "vectors\n"
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[0])
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[1])
-    out_string += "{0:>.3f} {1:>.3f} {2:>.3f}\n".format(*cell[2])
-    out_string += "{0}\n".format("cartesian")
+    lines.append("opti conp molmec noautobond cartesian noelectrostatics ocell")
+    lines.append("vectors")
+    lines.append(f"{cell[0][0]:>.3f} {cell[0][1]:>.3f} {cell[0][2]:>.3f}")
+    lines.append(f"{cell[1][0]:>.3f} {cell[1][1]:>.3f} {cell[1][2]:>.3f}")
+    lines.append(f"{cell[2][0]:>.3f} {cell[2][1]:>.3f} {cell[2][2]:>.3f}")
+    lines.append("cartesian")
+
+    # Build atom type mapping
     mmset = list(set([(d["symbol"], d["ufftype"]) for _, d in graph.nodes(data=True)]))
     mmdict = {u: f"{s}{i}" for i, (s, u) in enumerate(mmset)}
+
+    # Atomic coordinates
     for _, d in graph.nodes(data=True):
         x, y, z = d["coord"]
         s = mmdict[d["ufftype"]]
-        out_string += f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}\n"
-    out_string += "\n"
+        lines.append(f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}")
+
+    lines.append("")
+
+    # Bond connectivity
     for b0, b1, bd in graph.edges(data=True):
-        # this line is for the dummy to dummy bonds
-        if "bond_order" not in bd:
-            bd["bond_order"] = 1.0
-        # the strings depend on the bond order number here
-        if bd["bond_order"] < 0.9:
+        bond_order = bd.get("bond_order", 1.0)
+        if bond_order < 0.9:
             bo = "half"
-        elif 0.9 < bd["bond_order"] < 1.1:
+        elif bond_order < 1.1:
             bo = "single"
-        elif 1.1 < bd["bond_order"] < 1.8:
+        elif bond_order < 1.8:
             bo = "aromatic"
-        elif 1.8 < bd["bond_order"] < 2.1:
+        elif bond_order < 2.1:
             bo = "double"
         else:
             bo = "triple"
-        out_string += f"connect {b0+1:<4} {b1+1:<4} {bo}\n"
-    out_string += "\nspecies\n"
+        lines.append(f"connect {b0 + 1:<4} {b1 + 1:<4} {bo}")
+
+    # Species mapping
+    lines.append("")
+    lines.append("species")
     for u, s in mmdict.items():
-        out_string += f"{s:<5} {u:<5}\n"
-    out_string += "\nlibrary uff4mof\n"
-    out_string += "\n"
-    out_string += f"output movie xyz {name}.xyz\n"
-    out_string += f"output cif {name}.cif\n"
-    # write to the file
+        lines.append(f"{s:<5} {u:<5}")
+
+    # Footer
+    lines.append("")
+    lines.append("library uff4mof")
+    lines.append("")
+    lines.append(f"output movie xyz {name}.xyz")
+    lines.append(f"output cif {name}.cif")
+
+    out_string = "\n".join(lines)
+
+    # Write to file
     if write_to_file:
-        logger.info(f" [x] Saved to {name}.gin")
-        with open(os.path.join(os.getcwd(), f"{name}.gin"), "w") as gin:
-            gin.write(out_string)
+        output_path = Path.cwd() / f"{name}.gin"
+        logger.info(f" [x] Saved to {output_path}")
+        output_path.write_text(out_string)
+
     return out_string

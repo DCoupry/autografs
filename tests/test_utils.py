@@ -9,11 +9,11 @@ import tempfile
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, settings, assume
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from autografs import utils
 from autografs.fragment import Fragment
-
 
 # =============================================================================
 # Fixtures
@@ -178,7 +178,7 @@ class TestXyzToSbu:
     def test_fragment_types(self, temp_xyz_file):
         """Test that returned values are Fragment objects."""
         sbus = utils.xyz_to_sbu(temp_xyz_file)
-        for name, frag in sbus.items():
+        for frag in sbus.values():
             assert isinstance(frag, Fragment)
 
     def test_linear_has_two_dummies(self, temp_xyz_file):
@@ -195,6 +195,14 @@ class TestXyzToSbu:
         dummies = trigonal.extract_dummies()
         assert len(dummies) == 3
 
+    def test_loading_skips_symmetry_analysis(self, temp_xyz_file):
+        """Point group analysis is deferred, not run at load time."""
+        sbus = utils.xyz_to_sbu(temp_xyz_file)
+        for frag in sbus.values():
+            assert frag._symmetry is None
+        # the symbol is still available on demand
+        assert sbus["Test_Linear"].pointgroup == "D*h"
+
 
 # =============================================================================
 # load_uff_lib Tests
@@ -204,16 +212,17 @@ class TestXyzToSbu:
 class TestLoadUffLib:
     """Test load_uff_lib function."""
 
-    def test_returns_dataframe_and_list(self, temp_xyz_file):
+    def test_returns_entries_and_list(self, temp_xyz_file):
         """Test that function returns correct types."""
         from pymatgen.core.structure import Molecule
+
+        from autografs.data.uff4mof import UFFType
 
         mol = Molecule(["C", "H", "H"], [[0, 0, 0], [1, 0, 0], [0, 1, 0]])
         uff_lib, uff_symbs = utils.load_uff_lib(mol)
 
-        import pandas
-
-        assert isinstance(uff_lib, pandas.DataFrame)
+        assert all(isinstance(entry, UFFType) for entry in uff_lib)
+        assert {entry.symbol[:2] for entry in uff_lib} == {"C_", "H_"}
         assert isinstance(uff_symbs, list)
         assert len(uff_symbs) == len(mol)
 
@@ -266,6 +275,76 @@ class TestFindElementCutoffs:
 
         for key, value in cutoffs.items():
             assert value > 0, f"Cutoff for {key} should be positive"
+
+
+# =============================================================================
+# find_mmtypes Tests
+# =============================================================================
+
+
+class TestFindMmtypes:
+    """Test find_mmtypes function."""
+
+    @staticmethod
+    def _molgraph_with_edges(mol, edges):
+        """Build a MoleculeGraph with explicit connectivity."""
+        from pymatgen.analysis.graphs import MoleculeGraph
+
+        mg = MoleculeGraph.from_empty_graph(mol)
+        for i, j in edges:
+            mg.add_edge(i, j)
+        return mg
+
+    def test_one_type_per_atom_in_order(self):
+        """Types are returned for every atom, aligned with atom indices."""
+        from pymatgen.core.structure import Molecule
+
+        # methane: sp3 C (4 neighbors -> C_3), four 1-coordinated H -> H_
+        d = 0.63
+        mol = Molecule(
+            ["C", "H", "H", "H", "H"],
+            [
+                [0, 0, 0],
+                [d, d, d],
+                [d, -d, -d],
+                [-d, d, -d],
+                [-d, -d, d],
+            ],
+        )
+        mg = self._molgraph_with_edges(mol, [(0, i) for i in range(1, 5)])
+        uff_lib, uff_symbs = utils.load_uff_lib(mol)
+        mmtypes = utils.find_mmtypes(mg, uff_lib, uff_symbs)
+
+        assert len(mmtypes) == len(mol)
+        assert mmtypes[0] == "C_3"
+        assert mmtypes[1:] == ["H_"] * 4
+
+    def test_angle_match_uses_absolute_difference(self):
+        """The closest ideal angle wins, not the most negative difference.
+
+        A 3-coordinated O with its two closest neighbors at 145.5 deg must
+        be typed O_3_z (ideal 145.5) rather than O_3 (ideal 104.51), which
+        a signed-difference sort would wrongly select.
+        """
+        import math
+
+        from pymatgen.core.structure import Molecule
+
+        half = math.radians(145.5 / 2.0)
+        mol = Molecule(
+            ["O", "H", "H", "H"],
+            [
+                [0.0, 0.0, 0.0],
+                [math.cos(half), math.sin(half), 0.0],
+                [math.cos(half), -math.sin(half), 0.0],
+                [-1.5, 0.0, 0.0],
+            ],
+        )
+        mg = self._molgraph_with_edges(mol, [(0, 1), (0, 2), (0, 3)])
+        uff_lib, uff_symbs = utils.load_uff_lib(mol)
+        mmtypes = utils.find_mmtypes(mg, uff_lib, uff_symbs)
+
+        assert mmtypes[0] == "O_3_z"
 
 
 # =============================================================================

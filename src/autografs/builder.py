@@ -21,32 +21,152 @@ Examples
 
 from __future__ import annotations
 
-import copy
 import itertools
 import logging
-import os
-import random
+import math
 import time
+from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor
+from pathlib import Path
 
 import dill
-import networkx
 import numpy as np
-from pymatgen.analysis.molecule_matcher import HungarianOrderMatcher
-from pymatgen.core.structure import Molecule
-from scipy.optimize import brute
+from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
+import autografs.alignment
 import autografs.data
+import autografs.topology_io
 import autografs.utils
+from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
+from autografs.framework import Framework
 from autografs.topology import Topology
 
 logger = logging.getLogger(__name__)
 
 # Constants for cell parameter optimization
-BRUTE_SEARCH_GRID_POINTS = 3  # Number of grid points per dimension in brute force search
-SCALE_SEARCH_MIN_FACTOR = 0.1  # Minimum scale factor for cell parameter search
-SCALE_SEARCH_MAX_FACTOR = 2.0  # Maximum scale factor for cell parameter search
+NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
+NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
+NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
+
+
+def build_framework(
+    topology: Topology,
+    mappings: dict[int, Fragment],
+    refine_cell: bool = True,
+    verbose: bool = False,
+    max_rmsd: float | None = None,
+) -> Framework:
+    """Build one framework from validated slot-index mappings.
+
+    This is the library-independent core of Autografs.build(): it
+    needs no SBU or topology library, only a topology and one private
+    Fragment per slot index, which also makes it usable from worker
+    processes. Most callers want Autografs.build(), which resolves
+    names and slot types first.
+
+    Parameters
+    ----------
+    topology : Topology
+        The blueprint; not modified.
+    mappings : dict[int, Fragment]
+        One (private) Fragment per slot index, as produced by
+        Autografs._validate_mappings.
+    refine_cell : bool, optional
+        Optimize the crystal system's free cell parameters.
+    verbose : bool, optional
+        Log alignment details.
+    max_rmsd : float or None, optional
+        Directional shape-mismatch gate; see Autografs.build.
+
+    Returns
+    -------
+    Framework
+        The built framework.
+    """
+    t0 = time.time()
+    plan = autografs.alignment.prepare_build(topology, mappings)
+    x0 = plan.initial_parameters()
+    if refine_cell and plan.has_pairs:
+        # Nelder-Mead on the pair-coincidence residual over the
+        # crystal system's free parameters only (a cubic net
+        # optimizes a single length); the objective is pure numpy,
+        # no object copies per evaluation
+        result = minimize(
+            plan.residual,
+            x0,
+            method="Nelder-Mead",
+            options={
+                "xatol": NELDER_MEAD_XATOL,
+                "fatol": NELDER_MEAD_FATOL,
+                "maxiter": NELDER_MEAD_MAXITER,
+            },
+        )
+        best_parameters = result.x
+    else:
+        if verbose:
+            logger.info("\t[x] No cell refinement performed.")
+        best_parameters = x0
+    best_alignment, lattice, slot_rmsds = plan.finalize(best_parameters)
+    if max_rmsd is not None:
+        bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
+        if bad_slots:
+            worst = max(bad_slots.values())
+            raise AlignmentError(
+                f"{len(bad_slots)} of {len(slot_rmsds)} slots exceed "
+                f"max_rmsd={max_rmsd:.3f} (worst: {worst:.3f}) "
+                f"on topology {topology.name}: {sorted(bad_slots)}"
+            )
+    if verbose:
+        a, b, c = lattice.abc
+        alpha, beta, gamma = lattice.angles
+        logger.info("\t[x] Best cell parameters:")
+        logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
+        logger.info(f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}")
+        logger.info(
+            f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
+        )
+    graph = autografs.utils.fragments_to_networkx(best_alignment, cell=lattice.matrix)
+    return Framework(graph, name=topology.name)
+
+
+def _build_task(
+    args: tuple[Topology, dict[int, Fragment], bool, float | None],
+) -> Framework | None:
+    """Worker-safe build: expected failures become None, not raises."""
+    topology, mappings, refine_cell, max_rmsd = args
+    try:
+        return build_framework(
+            topology, mappings, refine_cell=refine_cell, max_rmsd=max_rmsd
+        )
+    except (AssertionError, AlignmentError, ValueError):
+        return None
+
+
+def _iter_combinations(
+    options: list[list[str]],
+    max_count: int | None,
+    rng: np.random.Generator,
+):
+    """Yield SBU-name combinations: all of them, or a seeded sample.
+
+    When the full product exceeds max_count, distinct index tuples are
+    drawn from the seeded generator (deterministic for a given seed)
+    and yielded in sorted order.
+    """
+    total = math.prod(len(choices) for choices in options)
+    if max_count is None or total <= max_count:
+        yield from itertools.product(*options)
+        return
+    picks: set[tuple[int, ...]] = set()
+    attempts = 0
+    limit = 20 * max_count
+    while len(picks) < max_count and attempts < limit:
+        picks.add(tuple(int(rng.integers(len(choices))) for choices in options))
+        attempts += 1
+    for pick in sorted(picks):
+        yield tuple(options[i][j] for i, j in enumerate(pick))
 
 
 class Autografs:
@@ -100,7 +220,7 @@ class Autografs:
         """
         super().__init__()
         # Initialize instance attributes to avoid sharing between instances
-        self.topologies: dict[str, Topology] = {}
+        self.topologies: Mapping[str, Topology] = {}
         self.sbu: dict[str, Fragment] = {}
         logger.info(f"{'*':*^78}")
         logger.info(f"*{'AuToGraFS':^76}*")
@@ -121,7 +241,11 @@ class Autografs:
         sbu_subset: list[str] | None = None,
         topology_subset: list[str] | None = None,
         refine_cell: bool = True,
-    ) -> list[networkx.Graph]:
+        max_rmsd: float | None = None,
+        max_per_topology: int | None = None,
+        seed: int | None = None,
+        n_jobs: int = 1,
+    ) -> list[Framework]:
         """
         Builds all available structures based on the SBU and Topologies libraries
 
@@ -131,44 +255,71 @@ class Autografs:
             The subset of SBU to build on, by default None
         topology_subset : list[str] | None, optional
             the subset of topologies to build on, by default None
+        refine_cell : bool, optional
+            If True, optimizes cell parameters for each build, by default True
+        max_rmsd : float or None, optional
+            Per-slot alignment RMSD gate forwarded to build(); rejected
+            structures are counted as errors, by default None
+        max_per_topology : int or None, optional
+            Cap on the SBU combinations attempted per topology. The
+            full product over slot types explodes combinatorially on
+            multinodal nets; when it exceeds the cap, a seeded random
+            sample of distinct combinations is built instead.
+        seed : int or None, optional
+            Seed for the sampling generator; a fixed seed makes the
+            sampled enumeration reproducible.
+        n_jobs : int, optional
+            Number of worker processes; 1 (default) builds serially in
+            this process. Builds are independent, so speedup is close
+            to linear once workers are warm.
 
         Returns
         -------
-        list[networkx.Graph]
-            the list of connected graphs produced by the building method
+        list[Framework]
+            the frameworks produced by the building method
         """
-        graphs = []
         logger.info("Building All Available Structures! This will take some time.")
         logger.info("============================================================")
-        # logger.info(f"Number of cores for parrallel building = {cpu_count}")
-        total_len = 0
-        topologies = self.list_topologies(subset=topology_subset)
-        topology_pbar = tqdm(topologies)
-        for topology_name in topology_pbar:
-            topology_pbar.set_description(f"Processing topology {topology_name:<5}")
-            maps = []
-            topology = self.topologies[topology_name].copy()
-            sbu_dict = self.list_building_units(
-                sieve=topology_name, verbose=False, subset=sbu_subset
-            )
-            if not all(sbu_dict.values()):
-                continue
-            for sbus in list(itertools.product(*sbu_dict.values())):
-                maps.append((topology, dict(zip(sbu_dict.keys(), sbus))))
-            total_len += len(maps)
-            results_graphs = []
-            for build_args in tqdm(maps):
-                try:
-                    g = self.build(*build_args, refine_cell=refine_cell, verbose=False)
-                    results_graphs.append(g)
-                except AssertionError:
-                    # probably an unfilled slot in a topology
-                    # need to be a graceful failure here
+        rng = np.random.default_rng(seed)
+        frameworks: list[Framework] = []
+        attempted = 0
+        executor = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
+        try:
+            topology_pbar = tqdm(self.list_topologies(subset=topology_subset))
+            for topology_name in topology_pbar:
+                topology_pbar.set_description(f"Processing topology {topology_name:<5}")
+                topology = self.topologies[topology_name]
+                sbu_dict = self.list_building_units(
+                    sieve=topology_name, verbose=False, subset=sbu_subset
+                )
+                # slot types with no compatible SBU are absent from the
+                # dict entirely, so completeness needs an explicit check
+                if len(sbu_dict) != len(topology.mappings):
                     continue
-            graphs += [g for g in results_graphs if g is not None]
-        logger.info(f"\t[x] Generated a total of {len(graphs):^6} periodic graphs.")
-        logger.info(f"\t[x] Rate of error: {1.0 - len(graphs)/total_len:2.2%}.")
-        return graphs
+                if not all(sbu_dict.values()):
+                    continue
+                slot_types = list(sbu_dict.keys())
+                options = [sbu_dict[slot_type] for slot_type in slot_types]
+                tasks = []
+                for choice in _iter_combinations(options, max_per_topology, rng):
+                    raw = dict(zip(slot_types, choice, strict=True))
+                    validated = self._validate_mappings(topology=topology, mappings=raw)
+                    tasks.append((topology, validated, refine_cell, max_rmsd))
+                attempted += len(tasks)
+                if executor is None:
+                    results = map(_build_task, tasks)
+                else:
+                    results = executor.map(_build_task, tasks)
+                frameworks.extend(fw for fw in results if fw is not None)
+        finally:
+            if executor is not None:
+                executor.shutdown()
+        logger.info(f"\t[x] Generated a total of {len(frameworks):^6} frameworks.")
+        if attempted:
+            logger.info(
+                f"\t[x] Rate of error: {1.0 - len(frameworks) / attempted:2.2%}."
+            )
+        return frameworks
 
     def build(
         self,
@@ -176,9 +327,10 @@ class Autografs:
         mappings: dict[Fragment | int, Fragment | str],
         refine_cell: bool = True,
         verbose: bool = False,
-    ) -> networkx.Graph:
+        max_rmsd: float | None = None,
+    ) -> Framework:
         """
-        Generates a graph from a mapping of SBU to topology slots.
+        Generates a framework from a mapping of SBU to topology slots.
 
         Parameters
         ----------
@@ -186,13 +338,34 @@ class Autografs:
             the topology to consider
         mappings : dict[Fragment | int, Fragment | str]
             the mappings to go from a slot to a compatible SBU
+        refine_cell : bool, optional
+            If True, optimizes the cell parameters so that bonded dummy
+            pairs coincide, by default True. The analytic starting cell
+            is already exact for uninodal isotropic nets.
         verbose : bool, optional
             If True, will log additional information, by default False
+        max_rmsd : float or None, optional
+            Maximum acceptable per-slot directional RMSD: the shape
+            mismatch between the SBU's unit arm vectors and the slot's,
+            independent of size (0 = perfect, 2 = opposite). If any
+            slot exceeds it, AlignmentError is raised instead of
+            silently returning a distorted structure. None (default)
+            disables the gate.
 
         Returns
         -------
-        networkx.Graph
-            The connected molecular graph of the constructed structure
+        Framework
+            The built framework: structure, bond graph, and exports
+            (write_cif, to_ase, to_gulp). The underlying networkx
+            graph is available as Framework.graph.
+
+        Raises
+        ------
+        AlignmentError
+            If an SBU's connection count does not match its slot, or if
+            max_rmsd is set and any slot alignment exceeds it.
+        ValueError
+            If the mappings leave topology slots unfilled.
         """
         mappings = self._validate_mappings(topology=topology, mappings=mappings)
         if verbose:
@@ -200,57 +373,14 @@ class Autografs:
             logger.info(f"\tTopology =  {topology}")
             formatted_mappings = autografs.utils.format_mappings(mappings)
             logger.info(f"\tMappings =  {formatted_mappings}")
-            logger.info(f"Aligning with cell scaling...")
-
-        def opt_fun(scales: tuple[float, float, float]) -> float:
-            """Objective function for cell parameter optimization.
-
-            Parameters
-            ----------
-            scales : tuple[float, float, float]
-                Cell vector lengths (a, b, c) to evaluate.
-
-            Returns
-            -------
-            float
-                Root mean square error of fragment alignment.
-            """
-            this_topology = topology.copy()
-            this_mapping = copy.deepcopy(mappings)
-            _, rmse = self._align_all_mappings(this_topology, this_mapping, scales)
-            return rmse
-
-        # try:
-        t0 = time.time()
-        #  We need better initialization of search space for faster convergence
-        abc_norm = sum([f.max_dummy_distance for f in mappings.values()]) / 3.0
-        abc_norm = np.ones(3) * abc_norm
-        if refine_cell:
-            x_min = abc_norm * SCALE_SEARCH_MIN_FACTOR
-            x_max = abc_norm * SCALE_SEARCH_MAX_FACTOR
-            best_scales, _, _, _ = brute(
-                opt_fun, ranges=list(zip(x_min, x_max)), Ns=BRUTE_SEARCH_GRID_POINTS, full_output=True
-            )
-        else:
-            if verbose:
-                logger.info("\t[x] No cell refinement performed.")
-            best_scales = abc_norm
-        best_alignment, _ = self._align_all_mappings(topology, mappings, best_scales)
-        if verbose:
-            logger.info("\t[x] Best cell parameters:")
-            logger.info(f"\t\ta = {best_scales[0]:<.1f}")
-            logger.info(f"\t\tb = {best_scales[1]:<.1f}")
-            logger.info(f"\t\tc = {best_scales[2]:<.1f}")
-            logger.info(
-                f"\t[x] Aligned {len(topology.slots)} fragments in {time.time() - t0:.1f} seconds"
-            )
-        graph = autografs.utils.fragments_to_networkx(
-            best_alignment, cell=topology.cell.matrix
+            logger.info("Aligning with cell scaling...")
+        return build_framework(
+            topology,
+            mappings,
+            refine_cell=refine_cell,
+            verbose=verbose,
+            max_rmsd=max_rmsd,
         )
-        # except Exception as e:
-        # logger.debug(e)
-        # graph = None
-        return graph
 
     def _validate_mappings(
         self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]
@@ -270,27 +400,34 @@ class Autografs:
         Returns
         -------
         dict[int, Fragment]
-            Normalized mappings from slot indices to Fragment objects.
+            Normalized mappings from slot indices to private Fragment
+            copies. Neither the input dict nor the library fragments
+            are aliased: alignment mutates fragments in place, and
+            shared references would corrupt the SBU library.
 
         Raises
         ------
-        AssertionError
-            If any required slot is not present in the mappings.
+        ValueError
+            If any topology slot is left uncovered by the mappings.
         """
-        for k in topology.mappings.keys():
-            assert k in mappings, f"Unfilled {k} slot."
-        #  make sure all strings are converted to the correct fragment
+
+        def to_fragment(value: Fragment | str) -> Fragment:
+            return self.sbu[value] if isinstance(value, str) else value
+
+        # slot-type keys first, so that index keys override them
+        true_mappings: dict[int, Fragment] = {}
         for k, v in mappings.items():
-            if isinstance(v, str):
-                mappings[k] = self.sbu[v]
-        #  now check and convert all keys to the slot indices
-        true_mappings = {}
+            if not isinstance(k, int):
+                fragment = to_fragment(v)
+                for i in topology.mappings[k]:
+                    true_mappings[i] = fragment.copy()
         for k, v in mappings.items():
             if isinstance(k, int):
-                true_mappings[k] = v
-            else:
-                for i in topology.mappings[k]:
-                    true_mappings[i] = copy.deepcopy(v)
+                true_mappings[k] = to_fragment(v).copy()
+        all_indices = set(itertools.chain(*topology.mappings.values()))
+        missing = all_indices - true_mappings.keys()
+        if missing:
+            raise ValueError(f"Unfilled slots in mappings: {sorted(missing)}")
         return true_mappings
 
     def _setup_sbu(self, xyzfile: str | None = None) -> None:
@@ -306,8 +443,8 @@ class Autografs:
             Custom SBUs with the same name as defaults will override them.
         """
         t0 = time.time()
-        default_path = os.path.join(autografs.data.__path__[0], "defaults.xyz")
-        sbu = autografs.utils.xyz_to_sbu(default_path)
+        default_path = Path(autografs.data.__path__[0]) / "defaults.xyz"
+        sbu = autografs.utils.xyz_to_sbu(str(default_path))
         logger.info(
             f"\t[x] loaded {len(sbu)} default building units in {time.time() - t0:.0f} seconds."
         )
@@ -322,26 +459,44 @@ class Autografs:
         return None
 
     def _setup_topologies(self, topofile: str | None = None) -> None:
-        """Load topologies from a pickle file.
+        """Load topologies from a serialized library file.
 
-        Loads topology blueprints from a serialized pickle file containing
-        pre-processed RCSR or custom topologies.
+        Loads topology blueprints from a JSON library (see
+        autografs.topology_io) or, for backward compatibility, from a
+        legacy dill pickle.
 
         Parameters
         ----------
         topofile : str or None, optional
-            Path to a pickle file containing topologies.
-            If None, loads from the default package data location.
+            Path to a topology library (.json / .json.gz / legacy .pkl).
+            If None, loads from the default package data location,
+            preferring the JSON library when present.
         """
         t0 = time.time()
         if topofile is None:
-            topofile = os.path.join(autografs.data.__path__[0], "topologies.pkl")
-        with open(topofile, "rb") as topo:
-            topologies = dill.load(topo)
+            data_dir = Path(autografs.data.__path__[0])
+            json_default = data_dir / "topologies.json.gz"
+            if json_default.exists():
+                topofile = json_default
+            else:
+                topofile = data_dir / "topologies.pkl"
+        topofile = Path(topofile)
+        if topofile.name.endswith((".json", ".json.gz")):
+            topologies = autografs.topology_io.load_topologies(topofile)
+        else:
+            logger.warning(
+                "Loading topologies from a pickle file. Pickles can execute "
+                "arbitrary code and break across pymatgen versions; convert "
+                "to JSON with autografs.topology_io.save_topologies."
+            )
+            with open(topofile, "rb") as topo:
+                topologies = dill.load(topo)
         logger.info(
             f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."
         )
-        self.topologies.update(topologies)
+        # assignment, not dict.update(): the JSON loader returns a lazy
+        # mapping, and update() would materialize every topology
+        self.topologies = topologies
         return None
 
     def list_topologies(
@@ -373,20 +528,29 @@ class Autografs:
         >>> all_topos = mofgen.list_topologies()
         >>> compatible = mofgen.list_topologies(sieve="Benzene_linear")
         """
-        full_list = sorted(self.topologies.keys())
         if subset is not None:
-            full_list = subset
+            unknown = set(subset) - self.topologies.keys()
+            if unknown:
+                raise ValueError(f"Unknown topologies in subset: {sorted(unknown)}")
+            full_list = sorted(subset)
+        else:
+            full_list = sorted(self.topologies.keys())
         if sieve is not None:
-            sieve = self.sbu[sieve]
+            candidate = self.sbu[sieve]
             if verbose:
                 logger.info(
-                    f"filtering topologies for compatibility with {sieve} building unit..."
+                    f"filtering topologies for compatibility with {candidate} building unit..."
                 )
-            for topology in self.topologies.values():
-                if topology.get_compatible_slots(candidate=sieve):
-                    continue
-                else:
-                    full_list.remove(topology.name)
+            full_list = [
+                name
+                for name in full_list
+                if any(
+                    indices
+                    for indices in self.topologies[name]
+                    .get_compatible_slots(candidate=candidate)
+                    .values()
+                )
+            ]
         if verbose:
             logger.info(f"\t[x] {len(full_list):>5} topologies available.")
         return full_list
@@ -396,7 +560,7 @@ class Autografs:
         sieve: str | None = None,
         verbose: bool = False,
         subset: list[str] | None = None,
-    ) -> dict[str, Fragment]:
+    ) -> dict[Fragment, list[str]]:
         """List available SBUs, optionally filtered by topology compatibility.
 
         Parameters
@@ -411,9 +575,11 @@ class Autografs:
 
         Returns
         -------
-        dict[str, list[str]]
-            Dictionary mapping slot identifiers to lists of compatible SBU names.
-            If no sieve is provided, returns an empty dict.
+        dict[Fragment, list[str]]
+            Compatible SBU names keyed by slot type (the topology's
+            representative slot Fragments). Slot types with no
+            compatible SBU are absent from the dict; without a sieve
+            the dict is empty.
 
         Examples
         --------
@@ -422,181 +588,29 @@ class Autografs:
         >>> for slot, sbus in sbu_dict.items():
         ...     print(f"Slot {slot}: {len(sbus)} compatible SBUs")
         """
-        full_list = []
         if subset is not None:
             sbus = [self.sbu[k] for k in subset]
         else:
             sbus = list(self.sbu.values())
-        if sieve is not None:
-            sieve = self.topologies[sieve]
+        building_units: dict[Fragment, set[str]] = {}
+        topology = self.topologies[sieve] if sieve is not None else None
+        if topology is not None:
             if verbose:
                 logger.info(
-                    f"filtering building units for compatibility with {sieve} topology..."
+                    f"filtering building units for compatibility with {topology} topology..."
                 )
             for sbu in sbus:
-                mappings = sieve.get_compatible_slots(candidate=sbu)
-                full_list += [(k, sbu.name) for k, v in mappings.items() if v]
-        slot_groups = itertools.groupby(full_list, lambda x: x[0])
-        building_units = {}
-        for k, v in slot_groups:
-            v = list(list(zip(*v))[1])
-            if k not in building_units:
-                building_units[k] = v
-            else:
-                building_units[k] += v
-        out_dict = {}
-        for k, v in building_units.items():
-            out_dict[k] = list(set(v))
-            if verbose:
-                logger.info(f"\t[x] {len(out_dict[k]):>5} SBU available for slot {k}")
-        # now check that all the slots from the sieves are filled
-        if sieve is not None and verbose:
-            for k in sieve.mappings.keys():
-                if k not in out_dict:
-                    logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
+                compatible = topology.get_compatible_slots(candidate=sbu)
+                for slot_type, indices in compatible.items():
+                    if indices:
+                        building_units.setdefault(slot_type, set()).add(sbu.name)
+        out_dict = {k: sorted(v) for k, v in building_units.items()}
+        if verbose:
+            for k, v in out_dict.items():
+                logger.info(f"\t[x] {len(v):>5} SBU available for slot {k}")
+            # report slot types that no SBU can fill
+            if topology is not None:
+                for k in topology.mappings:
+                    if k not in out_dict:
+                        logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
         return out_dict
-
-    def _align_all_mappings(
-        self,
-        topology: Topology,
-        mappings: dict[int, Fragment],
-        scales: tuple[float, float, float],
-    ) -> tuple[list[Fragment], float]:
-        """Align all SBU fragments to their corresponding topology slots.
-
-        Scales the topology cell and aligns each fragment to its designated
-        slot using the Hungarian algorithm for optimal atom matching.
-
-        Parameters
-        ----------
-        topology : Topology
-            The topology blueprint (will be modified in-place by scaling).
-        mappings : dict[int, Fragment]
-            Mapping from slot indices to Fragment objects.
-        scales : tuple[float, float, float]
-            Cell vector lengths (a, b, c) to apply.
-
-        Returns
-        -------
-        tuple[list[Fragment], float]
-            A tuple containing:
-            - List of aligned Fragment objects.
-            - Total weighted RMSE of the alignment.
-        """
-        all_aligned_fragments = []
-        topology.scale_slots(scales)
-        sum_rmse = 0.0
-        for slot_index, this_fragment in mappings.items():
-            slot = topology.slots[slot_index]
-            slot_weight = this_fragment.max_dummy_distance / slot.max_dummy_distance
-            aligned_fragment, rmse = self._align_slot(slot, this_fragment)
-            all_aligned_fragments.append(aligned_fragment)
-            denominator = len(slot.atoms) * len(topology.mappings[slot])
-            if denominator == 0:
-                logger.warning(f"Empty slot encountered at index {slot_index}, skipping score calculation")
-                continue
-            score = slot_weight * rmse / denominator
-            sum_rmse += score
-        logger.debug(f"Cell scaled with RMSE = {sum_rmse}")
-        return all_aligned_fragments, sum_rmse
-
-    def _align_slot(self, slot: Fragment, fragment: Fragment) -> tuple[Fragment, float]:
-        """Align a single fragment to a topology slot.
-
-        Uses the Hungarian algorithm to find the optimal rotation and
-        translation that minimizes the RMSD between dummy atoms.
-
-        Parameters
-        ----------
-        slot : Fragment
-            The topology slot defining the target orientation and position.
-        fragment : Fragment
-            The SBU fragment to align (modified in-place).
-
-        Returns
-        -------
-        tuple[Fragment, float]
-            A tuple containing:
-            - The aligned fragment with updated coordinates and tags.
-            - RMSD of the alignment.
-        """
-        # m0 = slot.atoms.copy()
-        m0 = slot.extract_dummies()
-        m0.perturb(distance=0.01)
-        m0.replace_species({"X": "H"})
-        m1 = fragment.extract_dummies()
-        m1.perturb(distance=0.01)
-        m1.replace_species({"X": "H"})
-        _, U, V, rmsd = HungarianOrderMatcher(m0).match(m1)
-        new_coords = fragment.atoms.cart_coords.dot(U) + V
-        fragment.atoms = Molecule(fragment.atoms.species, coords=new_coords)
-        fragment_tags = np.array(
-            [
-                -1,
-            ]
-            * len(fragment.atoms)
-        )
-        for j, frag_tag in enumerate(fragment_tags):
-            fragment.atoms[j].properties["tags"] = frag_tag
-        slot_tags = slot.atoms.site_properties["tags"]
-        for i, slot_tag in enumerate(slot_tags):
-            tag_by_dist = []
-            for j in fragment.atoms.indices_from_symbol("X"):
-                d = slot.atoms[i].coords - fragment.atoms[j].coords
-                tag_by_dist.append((np.linalg.norm(d), j))
-            _, best_match = sorted(tag_by_dist)[0]
-            fragment.atoms[best_match].properties["tags"] = slot_tag
-        return fragment, rmsd
-
-
-if __name__ == "__main__":
-    from pprint import pprint
-
-    molgen = Autografs()
-    # pprint(molgen.list_topologies())
-    # pprint(sorted(molgen.sbu.keys()))
-    # sbu = 'Persulfurated_benzene_hexagonal', 'Zn_imidazolate_carboxylated_tetrahedral', 'Al_trimeric_prism', 'Benzene_pentagonal',
-    #  'Benzene_pentagram', 'CuCN_trigonal_bipyramid' 'Ni_pyrazole_cubic_cluster' 'UIO66_Zr_icosahedral'
-    # print(molgen.sbu['Persulfurated_benzene_hexagonal'])
-    # for name, topology in molgen.topologies.items():
-    #     if len(topology) > 15:
-    #         continue
-    #     try:
-    #         maps = molgen.list_building_units(sieve=name, verbose=True)
-    #         g = molgen.build(topology=topology, mappings={k: random.choice(v) for k, v in maps.items()}, verbose=True, refine_cell=True)
-    #         autografs.utils.view_graph(g)
-    #     except AssertionError:
-    #         continue
-    # pprint(topos)
-    # raise
-    # topos = molgen.list_topologies()
-    # i = 0
-    # while i < 5:
-    #     name = random.choice(topos)
-    #     topology = molgen.topologies[name]
-    #     if len(topology) > 50:
-    #         continue
-    #     else:
-    #         i += 1
-    #         maps = molgen.list_building_units(sieve=name, verbose=True)
-    #         g = molgen.build(topology=topology, mappings={k: random.choice(v) for k, v in maps.items()}, verbose=True, refine_cell=False)
-    # autografs.utils.networkx_to_gulp(g, name=name, write_to_file=True)
-    # autografs.utils.view_graph(g)
-    # pprint(sbu_names)
-    # print(list(molgen.topologies.keys()))
-    # benz = molgen.sbu["Benzene_linear"].copy()
-    # benz.rotate(theta=0.79)
-    # hidx = benz.atoms.indices_from_symbol("H")
-    # benz.functionalize(hidx[2], "nitro")
-    # maps = {0: "Zn_mof5_octahedral", 1:"Bipyridine_linear", 2:"Acetylene_linear", 3:benz}
-    # g = molgen.build(topology=topology, mappings=maps, verbose=True)
-    # # autografs.utils.view_graph(g)
-
-    # autografs.utils.networkx_to_gulp(g, name="zul", write_to_file=True)
-    graphs = molgen.build_all(refine_cell=False)
-    with open("all_generated.bin", "wb") as uit:
-        dill.dump(graphs, uit)
-    # autografs.utils.view_graph(graphs[0])
-    # for graph in graphs:
-    #     autografs.utils.view_graph(graph)
-    #     break

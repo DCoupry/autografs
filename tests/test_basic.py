@@ -5,8 +5,6 @@ This module contains unit tests verifying package imports, version
 information, and basic module accessibility.
 """
 
-import pytest
-
 
 class TestPackageImports:
     """Test package import functionality."""
@@ -42,11 +40,17 @@ class TestSubmoduleImports:
 
         assert utils is not None
 
-    def test_structure_import(self):
-        """Test structure module import."""
-        from autografs import structure
+    def test_fragment_import(self):
+        """Test fragment module import."""
+        from autografs import fragment
 
-        assert structure is not None
+        assert fragment is not None
+
+    def test_topology_import(self):
+        """Test topology module import."""
+        from autografs import topology
+
+        assert topology is not None
 
     def test_builder_import(self):
         """Test builder module import."""
@@ -114,10 +118,8 @@ class TestMetadata:
 class TestAutografsInit:
     """Test Autografs initialization."""
 
-    @pytest.mark.skip(reason="Requires full installation with data files")
-    def test_autografs_init(self):
-        """Test that Autografs can be initialized."""
-        from autografs import Autografs
-
-        mofgen = Autografs()
-        assert mofgen is not None
+    def test_autografs_init(self, full_mofgen):
+        """Test that Autografs initializes with the shipped libraries."""
+        assert full_mofgen is not None
+        assert len(full_mofgen.topologies) > 1500
+        assert len(full_mofgen.sbu) > 50

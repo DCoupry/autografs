@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 # Copyright : see accompanying license files for details
 """
 AuToGraFS: Automatic Topological Generator for Framework Structures.
@@ -42,6 +41,7 @@ References
        AuToGraFS: Automatic Topological Generator for Framework Structures.
        The Journal of Physical Chemistry A, 118(40), 9607-14.
 """
+
 from __future__ import annotations
 
 __author__ = "Damien Coupry"
@@ -50,17 +50,31 @@ __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
 __version__ = "3.0.0"
 __status__ = "production"
-__all__ = ["utils", "fragment", "topology", "builder", "Autografs", "Fragment", "Topology"]
+__all__ = [
+    "utils",
+    "alignment",
+    "fragment",
+    "framework",
+    "topology",
+    "topology_io",
+    "builder",
+    "exceptions",
+    "Autografs",
+    "AlignmentError",
+    "AutografsError",
+    "Fragment",
+    "Framework",
+    "Topology",
+]
 
 import logging
 
 from autografs.builder import Autografs
+from autografs.exceptions import AlignmentError, AutografsError
 from autografs.fragment import Fragment
+from autografs.framework import Framework
 from autografs.topology import Topology
 
+# Add NullHandler to prevent "No handler found" warnings
+# Applications should configure their own logging
 logging.getLogger(__name__).addHandler(logging.NullHandler())
-logging.basicConfig(
-    format="[AuToGraFS] %(asctime)s | %(message)s",
-    level=logging.INFO,
-    datefmt="%I:%M:%S",
-)

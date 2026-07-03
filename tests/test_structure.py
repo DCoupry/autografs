@@ -5,19 +5,18 @@ Tests cover the Fragment and Topology classes with their methods,
 using pytest and hypothesis for property-based testing.
 """
 
-import copy
 import math
 
 import numpy as np
 import pytest
-from hypothesis import given, strategies as st, assume, settings
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 
 from autografs.fragment import Fragment
 from autografs.topology import Topology
-
 
 # =============================================================================
 # Fixtures
@@ -193,7 +192,8 @@ class TestFragmentExtractDummies:
         """Test that extracted dummies have X species."""
         dummies = linear_fragment.extract_dummies()
         for site in dummies:
-            assert str(site.specie) == "X"
+            # str(DummySpecies) renders as "X0+", so compare symbols
+            assert site.specie.symbol == "X"
 
     def test_extract_dummies_trigonal(self, trigonal_fragment):
         """Test extraction for trigonal fragment."""
@@ -242,6 +242,171 @@ class TestFragmentSymmetryCompatibility:
 
         assert frag1.has_compatible_symmetry(frag2)
 
+    @staticmethod
+    def _fragment_from_dummy_coords(coords, name):
+        """Build a Fragment with a C center and dummies at coords."""
+        mol = Molecule(["C"] + ["X"] * len(coords), [[0, 0, 0]] + coords)
+        symm_mol = Molecule(["H"] * len(coords), coords, charge=len(coords))
+        pg = PointGroupAnalyzer(symm_mol, tolerance=0.1)
+        return Fragment(atoms=mol, symmetry=pg, name=name)
+
+    def test_large_fragments_same_pointgroup_compatible(self):
+        """Two square-planar (D4h) 4-dummy fragments are compatible."""
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        frag1 = self._fragment_from_dummy_coords(square, "square1")
+        frag2 = self._fragment_from_dummy_coords(square, "square2")
+        assert frag1.has_compatible_symmetry(frag2)
+
+    def test_large_fragments_different_pointgroup_incompatible(self):
+        """Square-planar (D4h) and tetrahedral (Td) 4-dummy fragments differ."""
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        tetra = [[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1]]
+        frag_sq = self._fragment_from_dummy_coords(square, "square")
+        frag_td = self._fragment_from_dummy_coords(tetra, "tetra")
+        assert not frag_sq.has_compatible_symmetry(frag_td)
+        assert not frag_td.has_compatible_symmetry(frag_sq)
+
+    def test_near_symmetric_fragment_accepted(self):
+        """A slightly distorted square fits a square slot.
+
+        The old Schoenflies-symbol gate rejected this: the distorted
+        SBU's detected point group differs from D4h, and symbol
+        equality was the only path to compatibility for >3 dummies.
+        Geometric matching sees the small directional mismatch.
+        """
+        square = [[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]]
+        distorted = [[1, 0.06, 0], [-0.05, 1, 0.04], [-1, 0.02, 0], [0.03, -1, 0]]
+        frag_sq = self._fragment_from_dummy_coords(square, "square")
+        frag_dist = self._fragment_from_dummy_coords(distorted, "distorted")
+        assert frag_sq.pointgroup != frag_dist.pointgroup  # symbols differ
+        assert frag_sq.has_compatible_symmetry(frag_dist)
+
+    def test_low_symmetry_fragment_matches_itself(self):
+        """A C1 star is compatible with an identical (rotated) star.
+
+        Under symbol matching, C1 slots could never be filled; this is
+        what makes low-symmetry RCSR vertices usable.
+        """
+        import math
+
+        chiral = [
+            [1.0, 0.1, 0.3],
+            [-0.9, 1.1, -0.2],
+            [0.2, -1.0, 1.4],
+            [0.5, 0.7, -1.2],
+        ]
+        frag_a = self._fragment_from_dummy_coords(chiral, "c1_a")
+        theta = math.radians(40.0)
+        rot = [
+            [math.cos(theta), -math.sin(theta), 0.0],
+            [math.sin(theta), math.cos(theta), 0.0],
+            [0.0, 0.0, 1.0],
+        ]
+        rotated = [
+            [sum(rot[r][c] * v[c] for c in range(3)) for r in range(3)] for v in chiral
+        ]
+        frag_b = self._fragment_from_dummy_coords(rotated, "c1_b")
+        assert frag_a.has_compatible_symmetry(frag_b)
+
+    def test_explicit_threshold_is_respected(self):
+        """A tighter max_rmsd rejects marginal shapes the default allows."""
+        trigonal = [[1, 0, 0], [-0.5, 0.866, 0], [-0.5, -0.866, 0]]
+        t_shape = [[1.5, 0, 0], [-1.5, 0, 0], [0, 1.5, 0]]
+        frag_tri = self._fragment_from_dummy_coords(trigonal, "trigonal")
+        frag_t = self._fragment_from_dummy_coords(t_shape, "t_shape")
+        # T-vs-trigonal scores ~0.17: allowed by the permissive default
+        assert frag_tri.has_compatible_symmetry(frag_t)
+        assert not frag_tri.has_compatible_symmetry(frag_t, max_rmsd=0.1)
+
+
+class TestFragmentLazySymmetry:
+    """Fragment can be built without a precomputed PointGroupAnalyzer."""
+
+    def test_pointgroup_without_analyzer(self):
+        """Providing only the Schoenflies symbol avoids the analysis."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag = Fragment(atoms=mol, pointgroup="D*h", name="from_symbol")
+        assert frag.pointgroup == "D*h"
+        assert frag._symmetry is None  # analysis was not run
+
+    def test_symmetry_computed_lazily(self):
+        """The analyzer is derived from the dummies on first access."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag = Fragment(atoms=mol, name="lazy")
+        assert frag.pointgroup == "D*h"
+        assert frag.symmetry.sch_symbol == "D*h"
+
+    def test_lazy_matches_explicit(self, linear_fragment):
+        """Lazy analysis agrees with the explicitly provided analyzer."""
+        mol = linear_fragment.atoms.copy()
+        lazy = Fragment(atoms=mol, name="lazy_twin")
+        assert lazy.pointgroup == linear_fragment.pointgroup
+
+
+class TestFragmentEquivalenceClass:
+    """Crystallographic orbit ids separate otherwise-identical slots."""
+
+    def test_distinct_classes_are_unequal(self):
+        """Same point group + size but different orbits: distinct types."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag_a = Fragment(atoms=mol.copy(), name="a", equivalence_class=0)
+        frag_b = Fragment(atoms=mol.copy(), name="b", equivalence_class=1)
+        assert frag_a != frag_b
+        assert hash(frag_a) != hash(frag_b)
+        # as dict keys, both survive
+        assert len({frag_a: None, frag_b: None}) == 2
+
+    def test_same_class_is_equal(self):
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        frag_a = Fragment(atoms=mol.copy(), name="a", equivalence_class=3)
+        frag_b = Fragment(atoms=mol.copy(), name="b", equivalence_class=3)
+        assert frag_a == frag_b
+
+    def test_topology_groups_by_equivalence_class(self):
+        """Topology mappings keep inequivalent orbits apart."""
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        mol.add_site_property("tags", [0, 1, 2])
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(4)]
+        topo = Topology(
+            name="binodal",
+            slots=slots,
+            cell=Lattice.cubic(10.0),
+            equivalence_classes=[0, 0, 1, 1],
+        )
+        groups = sorted(sorted(v) for v in topo.mappings.values())
+        assert groups == [[0, 1], [2, 3]]
+
+    def test_topology_without_classes_groups_by_type(self):
+        """Legacy behavior: no classes means grouping by point group+size."""
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        mol.add_site_property("tags", [0, 1, 2])
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(4)]
+        topo = Topology(name="uninodal", slots=slots, cell=Lattice.cubic(10.0))
+        assert [sorted(v) for v in topo.mappings.values()] == [[0, 1, 2, 3]]
+
+    def test_class_count_mismatch_raises(self):
+        from pymatgen.core.lattice import Lattice
+
+        from autografs.topology import Topology
+
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 0, 0], [-1, 0, 0]])
+        slots = [Fragment(atoms=mol.copy(), name="slot") for _ in range(2)]
+        with pytest.raises(ValueError, match="equivalence classes"):
+            Topology(
+                name="bad",
+                slots=slots,
+                cell=Lattice.cubic(10.0),
+                equivalence_classes=[0],
+            )
+
 
 class TestFragmentRotate:
     """Test Fragment.rotate method."""
@@ -279,10 +444,28 @@ class TestFragmentRotate:
 class TestFragmentFlip:
     """Test Fragment.flip method."""
 
-    def test_flip_not_implemented(self, linear_fragment):
-        """Test that flip raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            linear_fragment.flip()
+    def test_flip_applies_reflection(self, linear_fragment):
+        """Test that flip applies a reflection when one exists (D*h)."""
+        n_atoms = len(linear_fragment.atoms)
+        linear_fragment.flip()
+        assert len(linear_fragment.atoms) == n_atoms
+
+    def test_flip_without_reflection_raises(self):
+        """Test that flip raises ValueError when no reflection exists."""
+        # Chiral dummy arrangement -> C1 point group, identity only
+        coords = [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.1, 0.3],
+            [-0.9, 1.1, -0.2],
+            [0.2, -1.0, 1.4],
+            [0.5, 0.7, -1.2],
+        ]
+        mol = Molecule(["C", "X", "X", "X", "X"], coords)
+        symm_mol = Molecule(["H"] * 4, coords[1:], charge=4)
+        pg = PointGroupAnalyzer(symm_mol, tolerance=0.1)
+        frag = Fragment(atoms=mol, symmetry=pg, name="chiral")
+        with pytest.raises(ValueError, match="No reflection plane"):
+            frag.flip()
 
 
 # =============================================================================
@@ -361,7 +544,7 @@ class TestTopologyGetCompatibleSlots:
         """Test that incompatible slots return empty lists."""
         result = simple_topology.get_compatible_slots(tetrahedral_fragment)
         # All values should be empty lists
-        for slot_type, indices in result.items():
+        for _slot_type, indices in result.items():
             assert indices == []
 
 
@@ -370,7 +553,6 @@ class TestTopologyScaleSlots:
 
     def test_scale_changes_cell(self, simple_topology):
         """Test that scaling changes cell parameters."""
-        original_abc = simple_topology.cell.abc
         simple_topology.scale_slots(scales=(20.0, 20.0, 20.0))
         new_abc = simple_topology.cell.abc
         assert new_abc[0] == 20.0
@@ -387,7 +569,6 @@ class TestTopologyScaleSlots:
 
     def test_scale_default_values(self, simple_topology):
         """Test scaling with default values (1.0, 1.0, 1.0)."""
-        original_abc = simple_topology.cell.abc
         simple_topology.scale_slots()  # Use defaults
         new_abc = simple_topology.cell.abc
         np.testing.assert_array_almost_equal(new_abc, (1.0, 1.0, 1.0))
