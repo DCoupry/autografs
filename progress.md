@@ -144,9 +144,21 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
 - [x] pandas dependency dropped: UFF4MOF params are Python constants in
       data/uff4mof.py; unused covalent_radii.csv deleted (b3472dc)
 - [x] pymatgen deprecation fixed: from_local_env_strategy (9022378)
-- [ ] ruff replacing black+isort+flake8; pre-commit
-- [ ] mypy in CI; CI matrix 3.11-3.13
-- [ ] Declare tqdm dependency; console entry points
+- [x] ruff replaces black+isort+flake8 (02d8588, 74eb082): autofix +
+      reformat + zip(strict=True) everywhere + list_building_units
+      rewrite (honest types, sorted output — was hash-order dependent)
+- [x] pre-commit config; CI: blocking ruff lint+format, mypy advisory
+      (50 historical errors to burn down before flipping to blocking),
+      test matrix 3.11/3.12/3.13 with pip cache (74eb082)
+- [x] tqdm + requests declared; CGD converter promoted to
+      autografs.cgd with `autografs-topologies` console command;
+      TopologyExtractionError in autografs.exceptions; private
+      codecs.escape_decode dropped (02d8588)
+
+### Step 6 leftover
+- mypy burn-down: 50 errors (mostly numpy/pymatgen strictness plus a
+  few loose internal annotations); flip the CI typecheck job to
+  blocking when clean.
 
 ## Step 7 — Scale features (v3_plan §3.6, §4.4)
 - [ ] Parallel + sampling build_all
