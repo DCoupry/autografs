@@ -107,9 +107,18 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   analysis + JSON reconstruction; lazy topology loading is the next
   perf item (backlog, Step 7).
 
-## Step 4 — Output layer (v3_plan §3.5)
-- [ ] Framework result class (pymatgen Structure + bonds + mmtypes)
-- [ ] write_cif / to_ase / to_gulp; README rewrite
+## Step 4 — Output layer (v3_plan §3.5) — COMPLETE
+- [x] Framework result class: .structure (wrapped pymatgen Structure with
+      tags/ufftype site props), .write_cif (P1 or symmetrized), .to_ase,
+      .to_gulp, .view, .cell/.lattice/.formula/.bonds/.mmtypes; build()
+      and build_all() return Framework (graph still at .graph) (6599cf4)
+- [x] fragments_to_networkx tag pairing O(N^2) -> O(N); inter-fragment
+      bonds carry bond_order (same commit)
+- [x] README rewritten for the 3.0 API; quickstart executed verbatim
+      against the shipped library (3a30605)
+- [x] Also fixed: TestBuild/TestIntegration asserts were inside
+      except-Exception blocks and could never fail; x % 1.0 == 1.0
+      float edge in fractional wrapping
 
 ## Step 5 — Symmetry-constrained cell optimization (v3_plan §3.3)
 - [ ] Optimize only crystal-system free parameters
@@ -178,3 +187,13 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   Suite: 147 tests, 5 slow-marked skips, all green.
   Next: Step 3, the numpy directional alignment core (fixes the
   MOF-5 anisotropic cell, unlocks 747 C1 nets).
+- **2026-07-03**: Step 4 complete (6599cf4, 3a30605). Framework result
+  class with CIF/ASE/GULP exports; build() returns it; README rewritten
+  and quickstart verified verbatim. Suite: 171 tests green (166 fast +
+  5 slow). Remaining roadmap: Step 5 (crystal-system-constrained cell
+  opt — partially subsumed by the pair objective, still right for
+  monoclinic/triclinic), Step 6 leftovers (ruff, mypy-in-CI, CI matrix,
+  tqdm dep, entry points), Step 7 (parallel/sampling build_all, SBU
+  cache + lazy topology load [init ~19 s], 2D stacking for COFs
+  [~200 plane-group nets], IZA import, RCSR refresh, bond-length-aware
+  pair targets).
