@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 import time
 from collections.abc import Mapping
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 import dill
+import numpy as np
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
@@ -46,6 +49,124 @@ logger = logging.getLogger(__name__)
 NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
 NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
 NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
+
+
+def build_framework(
+    topology: Topology,
+    mappings: dict[int, Fragment],
+    refine_cell: bool = True,
+    verbose: bool = False,
+    max_rmsd: float | None = None,
+) -> Framework:
+    """Build one framework from validated slot-index mappings.
+
+    This is the library-independent core of Autografs.build(): it
+    needs no SBU or topology library, only a topology and one private
+    Fragment per slot index, which also makes it usable from worker
+    processes. Most callers want Autografs.build(), which resolves
+    names and slot types first.
+
+    Parameters
+    ----------
+    topology : Topology
+        The blueprint; not modified.
+    mappings : dict[int, Fragment]
+        One (private) Fragment per slot index, as produced by
+        Autografs._validate_mappings.
+    refine_cell : bool, optional
+        Optimize the crystal system's free cell parameters.
+    verbose : bool, optional
+        Log alignment details.
+    max_rmsd : float or None, optional
+        Directional shape-mismatch gate; see Autografs.build.
+
+    Returns
+    -------
+    Framework
+        The built framework.
+    """
+    t0 = time.time()
+    plan = autografs.alignment.prepare_build(topology, mappings)
+    x0 = plan.initial_parameters()
+    if refine_cell and plan.has_pairs:
+        # Nelder-Mead on the pair-coincidence residual over the
+        # crystal system's free parameters only (a cubic net
+        # optimizes a single length); the objective is pure numpy,
+        # no object copies per evaluation
+        result = minimize(
+            plan.residual,
+            x0,
+            method="Nelder-Mead",
+            options={
+                "xatol": NELDER_MEAD_XATOL,
+                "fatol": NELDER_MEAD_FATOL,
+                "maxiter": NELDER_MEAD_MAXITER,
+            },
+        )
+        best_parameters = result.x
+    else:
+        if verbose:
+            logger.info("\t[x] No cell refinement performed.")
+        best_parameters = x0
+    best_alignment, lattice, slot_rmsds = plan.finalize(best_parameters)
+    if max_rmsd is not None:
+        bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
+        if bad_slots:
+            worst = max(bad_slots.values())
+            raise AlignmentError(
+                f"{len(bad_slots)} of {len(slot_rmsds)} slots exceed "
+                f"max_rmsd={max_rmsd:.3f} (worst: {worst:.3f}) "
+                f"on topology {topology.name}: {sorted(bad_slots)}"
+            )
+    if verbose:
+        a, b, c = lattice.abc
+        alpha, beta, gamma = lattice.angles
+        logger.info("\t[x] Best cell parameters:")
+        logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
+        logger.info(f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}")
+        logger.info(
+            f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
+        )
+    graph = autografs.utils.fragments_to_networkx(best_alignment, cell=lattice.matrix)
+    return Framework(graph, name=topology.name)
+
+
+def _build_task(
+    args: tuple[Topology, dict[int, Fragment], bool, float | None],
+) -> Framework | None:
+    """Worker-safe build: expected failures become None, not raises."""
+    topology, mappings, refine_cell, max_rmsd = args
+    try:
+        return build_framework(
+            topology, mappings, refine_cell=refine_cell, max_rmsd=max_rmsd
+        )
+    except (AssertionError, AlignmentError, ValueError):
+        return None
+
+
+def _iter_combinations(
+    options: list[list[str]],
+    max_count: int | None,
+    rng: np.random.Generator,
+):
+    """Yield SBU-name combinations: all of them, or a seeded sample.
+
+    When the full product exceeds max_count, distinct index tuples are
+    drawn from the seeded generator (deterministic for a given seed)
+    and yielded in sorted order.
+    """
+    total = math.prod(len(choices) for choices in options)
+    if max_count is None or total <= max_count:
+        yield from itertools.product(*options)
+        return
+    picks: set[tuple[int, ...]] = set()
+    attempts = 0
+    limit = 20 * max_count
+    while len(picks) < max_count and attempts < limit:
+        picks.add(tuple(int(rng.integers(len(choices))) for choices in options))
+        attempts += 1
+    for pick in sorted(picks):
+        yield tuple(options[i][j] for i, j in enumerate(pick))
 
 
 class Autografs:
@@ -121,6 +242,9 @@ class Autografs:
         topology_subset: list[str] | None = None,
         refine_cell: bool = True,
         max_rmsd: float | None = None,
+        max_per_topology: int | None = None,
+        seed: int | None = None,
+        n_jobs: int = 1,
     ) -> list[Framework]:
         """
         Builds all available structures based on the SBU and Topologies libraries
@@ -136,53 +260,66 @@ class Autografs:
         max_rmsd : float or None, optional
             Per-slot alignment RMSD gate forwarded to build(); rejected
             structures are counted as errors, by default None
+        max_per_topology : int or None, optional
+            Cap on the SBU combinations attempted per topology. The
+            full product over slot types explodes combinatorially on
+            multinodal nets; when it exceeds the cap, a seeded random
+            sample of distinct combinations is built instead.
+        seed : int or None, optional
+            Seed for the sampling generator; a fixed seed makes the
+            sampled enumeration reproducible.
+        n_jobs : int, optional
+            Number of worker processes; 1 (default) builds serially in
+            this process. Builds are independent, so speedup is close
+            to linear once workers are warm.
 
         Returns
         -------
         list[Framework]
             the frameworks produced by the building method
         """
-        graphs = []
         logger.info("Building All Available Structures! This will take some time.")
         logger.info("============================================================")
-        # logger.info(f"Number of cores for parrallel building = {cpu_count}")
-        total_len = 0
-        topologies = self.list_topologies(subset=topology_subset)
-        topology_pbar = tqdm(topologies)
-        for topology_name in topology_pbar:
-            topology_pbar.set_description(f"Processing topology {topology_name:<5}")
-            maps = []
-            topology = self.topologies[topology_name].copy()
-            sbu_dict = self.list_building_units(
-                sieve=topology_name, verbose=False, subset=sbu_subset
-            )
-            # slot types with no compatible SBU are absent from the
-            # dict entirely, so completeness needs an explicit check
-            if len(sbu_dict) != len(topology.mappings):
-                continue
-            if not all(sbu_dict.values()):
-                continue
-            for sbus in list(itertools.product(*sbu_dict.values())):
-                maps.append((topology, dict(zip(sbu_dict.keys(), sbus, strict=True))))
-            total_len += len(maps)
-            results_graphs = []
-            for build_args in tqdm(maps):
-                try:
-                    g = self.build(
-                        *build_args,
-                        refine_cell=refine_cell,
-                        max_rmsd=max_rmsd,
-                        verbose=False,
-                    )
-                    results_graphs.append(g)
-                except (AssertionError, AlignmentError, ValueError):
-                    # expected failures: gated alignments, unfillable
-                    # slots. Anything else is a bug and propagates.
+        rng = np.random.default_rng(seed)
+        frameworks: list[Framework] = []
+        attempted = 0
+        executor = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
+        try:
+            topology_pbar = tqdm(self.list_topologies(subset=topology_subset))
+            for topology_name in topology_pbar:
+                topology_pbar.set_description(f"Processing topology {topology_name:<5}")
+                topology = self.topologies[topology_name]
+                sbu_dict = self.list_building_units(
+                    sieve=topology_name, verbose=False, subset=sbu_subset
+                )
+                # slot types with no compatible SBU are absent from the
+                # dict entirely, so completeness needs an explicit check
+                if len(sbu_dict) != len(topology.mappings):
                     continue
-            graphs += [g for g in results_graphs if g is not None]
-        logger.info(f"\t[x] Generated a total of {len(graphs):^6} periodic graphs.")
-        logger.info(f"\t[x] Rate of error: {1.0 - len(graphs) / total_len:2.2%}.")
-        return graphs
+                if not all(sbu_dict.values()):
+                    continue
+                slot_types = list(sbu_dict.keys())
+                options = [sbu_dict[slot_type] for slot_type in slot_types]
+                tasks = []
+                for choice in _iter_combinations(options, max_per_topology, rng):
+                    raw = dict(zip(slot_types, choice, strict=True))
+                    validated = self._validate_mappings(topology=topology, mappings=raw)
+                    tasks.append((topology, validated, refine_cell, max_rmsd))
+                attempted += len(tasks)
+                if executor is None:
+                    results = map(_build_task, tasks)
+                else:
+                    results = executor.map(_build_task, tasks)
+                frameworks.extend(fw for fw in results if fw is not None)
+        finally:
+            if executor is not None:
+                executor.shutdown()
+        logger.info(f"\t[x] Generated a total of {len(frameworks):^6} frameworks.")
+        if attempted:
+            logger.info(
+                f"\t[x] Rate of error: {1.0 - len(frameworks) / attempted:2.2%}."
+            )
+        return frameworks
 
     def build(
         self,
@@ -237,53 +374,13 @@ class Autografs:
             formatted_mappings = autografs.utils.format_mappings(mappings)
             logger.info(f"\tMappings =  {formatted_mappings}")
             logger.info("Aligning with cell scaling...")
-
-        t0 = time.time()
-        plan = autografs.alignment.prepare_build(topology, mappings)
-        x0 = plan.initial_parameters()
-        if refine_cell and plan.has_pairs:
-            # Nelder-Mead on the pair-coincidence residual over the
-            # crystal system's free parameters only (a cubic net
-            # optimizes a single length); the objective is pure numpy,
-            # no object copies per evaluation
-            result = minimize(
-                plan.residual,
-                x0,
-                method="Nelder-Mead",
-                options={
-                    "xatol": NELDER_MEAD_XATOL,
-                    "fatol": NELDER_MEAD_FATOL,
-                    "maxiter": NELDER_MEAD_MAXITER,
-                },
-            )
-            best_parameters = result.x
-        else:
-            if verbose:
-                logger.info("\t[x] No cell refinement performed.")
-            best_parameters = x0
-        best_alignment, lattice, slot_rmsds = plan.finalize(best_parameters)
-        if max_rmsd is not None:
-            bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
-            if bad_slots:
-                worst = max(bad_slots.values())
-                raise AlignmentError(
-                    f"{len(bad_slots)} of {len(slot_rmsds)} slots exceed "
-                    f"max_rmsd={max_rmsd:.3f} (worst: {worst:.3f}) "
-                    f"on topology {topology.name}: {sorted(bad_slots)}"
-                )
-        if verbose:
-            a, b, c = lattice.abc
-            alpha, beta, gamma = lattice.angles
-            logger.info("\t[x] Best cell parameters:")
-            logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
-            logger.info(f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}")
-            logger.info(
-                f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
-            )
-        graph = autografs.utils.fragments_to_networkx(
-            best_alignment, cell=lattice.matrix
+        return build_framework(
+            topology,
+            mappings,
+            refine_cell=refine_cell,
+            verbose=verbose,
+            max_rmsd=max_rmsd,
         )
-        return Framework(graph, name=topology.name)
 
     def _validate_mappings(
         self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]

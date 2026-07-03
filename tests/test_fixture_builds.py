@@ -157,6 +157,37 @@ class TestGoldenBuilds:
         np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
         assert abc[0] > 10.0
 
+    def test_build_all_with_sampling(self, mofgen):
+        """build_all streams combinations and caps them reproducibly."""
+        kwargs = dict(
+            topology_subset=["pcu"],
+            max_per_topology=3,
+            seed=42,
+            refine_cell=False,
+        )
+        first = mofgen.build_all(**kwargs)
+        second = mofgen.build_all(**kwargs)
+
+        assert 0 < len(first) <= 3
+        # a fixed seed reproduces the same sampled combinations
+        assert [fw.formula for fw in first] == [fw.formula for fw in second]
+        # a different seed picks a different sample (pcu has 58 combos)
+        third = mofgen.build_all(**{**kwargs, "seed": 7})
+        assert len(third) <= 3
+
+    @pytest.mark.slow
+    def test_build_all_parallel_matches_serial(self, mofgen):
+        """n_jobs > 1 produces the same frameworks as serial."""
+        kwargs = dict(
+            topology_subset=["pcu"],
+            max_per_topology=3,
+            seed=11,
+            refine_cell=False,
+        )
+        serial = mofgen.build_all(n_jobs=1, **kwargs)
+        parallel = mofgen.build_all(n_jobs=2, **kwargs)
+        assert [fw.formula for fw in serial] == [fw.formula for fw in parallel]
+
     def test_acs_build_stays_hexagonal(self, mofgen):
         """acs (P6_3/mmc): the optimized cell keeps hexagonal symmetry.
 
