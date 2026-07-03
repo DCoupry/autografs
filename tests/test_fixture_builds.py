@@ -30,7 +30,7 @@ class TestFixtureLibrary:
     """The fixture loads with correct crystallographic content."""
 
     def test_all_nets_present(self, mofgen):
-        assert sorted(mofgen.topologies) == ["dia", "pcu", "srs"]
+        assert sorted(mofgen.topologies) == ["acs", "dia", "pcu", "srs"]
 
     @pytest.mark.parametrize(
         "net, n_slots, node_pg, node_conn, n_nodes, sg",
@@ -38,6 +38,11 @@ class TestFixtureLibrary:
             ("pcu", 4, "Oh", 6, 1, 221),
             ("srs", 20, "D3h", 3, 8, 214),
             ("dia", 24, "Td", 4, 8, 227),
+            # acs nodes are 6-c "trigonal prisms", but at the RCSR
+            # maximum-symmetry embedding ratio the star's geometric
+            # symmetry is exactly Td (cosines 1/3, 0, -2/3) - higher
+            # than the D3h site symmetry. The label reflects the star.
+            ("acs", 8, "Td", 6, 2, 194),
         ],
     )
     def test_net_crystallography(
@@ -152,3 +157,28 @@ class TestGoldenBuilds:
         abc = np.linalg.norm(framework.cell, axis=1)
         np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
         assert abc[0] > 10.0
+
+    def test_acs_build_stays_hexagonal(self, mofgen):
+        """acs (P6_3/mmc): the optimized cell keeps hexagonal symmetry.
+
+        The crystal-system parametrization exposes only (a, c) for
+        spacegroup 194, so a = b and gamma = 120 by construction.
+        """
+        topology = mofgen.topologies["acs"]
+        available = mofgen.list_building_units(sieve="acs")
+        by_conn = {
+            len(k.atoms.indices_from_symbol("X")): (k, v)
+            for k, v in available.items()
+        }
+        assert 6 in by_conn, "no 6-c SBU matched acs nodes"
+        key6, sbus6 = by_conn[6]
+        key2, _ = by_conn[2]
+        framework = mofgen.build(
+            topology,
+            mappings={key6: sorted(sbus6)[0], key2: "Benzene_linear"},
+            refine_cell=True,
+        )
+        lattice = framework.lattice
+        assert abs(lattice.a - lattice.b) < 1e-6
+        assert abs(lattice.gamma - 120.0) < 1e-6
+        assert abs(lattice.alpha - 90.0) < 1e-6

@@ -26,8 +26,10 @@ from cgd2pkl import read_cgd_data  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
 
-# pcu: uninodal 6-c (alpha-Po); srs: uninodal 3-c (SrSi2);
-# dia: uninodal 4-c (diamond). All three with edge-center 2-c slots.
+# pcu: uninodal 6-c (alpha-Po, cubic); srs: uninodal 3-c (SrSi2,
+# cubic); dia: uninodal 4-c (diamond, cubic); acs: uninodal 6-c
+# trigonal-prismatic (hexagonal - exercises the 2-parameter cell
+# path). All with edge-center 2-c slots.
 FIXTURE_CGD = """CRYSTAL
   NAME pcu
   GROUP Pm-3m
@@ -52,12 +54,20 @@ CRYSTAL
   EDGE  0.12500 0.12500 0.62500   0.37500 0.37500 0.37500
 # EDGE_CENTER  0.25000 0.25000 0.50000
 END
+CRYSTAL
+  NAME acs
+  GROUP P63/mmc
+  CELL 1.41420 1.41420 1.15471 90.0000 90.0000 120.0000
+  NODE 1 6  0.66667 0.33333 0.25000
+  EDGE  0.66667 0.33333 0.25000   0.33333 -0.33333 -0.25000
+# EDGE_CENTER  0.50000 0.00000 0.00000
+END
 """
 
 
 def main() -> None:
     topologies = read_cgd_data(FIXTURE_CGD)
-    expected = {"pcu", "srs", "dia"}
+    expected = {"pcu", "srs", "dia", "acs"}
     missing = expected - topologies.keys()
     if missing:
         raise SystemExit(f"Fixture generation failed for: {sorted(missing)}")

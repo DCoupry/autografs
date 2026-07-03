@@ -241,10 +241,12 @@ class Autografs:
 
         t0 = time.time()
         plan = autografs.alignment.prepare_build(topology, mappings)
-        x0 = plan.initial_scales()
+        x0 = plan.initial_parameters()
         if refine_cell and plan.has_pairs:
-            # Nelder-Mead on the pair-coincidence residual; the
-            # objective is pure numpy, no object copies per evaluation
+            # Nelder-Mead on the pair-coincidence residual over the
+            # crystal system's free parameters only (a cubic net
+            # optimizes a single length); the objective is pure numpy,
+            # no object copies per evaluation
             result = minimize(
                 plan.residual,
                 x0,
@@ -255,12 +257,12 @@ class Autografs:
                     "maxiter": NELDER_MEAD_MAXITER,
                 },
             )
-            best_scales = np.abs(result.x)
+            best_parameters = result.x
         else:
             if verbose:
                 logger.info("\t[x] No cell refinement performed.")
-            best_scales = x0
-        best_alignment, lattice, slot_rmsds = plan.finalize(best_scales)
+            best_parameters = x0
+        best_alignment, lattice, slot_rmsds = plan.finalize(best_parameters)
         if max_rmsd is not None:
             bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
             if bad_slots:
@@ -271,10 +273,13 @@ class Autografs:
                     f"on topology {topology.name}: {sorted(bad_slots)}"
                 )
         if verbose:
+            a, b, c = lattice.abc
+            alpha, beta, gamma = lattice.angles
             logger.info("\t[x] Best cell parameters:")
-            logger.info(f"\t\ta = {best_scales[0]:<.1f}")
-            logger.info(f"\t\tb = {best_scales[1]:<.1f}")
-            logger.info(f"\t\tc = {best_scales[2]:<.1f}")
+            logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
+            logger.info(
+                f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}"
+            )
             logger.info(
                 f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
             )

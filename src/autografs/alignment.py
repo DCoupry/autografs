@@ -26,6 +26,7 @@ copies.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import logging
 from dataclasses import dataclass, field
@@ -142,6 +143,126 @@ def _unit(vectors: np.ndarray) -> np.ndarray:
     return vectors / norms
 
 
+# cell angles are clipped into this range during optimization to keep
+# the lattice from collapsing into a degenerate matrix
+_ANGLE_BOUNDS = (30.0, 150.0)
+
+
+@dataclass(frozen=True)
+class CellParametrization:
+    """The free cell parameters allowed by a net's crystal system.
+
+    Optimizing all six lattice parameters independently can break the
+    symmetry the net declares (a cubic net drifting to a != b != c).
+    This class maps a reduced free-parameter vector onto the full
+    (a, b, c, alpha, beta, gamma), exposing exactly the degrees of
+    freedom the crystal system allows: cubic 1, hexagonal/tetragonal/
+    rhombohedral 2, orthorhombic 3, monoclinic 4 (unique angle freed),
+    triclinic 6. Topologies without a spacegroup number fall back to
+    free lengths with blueprint angles (the legacy behavior).
+    """
+
+    spacegroup_number: int | None
+    blueprint_abc: tuple[float, float, float]
+    blueprint_angles: tuple[float, float, float]
+
+    @functools.cached_property
+    def system(self) -> str:
+        """Crystal system name derived from the spacegroup number."""
+        number = self.spacegroup_number or 0
+        if number >= 195:
+            return "cubic"
+        if number >= 143:
+            hexagonal_axes = np.allclose(
+                self.blueprint_angles, (90.0, 90.0, 120.0), atol=1e-3
+            )
+            return "hexagonal" if hexagonal_axes else "rhombohedral"
+        if number >= 75:
+            return "tetragonal"
+        if number >= 16:
+            return "orthorhombic"
+        if number >= 3:
+            return "monoclinic"
+        if number >= 1:
+            return "triclinic"
+        return "unknown"
+
+    @functools.cached_property
+    def _unique_angle_index(self) -> int:
+        """Index of the monoclinic unique angle (largest |angle - 90|)."""
+        deviations = np.abs(np.asarray(self.blueprint_angles) - 90.0)
+        # default to beta when the blueprint is numerically orthogonal
+        return int(np.argmax(deviations)) if deviations.max() > 1e-3 else 1
+
+    @property
+    def n_free(self) -> int:
+        return {
+            "cubic": 1,
+            "hexagonal": 2,
+            "rhombohedral": 2,
+            "tetragonal": 2,
+            "orthorhombic": 3,
+            "monoclinic": 4,
+            "triclinic": 6,
+            "unknown": 3,
+        }[self.system]
+
+    def expand(self, free: np.ndarray) -> tuple[float, ...]:
+        """Full (a, b, c, alpha, beta, gamma) from the free parameters."""
+        free = np.abs(np.asarray(free, dtype=float))
+        system = self.system
+        if system == "cubic":
+            (a,) = free
+            return (a, a, a, 90.0, 90.0, 90.0)
+        if system == "hexagonal":
+            a, c = free
+            return (a, a, c, 90.0, 90.0, 120.0)
+        if system == "rhombohedral":
+            a, alpha = free
+            alpha = float(np.clip(alpha, *_ANGLE_BOUNDS))
+            return (a, a, a, alpha, alpha, alpha)
+        if system == "tetragonal":
+            a, c = free
+            return (a, a, c, 90.0, 90.0, 90.0)
+        if system == "orthorhombic":
+            a, b, c = free
+            return (a, b, c, 90.0, 90.0, 90.0)
+        if system == "monoclinic":
+            a, b, c, unique = free
+            angles = [90.0, 90.0, 90.0]
+            angles[self._unique_angle_index] = float(
+                np.clip(unique, *_ANGLE_BOUNDS)
+            )
+            return (a, b, c, *angles)
+        if system == "triclinic":
+            a, b, c, alpha, beta, gamma = free
+            alpha, beta, gamma = np.clip(
+                (alpha, beta, gamma), *_ANGLE_BOUNDS
+            )
+            return (a, b, c, float(alpha), float(beta), float(gamma))
+        # unknown: free lengths, blueprint angles
+        a, b, c = free
+        return (a, b, c, *self.blueprint_angles)
+
+    def seed(self, abc_guess: np.ndarray) -> np.ndarray:
+        """Free parameters approximating an (a, b, c) length guess."""
+        abc_guess = np.asarray(abc_guess, dtype=float)
+        system = self.system
+        if system == "cubic":
+            return np.array([abc_guess.mean()])
+        if system in ("hexagonal", "tetragonal"):
+            return np.array([abc_guess[:2].mean(), abc_guess[2]])
+        if system == "rhombohedral":
+            return np.array([abc_guess.mean(), self.blueprint_angles[0]])
+        if system == "monoclinic":
+            unique = self.blueprint_angles[self._unique_angle_index]
+            return np.array([*abc_guess, unique])
+        if system == "triclinic":
+            return np.array([*abc_guess, *self.blueprint_angles])
+        # orthorhombic and unknown
+        return abc_guess.copy()
+
+
 @dataclass
 class SlotPlacement:
     """Precomputed geometry for one slot and its assigned SBU."""
@@ -178,6 +299,8 @@ class BuildPlan:
 
     Created once per build by prepare_build(); the cell optimization
     objective then runs on plain arrays with no object construction.
+    The cell is parametrized by the crystal system's free parameters
+    only, so the optimizer cannot break the net's declared symmetry.
     """
 
     placements: list[SlotPlacement]
@@ -186,24 +309,30 @@ class BuildPlan:
     pairs: list[tuple[int, int, int, int, np.ndarray]]
     blueprint_abc: np.ndarray  # (3,)
     angles: tuple[float, float, float]
+    cell_param: CellParametrization
 
     @property
     def has_pairs(self) -> bool:
         return bool(self.pairs)
 
-    def matrix_for(self, scales: np.ndarray) -> np.ndarray:
-        a, b, c = np.abs(scales)
-        return Lattice.from_parameters(a, b, c, *self.angles).matrix
+    @functools.cached_property
+    def _blueprint_matrix(self) -> np.ndarray:
+        return Lattice.from_parameters(*self.blueprint_abc, *self.angles).matrix
 
-    def initial_scales(self) -> np.ndarray:
-        """Analytic starting cell from required bond-through distances.
+    def matrix_for(self, free: np.ndarray) -> np.ndarray:
+        return Lattice.from_parameters(*self.cell_param.expand(free)).matrix
+
+    def initial_parameters(self) -> np.ndarray:
+        """Analytic starting parameters from bond-through distances.
 
         Each dummy pair wants its two slot centers separated by the sum
         of the two arm lengths; the blueprint separation scales with
         the cell, so the ratio of sums is a near-optimal isotropic
-        starting scale (exact for uninodal cubic nets).
+        starting scale (exact for uninodal cubic nets). The resulting
+        (a, b, c) guess is reduced to the crystal system's free
+        parameters.
         """
-        blueprint = self.matrix_for(self.blueprint_abc)
+        blueprint = self._blueprint_matrix
         required = 0.0
         current = 0.0
         for index_a, target_a, index_b, target_b, offset in self.pairs:
@@ -226,12 +355,14 @@ class BuildPlan:
                     for p in self.placements
                 ]
             ).mean()
-            return self.blueprint_abc * (arms / slot_arms)
-        return self.blueprint_abc * (required / current)
+            abc_guess = self.blueprint_abc * (arms / slot_arms)
+        else:
+            abc_guess = self.blueprint_abc * (required / current)
+        return self.cell_param.seed(abc_guess)
 
-    def residual(self, scales: np.ndarray) -> float:
-        """RMS distance between paired dummy images at these scales."""
-        matrix = self.matrix_for(scales)
+    def residual(self, free: np.ndarray) -> float:
+        """RMS distance between paired dummy images at these parameters."""
+        matrix = self.matrix_for(free)
         positions = [p.dummy_positions(matrix) for p in self.placements]
         total = 0.0
         for index_a, target_a, index_b, target_b, offset in self.pairs:
@@ -244,7 +375,7 @@ class BuildPlan:
         return float(np.sqrt(total / len(self.pairs)))
 
     def finalize(
-        self, scales: np.ndarray
+        self, free: np.ndarray
     ) -> tuple[list[Fragment], Lattice, dict[int, float]]:
         """Place every SBU rigidly in the final cell.
 
@@ -260,8 +391,7 @@ class BuildPlan:
             Aligned fragments, the final lattice, and the per-slot
             directional RMSD (dimensionless shape mismatch).
         """
-        a, b, c = np.abs(scales)
-        lattice = Lattice.from_parameters(a, b, c, *self.angles)
+        lattice = Lattice.from_parameters(*self.cell_param.expand(free))
         matrix = lattice.matrix
         fragments: list[Fragment] = []
         slot_rmsds: dict[int, float] = {}
@@ -387,9 +517,16 @@ def prepare_build(
             "not constrain the cell."
         )
     abc = np.array(blueprint.abc, dtype=float)
+    angles = tuple(float(x) for x in blueprint.angles)
+    cell_param = CellParametrization(
+        spacegroup_number=getattr(topology, "spacegroup_number", None),
+        blueprint_abc=tuple(float(x) for x in abc),
+        blueprint_angles=angles,
+    )
     return BuildPlan(
         placements=placements,
         pairs=pairs,
         blueprint_abc=abc,
-        angles=tuple(blueprint.angles),
+        angles=angles,
+        cell_param=cell_param,
     )

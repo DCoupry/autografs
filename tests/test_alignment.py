@@ -90,3 +90,79 @@ class TestMatchDirections:
             np.testing.assert_array_equal(rotation, results[0][0])
             np.testing.assert_array_equal(perm, results[0][1])
             assert rmsd == results[0][2]
+
+
+class TestCellParametrization:
+    """Free cell parameters per crystal system."""
+
+    @staticmethod
+    def _param(sg, abc=(1.0, 1.0, 1.0), angles=(90.0, 90.0, 90.0)):
+        from autografs.alignment import CellParametrization
+
+        return CellParametrization(
+            spacegroup_number=sg, blueprint_abc=abc, blueprint_angles=angles
+        )
+
+    def test_cubic_single_parameter(self):
+        param = self._param(221)
+        assert param.system == "cubic"
+        assert param.n_free == 1
+        assert param.expand([5.0]) == (5.0, 5.0, 5.0, 90.0, 90.0, 90.0)
+        np.testing.assert_allclose(param.seed(np.array([4.0, 5.0, 6.0])), [5.0])
+
+    def test_hexagonal(self):
+        param = self._param(194, angles=(90.0, 90.0, 120.0))
+        assert param.system == "hexagonal"
+        assert param.expand([3.0, 4.0]) == (3.0, 3.0, 4.0, 90.0, 90.0, 120.0)
+
+    def test_rhombohedral(self):
+        param = self._param(148, angles=(80.0, 80.0, 80.0))
+        assert param.system == "rhombohedral"
+        assert param.expand([3.0, 70.0]) == (3.0, 3.0, 3.0, 70.0, 70.0, 70.0)
+
+    def test_tetragonal(self):
+        param = self._param(100)
+        assert param.expand([3.0, 4.0]) == (3.0, 3.0, 4.0, 90.0, 90.0, 90.0)
+
+    def test_orthorhombic(self):
+        param = self._param(20)
+        assert param.expand([2.0, 3.0, 4.0]) == (2.0, 3.0, 4.0, 90.0, 90.0, 90.0)
+
+    def test_monoclinic_frees_unique_angle(self):
+        param = self._param(14, angles=(90.0, 110.0, 90.0))
+        assert param.system == "monoclinic"
+        assert param.n_free == 4
+        assert param.expand([2.0, 3.0, 4.0, 100.0]) == (
+            2.0,
+            3.0,
+            4.0,
+            90.0,
+            100.0,
+            90.0,
+        )
+        # the blueprint's unique angle seeds the free parameter
+        np.testing.assert_allclose(
+            param.seed(np.array([2.0, 3.0, 4.0])), [2.0, 3.0, 4.0, 110.0]
+        )
+
+    def test_triclinic_frees_everything(self):
+        param = self._param(1, angles=(85.0, 95.0, 100.0))
+        assert param.n_free == 6
+        assert param.expand([2, 3, 4, 80, 90, 100]) == (
+            2.0,
+            3.0,
+            4.0,
+            80.0,
+            90.0,
+            100.0,
+        )
+
+    def test_unknown_keeps_blueprint_angles(self):
+        param = self._param(None, angles=(90.0, 90.0, 120.0))
+        assert param.system == "unknown"
+        assert param.expand([2.0, 3.0, 4.0]) == (2.0, 3.0, 4.0, 90.0, 90.0, 120.0)
+
+    def test_angles_clipped_to_sane_range(self):
+        param = self._param(14, angles=(90.0, 110.0, 90.0))
+        expanded = param.expand([2.0, 3.0, 4.0, 5.0])
+        assert expanded[4] == 30.0  # clipped, not a degenerate 5-degree cell
