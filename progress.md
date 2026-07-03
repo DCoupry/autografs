@@ -120,8 +120,22 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
       except-Exception blocks and could never fail; x % 1.0 == 1.0
       float edge in fractional wrapping
 
-## Step 5 — Symmetry-constrained cell optimization (v3_plan §3.3)
-- [ ] Optimize only crystal-system free parameters
+## Step 5 — Symmetry-constrained cell optimization (v3_plan §3.3) — COMPLETE
+- [x] CellParametrization keyed on stored spacegroup number: cubic 1 DOF,
+      hex/tet/rhombohedral 2, orthorhombic 3, monoclinic 4 (unique angle
+      freed), triclinic 6 (angles freed — never optimizable before);
+      angles clipped to [30,150]; legacy no-sg topologies keep the old
+      3-DOF behavior (a0001d6)
+- [x] acs (P6_3/mmc) added to fixture; build test asserts a=b, gamma=120
+      to machine precision
+- [x] Crystallography note: acs vertex star is exactly Td at the RCSR
+      embedding ratio (cosines 1/3, 0, -2/3), above its D3h site
+      symmetry — documented in the fixture test
+
+### Remaining known limitation for 2D nets (future COF work)
+- Plane-group nets, once supported, will need c frozen during cell
+  optimization (no bonds constrain it in the padded slab) — add a
+  fixed-axis flag to CellParametrization then.
 
 ## Step 6 — Tooling sweep (v3_plan §5.3)
 - [x] requires-python widened to >=3.11 (done by Damien, committed with groundwork)
