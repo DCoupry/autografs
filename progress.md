@@ -188,6 +188,57 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
   - bond-length-aware pair targets (MOF-5 12.77 vs exp 12.9)
   - mypy burn-down (CI job advisory until clean)
 
+## COF branch — 2D plane-group nets + stacking (cof_plan.md) — COMPLETE
+Branch `cof-implementation`, 2026-07-08. All five parts of cof_plan.md.
+
+- [x] Part 1a: `autografs.plane_groups` — hand-written operator tables
+      for all 17 plane groups, applied to (x, y) directly (no 3D
+      setting traps). Group-closure tests + hex/square tables
+      cross-checked against pymatgen extrusions. **Correction to the
+      plan table: p4gm extrudes to P4bm (No. 100), not "P4gm".**
+- [x] Part 1b: Cmca→Cmce synonym (2002 glide rename). The other
+      alternate monoclinic settings in the plan (I12/a1, P121/n1,
+      I12/m1, A12/n1) parse natively in pymatgen 2026.5.4 with correct
+      ITA operators — they were already being rescued; only Cmca was
+      actually failing. spglib round-trip test pins every setting.
+- [x] Part 2: `Topology.is_2d` (JSON key written only when True;
+      format v1 files unchanged). CellParametrization layer mode:
+      c exactly frozen at the slab pad; free params hex/square 1 (a),
+      rectangular 2 (a, b), oblique 3 (a, b, gamma), keyed on the
+      stored plane-group number (1-17 when is_2d).
+- [x] Part 3: `Framework.stack(mode, interlayer=3.35, offset=None)` —
+      AA / AB (1/3, 2/3) / serrated (1/2, 0) / staggered (1/2, 1/2);
+      two-layer cells duplicate intra-layer bonds only; typed
+      StackingError for non-layered input (z-window on unwrapped
+      coords subsumes the bond-crossing check).
+- [x] Part 4: fixture + hcb/sql verbatim entries (regeneration
+      byte-identical); COF-1 golden test (hcb + Boroxine_triangle +
+      Benzene_linear): a = b = 15.58 A (exp. 15.0), gamma = 120 to
+      machine precision, c frozen at 10.0 through refine_cell=True,
+      connected honeycomb, AA/AB stacks. Note: the default
+      Boroxine_triangle SBU is slightly pyramidal (~0.5 A), so layer
+      "planarity" means a thin window, with linkers exactly flat.
+- [x] Part 5: README "2D COFs" section, quickstart run verbatim
+      against the shipped library.
+
+### Full-library conversion (RCSRnets-2019-06-01.cgd, 2932 entries)
+- **2686 usable topologies** shipped (was 2464): +200 plane-group 2D
+  layer nets, +22 Cmca. 10.3 MB .json.gz.
+- Plane-group verification (scripts/verify_plane_groups.py): all 200
+  2D nets across all 16 plane groups RCSR uses pass the EDGE-endpoint
+  orbit-membership check (0 misses) — every oblique/rectangular group
+  verified against real nets (p2 x9, pg x6, cm x5, p2mg x16, p2gg
+  x18, c2mm x28, ...).
+- Fixed in passing: a few RCSR 2D entries write 'Name' not 'NAME';
+  CGD keys now matched case-insensitively (was UnboundLocalError).
+- Remaining failures by class:
+  - 239 tetragonal origin-choice-2 symbols pymatgen has no setting
+    for: I41/amd:2 (86), I41/acd:2 (69), I41/a:2 (27), P42/nnm:2
+    (16), P42/nbc:2 (15), P42/nmc:2 (12), P42/ncm:2 (8), P42/n:2 (6).
+    Rescuing them needs origin-shift transforms — the dia-trap class,
+    do not attempt casually (backlog).
+  - 4 unparseable entries, 2 oversize (rht-x, txt: 36-c > 24 limit).
+
 ## Session log
 - **2026-07-02**: Reviewed codebase, wrote v3_plan.md + CLAUDE.md. Confirmed
   bug 1.1 empirically in the conda env. Baseline test run: 3 stale failures,

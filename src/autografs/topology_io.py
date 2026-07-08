@@ -105,11 +105,16 @@ def topology_to_dict(topology: Topology) -> dict:
                 "equivalence_class": slot.equivalence_class,
             }
         )
-    return {
+    payload = {
         "cell": np.round(topology.cell.matrix, COORD_DECIMALS).tolist(),
         "spacegroup_number": getattr(topology, "spacegroup_number", None),
         "slots": slots,
     }
+    # written only when set: 3D entries and format-version-1 files stay
+    # byte-identical, and .get() on load keeps old files readable
+    if getattr(topology, "is_2d", False):
+        payload["is_2d"] = True
+    return payload
 
 
 def topology_from_dict(name: str, data: dict) -> Topology:
@@ -151,6 +156,7 @@ def topology_from_dict(name: str, data: dict) -> Topology:
         cell=np.array(data["cell"], dtype=float),
         equivalence_classes=known_classes,
         spacegroup_number=data.get("spacegroup_number"),
+        is_2d=data.get("is_2d", False),
     )
 
 

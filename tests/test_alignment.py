@@ -164,3 +164,66 @@ class TestCellParametrization:
         param = self._param(14, angles=(90.0, 110.0, 90.0))
         expanded = param.expand([2.0, 3.0, 4.0, 5.0])
         assert expanded[4] == 30.0  # clipped, not a degenerate 5-degree cell
+
+
+class TestLayerCellParametrization:
+    """Layer mode for 2D nets: c exactly frozen at the slab padding."""
+
+    @staticmethod
+    def _param(plane_group, abc=(1.0, 1.0, 10.0), angles=(90.0, 90.0, 90.0)):
+        from autografs.alignment import CellParametrization
+
+        return CellParametrization(
+            spacegroup_number=plane_group,
+            blueprint_abc=abc,
+            blueprint_angles=angles,
+            is_2d=True,
+        )
+
+    def test_hexagonal_layer_single_parameter(self):
+        param = self._param(17, angles=(90.0, 90.0, 120.0))  # p6mm
+        assert param.system == "layer_hexagonal"
+        assert param.n_free == 1
+        assert param.expand([25.0]) == (25.0, 25.0, 10.0, 90.0, 90.0, 120.0)
+        np.testing.assert_allclose(param.seed(np.array([24.0, 26.0, 10.0])), [25.0])
+
+    def test_square_layer_single_parameter(self):
+        param = self._param(11)  # p4mm
+        assert param.system == "layer_square"
+        assert param.n_free == 1
+        assert param.expand([7.0]) == (7.0, 7.0, 10.0, 90.0, 90.0, 90.0)
+
+    def test_rectangular_layer_two_parameters(self):
+        param = self._param(8)  # p2gg
+        assert param.system == "layer_rectangular"
+        assert param.n_free == 2
+        assert param.expand([3.0, 4.0]) == (3.0, 4.0, 10.0, 90.0, 90.0, 90.0)
+        np.testing.assert_allclose(param.seed(np.array([3.0, 4.0, 10.0])), [3.0, 4.0])
+
+    def test_oblique_layer_three_parameters(self):
+        param = self._param(2, angles=(90.0, 90.0, 105.0))  # p2
+        assert param.system == "layer_oblique"
+        assert param.n_free == 3
+        assert param.expand([3.0, 4.0, 100.0]) == (
+            3.0,
+            4.0,
+            10.0,
+            90.0,
+            90.0,
+            100.0,
+        )
+        # blueprint gamma seeds the free angle
+        np.testing.assert_allclose(
+            param.seed(np.array([3.0, 4.0, 10.0])), [3.0, 4.0, 105.0]
+        )
+
+    def test_c_frozen_at_any_free_parameters(self):
+        """The checklist item: c never moves, whatever the optimizer does."""
+        param = self._param(17, abc=(1.7, 1.7, 10.0), angles=(90.0, 90.0, 120.0))
+        for a in (0.1, 1.0, 42.0, 1234.5):
+            assert param.expand([a])[2] == 10.0
+
+    def test_missing_group_number_falls_back_to_oblique(self):
+        param = self._param(None, angles=(90.0, 90.0, 100.0))
+        assert param.system == "layer_oblique"
+        assert param.expand([3.0, 4.0, 95.0])[2] == 10.0

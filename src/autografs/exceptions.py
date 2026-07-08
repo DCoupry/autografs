@@ -18,3 +18,7 @@ class AlignmentError(AutografsError):
 
 class TopologyExtractionError(AutografsError):
     """Raised when a net cannot be converted into an AuToGraFS topology."""
+
+
+class StackingError(AutografsError):
+    """Raised when a framework cannot be stacked as 2D layers."""

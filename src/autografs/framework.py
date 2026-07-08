@@ -30,11 +30,23 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Structure
 
 import autografs.utils
+from autografs.exceptions import StackingError
 
 if TYPE_CHECKING:
     import ase
 
 logger = logging.getLogger(__name__)
+
+# graphite-like default; typical COF interlayer range is 3.3-3.6 A
+DEFAULT_INTERLAYER = 3.35
+
+# in-plane fractional offset of the second layer per stacking mode
+STACKING_OFFSETS: dict[str, tuple[float, float] | None] = {
+    "AA": None,
+    "AB": (1.0 / 3.0, 2.0 / 3.0),
+    "serrated": (0.5, 0.0),
+    "staggered": (0.5, 0.5),
+}
 
 
 class Framework:
@@ -197,3 +209,117 @@ class Framework:
         from ase.visualize import view
 
         view(self.to_ase())
+
+    # ------------------------------------------------------------------
+    # layer stacking
+    # ------------------------------------------------------------------
+
+    def stack(
+        self,
+        mode: str = "AA",
+        interlayer: float = DEFAULT_INTERLAYER,
+        offset: tuple[float, float] | None = None,
+    ) -> Framework:
+        """Stack this 2D layer into a COF crystal.
+
+        A framework built on a layer net has c set to the slab padding,
+        not a physical spacing: the interlayer geometry is dispersion-
+        driven, a user variable, not a topology property. This replaces
+        the padding with a real stacking:
+
+        - ``AA``: eclipsed; the cell keeps one layer and c becomes
+          ``interlayer``.
+        - ``AB``, ``serrated``, ``staggered``: a two-layer cell with c
+          = ``2 * interlayer`` and a second, in-plane-offset copy of
+          the layer. Default fractional offsets: AB (1/3, 2/3),
+          serrated (1/2, 0), staggered (1/2, 1/2).
+
+        Layers are van-der-Waals stacked: intra-layer bonds are
+        duplicated per layer and no inter-layer bonds are created.
+
+        Parameters
+        ----------
+        mode : str, optional
+            One of ``AA``, ``AB``, ``serrated``, ``staggered``.
+        interlayer : float, optional
+            Spacing between successive layer planes in Angstrom, by
+            default 3.35 (graphite-like; typical COFs are 3.3-3.6).
+        offset : tuple[float, float] or None, optional
+            Fractional in-plane offset of the second layer, overriding
+            the mode default. Not applicable to AA.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged.
+
+        Raises
+        ------
+        StackingError
+            If the framework is not a flat layer with c perpendicular
+            to it (e.g. a 3D net, or bonds crossing the slab).
+
+        Examples
+        --------
+        >>> layer = mofgen.build(hcb, mappings)     # c = pad value
+        >>> cof = layer.stack(mode="AA", interlayer=3.35)
+        >>> cof = layer.stack(mode="serrated", offset=(0.5, 0))
+        """
+        if mode not in STACKING_OFFSETS:
+            raise ValueError(
+                f"Unknown stacking mode {mode!r}; "
+                f"expected one of {sorted(STACKING_OFFSETS)}."
+            )
+        if interlayer <= 0:
+            raise ValueError(f"Interlayer spacing must be positive, got {interlayer}.")
+        cell = self.cell
+        pad_c = float(cell[2, 2])
+        # the padded-slab convention puts c along z, perpendicular to
+        # the layer plane spanned by a and b
+        if np.abs(cell[:2, 2]).max() > 1e-6 * self.lattice.a or np.abs(
+            cell[2, :2]
+        ).max() > 1e-6 * abs(pad_c):
+            raise StackingError(
+                f"Framework {self.name!r} has no c-axis perpendicular to "
+                "the a-b plane; not a layer slab."
+            )
+        # a layer keeps all atoms in a thin z-window; coords are
+        # unwrapped, so this also bounds every bond's z-span - a tag
+        # pair bonded through a c-image cannot hide below it
+        z = self.cart_coords[:, 2]
+        thickness = float(z.max() - z.min())
+        if thickness > 0.5 * pad_c:
+            raise StackingError(
+                f"Framework {self.name!r} spans {thickness:.2f} A along c "
+                f"(cell {pad_c:.2f} A); not a 2D layer."
+            )
+        if mode == "AA":
+            if offset is not None:
+                raise ValueError("AA stacking takes no in-plane offset.")
+            n_layers = 1
+        else:
+            if offset is None:
+                offset = STACKING_OFFSETS[mode]
+            n_layers = 2
+        new_cell = cell.copy()
+        new_cell[2] = [0.0, 0.0, n_layers * interlayer]
+        stacked = networkx.Graph(cell=new_cell)
+        stacked.add_nodes_from(self.graph.nodes(data=True))
+        stacked.add_edges_from(self.graph.edges(data=True))
+        if n_layers == 2:
+            shift = offset[0] * cell[0] + offset[1] * cell[1]
+            shift[2] += interlayer
+            relabel = len(self.graph)
+            # duplicated tags stay unique so tag-pair semantics survive
+            tag_base = max(
+                (data["tag"] for _, data in self.graph.nodes(data=True)), default=0
+            )
+            for node, data in self.graph.nodes(data=True):
+                copied = dict(data)
+                copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
+                if copied["tag"] > 0:
+                    copied["tag"] += tag_base
+                stacked.add_node(node + relabel, **copied)
+            for i, j, data in self.graph.edges(data=True):
+                stacked.add_edge(i + relabel, j + relabel, **data)
+        return Framework(stacked, name=f"{self.name}_{mode}")

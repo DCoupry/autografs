@@ -42,7 +42,7 @@ from pymatgen.symmetry.analyzer import PointGroupAnalyzer, SpacegroupAnalyzer
 from pymatgen.symmetry.groups import SpaceGroup
 from tqdm.auto import tqdm
 
-from autografs import topology_io
+from autografs import plane_groups, topology_io
 from autografs.exceptions import TopologyExtractionError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
@@ -62,6 +62,12 @@ MAX_FRAGMENT_SITES = 24
 # 2-coordinated edge centers). Rn cannot occur as a node species since
 # node elements encode coordination numbers <= MAX_FRAGMENT_SITES.
 DUMMY_PLACEHOLDER = "Rn"
+
+# GROUP symbols pymatgen cannot parse as written. RCSR still uses the
+# pre-2002 glide notation for No. 64; the nonstandard monoclinic
+# setting symbols (I12/a1, P121/n1, ...) parse natively and need no
+# entry here - their operators were checked against ITA.
+GROUP_SYNONYMS = {"Cmca": "Cmce"}
 
 
 def build_group_lookup() -> dict[str, str]:
@@ -92,6 +98,7 @@ def normalize_group_symbol(symbol: str, group_lookup: dict[str, str]) -> str:
     coordinates to origin-1 operators generates a wrong net.
     """
     base, _, suffix = symbol.partition(":")
+    base = GROUP_SYNONYMS.get(base, base)
     base = group_lookup.get(base.replace("_", ""), base)
     return f"{base}:{suffix}" if suffix else base
 
@@ -112,29 +119,41 @@ def download_cgd(url: str = RCSR_URL) -> str:
 
 def topology_from_string(
     cgd: str, group_lookup: dict[str, str]
-) -> tuple[str, Structure | None, int]:
+) -> tuple[str, Structure | None, int, bool]:
     """Parse one CGD entry into a periodic pymatgen Structure.
 
-    Returns (name, structure, spacegroup number); structure is None
+    Returns (name, structure, group number, is_2d); structure is None
     when the GROUP symbol cannot be translated, with the raw symbol in
-    the name position.
+    the name position. For 2D entries the group number is the ITA
+    plane-group number (1-17) and is_2d is True.
     """
     lines = [line[2:].split() for line in cgd.splitlines() if len(line) > 2]
     elements = []
     xyz = []
+    name: str | None = None
     is_2d = False
+    plane_group: str | None = None
     for tokens in lines:
-        if tokens[0].startswith("NAME"):
+        # keys are matched case-insensitively: a few RCSR entries
+        # write 'Name' instead of 'NAME'
+        key = tokens[0].upper()
+        if key.startswith("NAME"):
             name = tokens[1].strip()
-        elif tokens[0].startswith("GROUP"):
+        elif key.startswith("GROUP"):
             raw_groupname = tokens[1].strip()
+            # plane groups first: layer nets are expanded with explicit
+            # 2D operators, never through a 3D setting (see the module
+            # docstring of autografs.plane_groups for why)
+            if raw_groupname in plane_groups.PLANE_GROUPS:
+                plane_group = raw_groupname
+                continue
             groupname = normalize_group_symbol(raw_groupname, group_lookup)
             try:
                 spacegroup = SpaceGroup(groupname)
             except ValueError:
-                # e.g. 2D plane groups, nonstandard monoclinic settings
-                return raw_groupname, None, 0
-        elif tokens[0].startswith("CELL"):
+                # e.g. nonstandard monoclinic settings
+                return raw_groupname, None, 0, False
+        elif key.startswith("CELL"):
             parameters = [float(p) for p in tokens[1:]]
             if len(parameters) == 3:
                 # 2D net, only one angle and two vectors.
@@ -142,15 +161,15 @@ def topology_from_string(
                 parameters = parameters[0:2] + [10.0, 90.0, 90.0] + parameters[2:]
                 is_2d = True
             lattice = Lattice.from_parameters(*parameters)
-        elif tokens[0].startswith("NODE"):
+        elif key.startswith("NODE"):
             # the element encodes the coordination number (Z = CN)
             elements.append(get_el_sp(int(tokens[2])))
             xyz.append(np.array(tokens[3:], dtype=float))
-        elif tokens[0].startswith("EDGE_CENTER"):
+        elif key.startswith("EDGE_CENTER"):
             # add a linear connector, represented by He
             elements.append(get_el_sp(2))
             xyz.append(np.array(tokens[1:], dtype=float))
-        elif tokens[0].startswith("EDGE"):
+        elif key.startswith("EDGE"):
             # append two dummies at the quarter points of the edge
             midpoint = int((len(tokens) + 1) / 2)
             ends = np.stack(
@@ -164,20 +183,33 @@ def topology_from_string(
             dummy_element = get_el_sp("X")
             xyz += [quarter_points[0], quarter_points[1]]
             elements += [dummy_element, dummy_element]
+    if name is None:
+        raise ValueError("CGD entry without a NAME line.")
     coords = np.stack(xyz, axis=0)
     if is_2d:
         # node coordinates need to be padded to 3D
         coords = np.pad(coords, ((0, 0), (0, 1)), "constant", constant_values=0.0)
-    # generate the crystal. Pass the normalized symbol string: it keeps
-    # the setting suffix, which both SpaceGroup(...).symbol and the
-    # group's int number would silently drop (reverting e.g. Fd-3m:2
-    # to origin choice 1 and generating a wrong net).
-    topology = Structure.from_spacegroup(
-        sg=groupname, lattice=lattice, species=elements, coords=coords
-    )
+    if plane_group is not None:
+        if not is_2d:
+            raise ValueError(f"Plane group {plane_group} on a 3D CELL in entry {name}.")
+        topology = plane_groups.structure_from_plane_group(
+            symbol=plane_group, lattice=lattice, species=elements, frac_coords=coords
+        )
+        group_number = plane_groups.PLANE_GROUPS[plane_group].number
+    else:
+        if is_2d:
+            raise ValueError(f"2D CELL without a plane group in entry {name}.")
+        # generate the crystal. Pass the normalized symbol string: it
+        # keeps the setting suffix, which both SpaceGroup(...).symbol
+        # and the group's int number would silently drop (reverting
+        # e.g. Fd-3m:2 to origin choice 1 and generating a wrong net).
+        topology = Structure.from_spacegroup(
+            sg=groupname, lattice=lattice, species=elements, coords=coords
+        )
+        group_number = spacegroup.int_number
     # remove any duplicate sites
     topology.merge_sites(tol=1e-3, mode="delete")
-    return name, topology, spacegroup.int_number
+    return name, topology, group_number, is_2d
 
 
 def analyze(
@@ -278,7 +310,7 @@ def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, To
             continue
         # read from the template.
         try:
-            name, struct, sg_number = topology_from_string(
+            name, struct, sg_number, is_2d = topology_from_string(
                 cgd=cgd_string, group_lookup=group_lookup
             )
         except (KeyError, ValueError, IndexError) as exc:
@@ -304,6 +336,7 @@ def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, To
             cell=struct.lattice,
             equivalence_classes=equivalence_classes or None,
             spacegroup_number=sg_number,
+            is_2d=is_2d,
         )
     logger.info(f"{len(split_cgd)} Topologies treated with:")
     logger.info(f"  + {len(topologies)} successful treatments.")

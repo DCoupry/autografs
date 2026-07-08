@@ -66,6 +66,28 @@ class TestRoundtrip:
                 s.specie.symbol for s in original.atoms
             ]
 
+    def test_roundtrip_is_2d(self, binodal_topology, tmp_path):
+        """is_2d survives the round trip; 3D entries stay untouched."""
+        layer = Topology(
+            name="layer_net",
+            slots=[slot.copy() for slot in binodal_topology.slots],
+            cell=binodal_topology.cell,
+            spacegroup_number=17,
+            is_2d=True,
+        )
+        path = tmp_path / "topos.json"
+        topology_io.save_topologies(
+            {"test_net": binodal_topology, "layer_net": layer}, path
+        )
+        loaded = topology_io.load_topologies(path)
+        assert loaded["layer_net"].is_2d
+        assert loaded["layer_net"].spacegroup_number == 17
+        assert not loaded["test_net"].is_2d
+        # the key is only written for 2D entries: format-version-1
+        # files without it keep loading (and stay byte-identical)
+        text = path.read_text(encoding="utf-8")
+        assert text.count('"is_2d"') == 1
+
     def test_roundtrip_preserves_slot_grouping(self, binodal_topology, tmp_path):
         path = tmp_path / "topos.json"
         topology_io.save_topologies({"test_net": binodal_topology}, path)

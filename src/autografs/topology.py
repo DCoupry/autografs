@@ -64,6 +64,7 @@ class Topology:
         cell: np.ndarray | Lattice,
         equivalence_classes: list[int] | None = None,
         spacegroup_number: int | None = None,
+        is_2d: bool = False,
     ) -> None:
         """
         Parameters
@@ -84,9 +85,16 @@ class Topology:
             behavior).
         spacegroup_number : int or None, optional
             International spacegroup number of the source net, kept for
-            provenance and symmetry-constrained cell optimization.
+            provenance and symmetry-constrained cell optimization. For
+            2D nets (is_2d True) this is the ITA plane-group number
+            (1-17) instead.
+        is_2d : bool, optional
+            True for layer nets: the blueprint is periodic in the a-b
+            plane only, and c is a padding value (a 10 A slab) that the
+            cell optimizer must keep frozen.
         """
         self.name = name
+        self.is_2d = bool(is_2d)
         if isinstance(cell, Lattice):
             self.cell = cell
         else:
