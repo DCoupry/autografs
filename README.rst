@@ -46,9 +46,9 @@ Highlights of version 3:
   labels are metadata, not gates, which makes low-symmetry vertices
   usable.
 - **Physically meaningful cells**: the cell is optimized so that
-  bonded connection points coincide. The MOF-5 prototype (pcu + Zn4O +
-  benzenedicarboxylate) comes out cubic at 12.8 Angstrom against the
-  experimental 12.9.
+  every inter-SBU bond sits at its covalent bond length. The MOF-5
+  prototype (pcu + Zn4O + benzenedicarboxylate) comes out cubic at
+  12.89 Angstrom against the experimental 12.9.
 - **Deterministic**: identical inputs give identical structures.
 
 Installation
@@ -94,7 +94,7 @@ Quickstart: MOF-5
 
     mof = mofgen.build(topology, mappings=mappings)
     print(mof)
-    # Framework('pcu', 'Zn4 H12 C24 O13', abc=(12.77, 12.77, 12.77))
+    # Framework('pcu', 'Zn4 H12 C24 O13', abc=(12.89, 12.89, 12.89))
 
     mof.write_cif("mof5.cif")
 
@@ -200,7 +200,7 @@ COF-1 prototype:
         )
 
     layer = mofgen.build(hcb, mappings=mappings)
-    print(layer)   # hexagonal layer, a = b = 15.6, gamma = 120
+    print(layer)   # hexagonal layer, a = b = 14.7, gamma = 120
 
     # turn the layer into a crystal by choosing the stacking
     cof = layer.stack(mode="AA", interlayer=3.35)   # eclipsed
