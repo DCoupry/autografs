@@ -36,6 +36,7 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 from scipy.optimize import linear_sum_assignment
 
+from autografs import plane_groups
 from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
@@ -158,16 +159,32 @@ class CellParametrization:
     rhombohedral 2, orthorhombic 3, monoclinic 4 (unique angle freed),
     triclinic 6. Topologies without a spacegroup number fall back to
     free lengths with blueprint angles (the legacy behavior).
+
+    Layer nets (is_2d) get a layer mode instead: c is the slab padding,
+    not a bonded direction - no dummy pair crosses it, the objective is
+    flat in c and Nelder-Mead would drift - so **c stays exactly
+    frozen** at the blueprint value. The free parameters come from the
+    plane-group lattice family: hexagonal/square 1 (a), rectangular 2
+    (a, b), oblique 3 (a, b, gamma).
     """
 
     spacegroup_number: int | None
     blueprint_abc: tuple[float, float, float]
     blueprint_angles: tuple[float, float, float]
+    is_2d: bool = False
 
     @functools.cached_property
     def system(self) -> str:
         """Crystal system name derived from the spacegroup number."""
         number = self.spacegroup_number or 0
+        if self.is_2d:
+            # the stored number is the plane-group number (1-17); an
+            # out-of-range or missing number gets the most general
+            # layer family, which still keeps c frozen
+            family = (
+                plane_groups.layer_system(number) if 1 <= number <= 17 else "oblique"
+            )
+            return f"layer_{family}"
         if number >= 195:
             return "cubic"
         if number >= 143:
@@ -203,12 +220,32 @@ class CellParametrization:
             "monoclinic": 4,
             "triclinic": 6,
             "unknown": 3,
+            "layer_hexagonal": 1,
+            "layer_square": 1,
+            "layer_rectangular": 2,
+            "layer_oblique": 3,
         }[self.system]
 
     def expand(self, free: np.ndarray) -> tuple[float, ...]:
         """Full (a, b, c, alpha, beta, gamma) from the free parameters."""
         free = np.abs(np.asarray(free, dtype=float))
         system = self.system
+        if system.startswith("layer_"):
+            # c is the frozen slab padding, alpha = beta = 90 by
+            # construction of the padded 2D lattice
+            pad_c = self.blueprint_abc[2]
+            if system == "layer_hexagonal":
+                (a,) = free
+                return (a, a, pad_c, 90.0, 90.0, self.blueprint_angles[2])
+            if system == "layer_square":
+                (a,) = free
+                return (a, a, pad_c, 90.0, 90.0, 90.0)
+            if system == "layer_rectangular":
+                a, b = free
+                return (a, b, pad_c, 90.0, 90.0, 90.0)
+            a, b, gamma = free
+            gamma = float(np.clip(gamma, *_ANGLE_BOUNDS))
+            return (a, b, pad_c, 90.0, 90.0, gamma)
         if system == "cubic":
             (a,) = free
             return (a, a, a, 90.0, 90.0, 90.0)
@@ -242,6 +279,12 @@ class CellParametrization:
         """Free parameters approximating an (a, b, c) length guess."""
         abc_guess = np.asarray(abc_guess, dtype=float)
         system = self.system
+        if system in ("layer_hexagonal", "layer_square"):
+            return np.array([abc_guess[:2].mean()])
+        if system == "layer_rectangular":
+            return abc_guess[:2].copy()
+        if system == "layer_oblique":
+            return np.array([*abc_guess[:2], self.blueprint_angles[2]])
         if system == "cubic":
             return np.array([abc_guess.mean()])
         if system in ("hexagonal", "tetragonal"):
@@ -509,6 +552,7 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
         spacegroup_number=getattr(topology, "spacegroup_number", None),
         blueprint_abc=tuple(float(x) for x in abc),
         blueprint_angles=angles,
+        is_2d=getattr(topology, "is_2d", False),
     )
     return BuildPlan(
         placements=placements,

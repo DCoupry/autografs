@@ -42,7 +42,7 @@ from pymatgen.symmetry.analyzer import PointGroupAnalyzer, SpacegroupAnalyzer
 from pymatgen.symmetry.groups import SpaceGroup
 from tqdm.auto import tqdm
 
-from autografs import topology_io
+from autografs import plane_groups, topology_io
 from autografs.exceptions import TopologyExtractionError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
@@ -112,28 +112,36 @@ def download_cgd(url: str = RCSR_URL) -> str:
 
 def topology_from_string(
     cgd: str, group_lookup: dict[str, str]
-) -> tuple[str, Structure | None, int]:
+) -> tuple[str, Structure | None, int, bool]:
     """Parse one CGD entry into a periodic pymatgen Structure.
 
-    Returns (name, structure, spacegroup number); structure is None
+    Returns (name, structure, group number, is_2d); structure is None
     when the GROUP symbol cannot be translated, with the raw symbol in
-    the name position.
+    the name position. For 2D entries the group number is the ITA
+    plane-group number (1-17) and is_2d is True.
     """
     lines = [line[2:].split() for line in cgd.splitlines() if len(line) > 2]
     elements = []
     xyz = []
     is_2d = False
+    plane_group: str | None = None
     for tokens in lines:
         if tokens[0].startswith("NAME"):
             name = tokens[1].strip()
         elif tokens[0].startswith("GROUP"):
             raw_groupname = tokens[1].strip()
+            # plane groups first: layer nets are expanded with explicit
+            # 2D operators, never through a 3D setting (see the module
+            # docstring of autografs.plane_groups for why)
+            if raw_groupname in plane_groups.PLANE_GROUPS:
+                plane_group = raw_groupname
+                continue
             groupname = normalize_group_symbol(raw_groupname, group_lookup)
             try:
                 spacegroup = SpaceGroup(groupname)
             except ValueError:
-                # e.g. 2D plane groups, nonstandard monoclinic settings
-                return raw_groupname, None, 0
+                # e.g. nonstandard monoclinic settings
+                return raw_groupname, None, 0, False
         elif tokens[0].startswith("CELL"):
             parameters = [float(p) for p in tokens[1:]]
             if len(parameters) == 3:
@@ -168,16 +176,27 @@ def topology_from_string(
     if is_2d:
         # node coordinates need to be padded to 3D
         coords = np.pad(coords, ((0, 0), (0, 1)), "constant", constant_values=0.0)
-    # generate the crystal. Pass the normalized symbol string: it keeps
-    # the setting suffix, which both SpaceGroup(...).symbol and the
-    # group's int number would silently drop (reverting e.g. Fd-3m:2
-    # to origin choice 1 and generating a wrong net).
-    topology = Structure.from_spacegroup(
-        sg=groupname, lattice=lattice, species=elements, coords=coords
-    )
+    if plane_group is not None:
+        if not is_2d:
+            raise ValueError(f"Plane group {plane_group} on a 3D CELL in entry {name}.")
+        topology = plane_groups.structure_from_plane_group(
+            symbol=plane_group, lattice=lattice, species=elements, frac_coords=coords
+        )
+        group_number = plane_groups.PLANE_GROUPS[plane_group].number
+    else:
+        if is_2d:
+            raise ValueError(f"2D CELL without a plane group in entry {name}.")
+        # generate the crystal. Pass the normalized symbol string: it
+        # keeps the setting suffix, which both SpaceGroup(...).symbol
+        # and the group's int number would silently drop (reverting
+        # e.g. Fd-3m:2 to origin choice 1 and generating a wrong net).
+        topology = Structure.from_spacegroup(
+            sg=groupname, lattice=lattice, species=elements, coords=coords
+        )
+        group_number = spacegroup.int_number
     # remove any duplicate sites
     topology.merge_sites(tol=1e-3, mode="delete")
-    return name, topology, spacegroup.int_number
+    return name, topology, group_number, is_2d
 
 
 def analyze(
@@ -278,7 +297,7 @@ def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, To
             continue
         # read from the template.
         try:
-            name, struct, sg_number = topology_from_string(
+            name, struct, sg_number, is_2d = topology_from_string(
                 cgd=cgd_string, group_lookup=group_lookup
             )
         except (KeyError, ValueError, IndexError) as exc:
@@ -304,6 +323,7 @@ def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, To
             cell=struct.lattice,
             equivalence_classes=equivalence_classes or None,
             spacegroup_number=sg_number,
+            is_2d=is_2d,
         )
     logger.info(f"{len(split_cgd)} Topologies treated with:")
     logger.info(f"  + {len(topologies)} successful treatments.")

@@ -37,7 +37,8 @@ symbol map with **no setting trap**:
 |---|---|---|
 | p4    | P4    | 75  |
 | p4mm  | P4mm  | 99  |
-| p4gm  | P4gm  | 100 |
+| p4gm  | P4bm  | 100 | <!-- the in-plane g extrudes to a b glide -->
+
 | p3m1  | P3m1  | 156 |
 | p31m  | P31m  | 157 |
 | p6    | P6    | 168 |
