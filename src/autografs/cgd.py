@@ -63,6 +63,12 @@ MAX_FRAGMENT_SITES = 24
 # node elements encode coordination numbers <= MAX_FRAGMENT_SITES.
 DUMMY_PLACEHOLDER = "Rn"
 
+# GROUP symbols pymatgen cannot parse as written. RCSR still uses the
+# pre-2002 glide notation for No. 64; the nonstandard monoclinic
+# setting symbols (I12/a1, P121/n1, ...) parse natively and need no
+# entry here - their operators were checked against ITA.
+GROUP_SYNONYMS = {"Cmca": "Cmce"}
+
 
 def build_group_lookup() -> dict[str, str]:
     """Map de-underscored spacegroup symbols to their canonical symbols.
@@ -92,6 +98,7 @@ def normalize_group_symbol(symbol: str, group_lookup: dict[str, str]) -> str:
     coordinates to origin-1 operators generates a wrong net.
     """
     base, _, suffix = symbol.partition(":")
+    base = GROUP_SYNONYMS.get(base, base)
     base = group_lookup.get(base.replace("_", ""), base)
     return f"{base}:{suffix}" if suffix else base
 

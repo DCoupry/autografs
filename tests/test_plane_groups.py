@@ -140,6 +140,45 @@ class TestOperatorTables:
         assert len(plane_groups.expand_orbit("c2mm", [0.1234, 0.4567])) == 8
 
 
+class TestMonoclinicSettingRescue:
+    """Nonstandard-setting GROUP symbols generate correct nets.
+
+    RCSR writes some monoclinic nets in alternate cell choices
+    (I12/a1, P121/n1, ...) and No. 64 in the pre-2002 glide notation
+    (Cmca). Expanding a generic orbit and re-detecting the group with
+    spglib guards against the silent wrong-setting trap that once
+    produced garbage dia nets.
+    """
+
+    @pytest.mark.parametrize(
+        "symbol, number, angles",
+        [
+            ("Cmca", 64, (90.0, 90.0, 90.0)),
+            ("I12/a1", 15, (90.0, 100.0, 90.0)),
+            ("A12/n1", 15, (90.0, 100.0, 90.0)),
+            ("P121/n1", 14, (90.0, 100.0, 90.0)),
+            ("I12/m1", 12, (90.0, 100.0, 90.0)),
+        ],
+    )
+    def test_setting_survives_spglib_roundtrip(self, symbol, number, angles):
+        from pymatgen.core.lattice import Lattice
+        from pymatgen.core.structure import Structure
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+        from autografs.cgd import normalize_group_symbol
+
+        groupname = normalize_group_symbol(symbol, build_group_lookup())
+        lattice = Lattice.from_parameters(6.0, 7.0, 8.0, *angles)
+        struct = Structure.from_spacegroup(
+            sg=groupname,
+            lattice=lattice,
+            species=["C"],
+            coords=[[0.1234, 0.2345, 0.3456]],
+        )
+        detected = SpacegroupAnalyzer(struct, symprec=1e-3)
+        assert detected.get_space_group_number() == number
+
+
 class TestPlaneGroupCgdParsing:
     def test_hcb_is_honeycomb(self):
         """hcb must render a honeycomb, not a setting-mangled net."""
