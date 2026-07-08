@@ -64,13 +64,14 @@ __all__ = [
     "AutografsError",
     "Fragment",
     "Framework",
+    "OverlapError",
     "Topology",
 ]
 
 import logging
 
 from autografs.builder import Autografs
-from autografs.exceptions import AlignmentError, AutografsError
+from autografs.exceptions import AlignmentError, AutografsError, OverlapError
 from autografs.fragment import Fragment
 from autografs.framework import Framework
 from autografs.topology import Topology

@@ -187,11 +187,28 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
       spawn against serial results)
 - Deferred to post-PR branches (proper science features):
   - 2D plane-group nets for COFs (~200 nets; needs plane→space group
-    mapping + frozen-c cell parametrization + stacking options)
+    mapping + frozen-c cell parametrization + stacking options) — DONE
   - IZA zeolite framework import
   - RCSR data refresh (post-2019 nets)
   - bond-length-aware pair targets (MOF-5 12.77 vs exp 12.9)
-  - mypy burn-down (CI job advisory until clean)
+  - mypy burn-down (CI job advisory until clean) — DONE
+
+## Distance screening branch (v3_plan §3.6 sanity checks) — 2026-07-08
+Branch `distance-screening` (off `mypy-burndown`).
+- [x] `Framework.min_contact(cutoff=3.0)`: smallest periodic distance
+      between non-bonded atoms via Structure.get_neighbor_list — all
+      images included, so an atom too close to its own image in a
+      collapsed cell is caught; graph-bonded pairs exempt (at every
+      image). Returns inf when nothing is within cutoff.
+- [x] Opt-in `min_distance=` gate on build()/build_all()/
+      build_framework(): raises typed OverlapError (exported at package
+      level); build_all counts rejections as errors like max_rmsd.
+- [x] Verified get_neighbor_list semantics empirically: coincident
+      distinct atoms (d=0) and self-images survive; only the exact
+      self-pair is excluded.
+- Not done from §3.6: UFF relaxation via ASE — ASE ships no UFF
+  calculator, so this needs a dependency decision first.
+- CLI wizard intentionally untouched (no min-distance prompt yet).
 
 ## COF branch — 2D plane-group nets + stacking (cof_plan.md) — COMPLETE
 Branch `cof-implementation`, 2026-07-08. All five parts of cof_plan.md.

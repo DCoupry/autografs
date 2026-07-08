@@ -134,6 +134,7 @@ slot indices) to SBUs, given as library names or ``Fragment`` objects:
         mappings={slot_type: "Zn_mof5_octahedral", edge_type: "Benzene_linear"},
         refine_cell=True,   # optimize cell parameters (default)
         max_rmsd=0.3,       # reject builds with bad shape matches
+        min_distance=1.0,   # reject builds with overlapping atoms
     )
 
 - ``max_rmsd`` gates the *directional* mismatch between an SBU's
@@ -141,6 +142,11 @@ slot indices) to SBUs, given as library names or ``Fragment`` objects:
   shape match). Incompatible geometry raises
   ``autografs.AlignmentError`` instead of returning a distorted
   structure.
+- ``min_distance`` screens the built structure: if any two non-bonded
+  atoms (all periodic images included) are closer than this many
+  Angstroms, ``autografs.OverlapError`` is raised instead of returning
+  overlapping or interpenetrating output. The same check is available
+  on any result as ``Framework.min_contact()``.
 - Slot indices (integers) may be used as mapping keys to place a
   specific SBU on a specific slot, overriding the slot-type choice.
 
@@ -151,6 +157,7 @@ To enumerate every compatible combination:
     frameworks = mofgen.build_all(
         topology_subset=["pcu", "dia", "srs"],
         max_rmsd=0.3,
+        min_distance=1.0,
     )
 
 Working with the result

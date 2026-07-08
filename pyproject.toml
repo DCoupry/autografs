@@ -131,7 +131,10 @@ ignore = [
 known-first-party = ["autografs"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12 target, not our 3.11 floor: current numpy stubs use PEP 695
+# `type` statements, which mypy refuses to parse below 3.12. Runtime
+# 3.11 compatibility is guarded by the CI test matrix instead.
+python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
 ignore_missing_imports = true

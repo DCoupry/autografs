@@ -99,6 +99,91 @@ class TestFileExports:
         assert "library uff4mof" in gulp
 
 
+def _two_atom_framework(coords, bonded, cell_length=20.0):
+    """Two carbons at the given cartesian coords in a cubic cell."""
+    import networkx
+
+    from autografs.framework import Framework
+
+    graph = networkx.Graph(cell=np.diag([cell_length] * 3))
+    for i, coord in enumerate(coords):
+        graph.add_node(i, symbol="C", coord=np.array(coord), tag=0, ufftype="C_R")
+    if bonded:
+        graph.add_edge(0, 1, bond_order=1.0)
+    return Framework(graph, name="pair")
+
+
+class TestMinContact:
+    def test_close_nonbonded_pair_detected(self):
+        pair = _two_atom_framework([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]], bonded=False)
+        assert pair.min_contact() == pytest.approx(0.5)
+
+    def test_bonded_pair_exempt(self):
+        pair = _two_atom_framework([[0.0, 0.0, 0.0], [0.5, 0.0, 0.0]], bonded=True)
+        assert pair.min_contact() == np.inf
+
+    def test_own_periodic_image_detected(self):
+        import networkx
+
+        from autografs.framework import Framework
+
+        graph = networkx.Graph(cell=np.diag([2.0, 20.0, 20.0]))
+        graph.add_node(0, symbol="C", coord=np.zeros(3), tag=0, ufftype="C_R")
+        lone = Framework(graph, name="lone")
+        assert lone.min_contact() == pytest.approx(2.0)
+
+    def test_contact_through_boundary_detected(self):
+        # non-bonded atoms 1.0 A apart across the cell boundary
+        pair = _two_atom_framework([[0.2, 0.0, 0.0], [19.2, 0.0, 0.0]], bonded=False)
+        assert pair.min_contact() == pytest.approx(1.0)
+
+    def test_no_contact_within_cutoff(self):
+        pair = _two_atom_framework([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], bonded=False)
+        assert pair.min_contact(cutoff=3.0) == np.inf
+
+    def test_mof5_contacts_are_physical(self, mof5):
+        # a correct MOF-5 prototype has no overlapping atoms: every
+        # non-bonded contact is above 1 A (shortest bonds are ~1 A)
+        contact = mof5.min_contact()
+        assert 1.0 < contact < 3.0
+
+
+class TestBuildDistanceGate:
+    @pytest.fixture(scope="class")
+    def mofgen(self):
+        from autografs import Autografs
+
+        return Autografs(topofile=FIXTURE_PATH)
+
+    def _mof5_mappings(self, topology):
+        mappings = {}
+        for key in topology.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            mappings[key] = "Zn_mof5_octahedral" if conn == 6 else "Benzene_linear"
+        return mappings
+
+    def test_physical_build_passes_gate(self, mofgen):
+        topology = mofgen.topologies["pcu"]
+        framework = mofgen.build(
+            topology, mappings=self._mof5_mappings(topology), min_distance=1.0
+        )
+        assert len(framework) == 53
+
+    def test_impossible_threshold_raises(self, mofgen):
+        from autografs.exceptions import OverlapError
+
+        topology = mofgen.topologies["pcu"]
+        with pytest.raises(OverlapError, match="non-bonded contact"):
+            mofgen.build(
+                topology, mappings=self._mof5_mappings(topology), min_distance=5.0
+            )
+
+    def test_gate_off_by_default(self, mofgen):
+        topology = mofgen.topologies["pcu"]
+        framework = mofgen.build(topology, mappings=self._mof5_mappings(topology))
+        assert framework.min_contact() > 1.0
+
+
 @pytest.fixture
 def layer():
     """A hand-built flat layer in a padded slab, like a 2D build."""

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -126,6 +127,44 @@ class Framework:
     def formula(self) -> str:
         """Chemical formula of the unit cell."""
         return self.structure.composition.formula
+
+    def min_contact(self, cutoff: float = 3.0) -> float:
+        """Smallest periodic distance between non-bonded atoms.
+
+        Screens for overlapping or interpenetrating output: every
+        periodic image is considered, so an atom sitting too close to
+        its own image in a collapsed cell is caught too. Pairs bonded
+        in the graph are exempt (at every image - a bonded pair is
+        never reported, even through a boundary).
+
+        Parameters
+        ----------
+        cutoff : float, optional
+            Search radius in Angstrom, by default 3.0. Contacts beyond
+            it are not examined.
+
+        Returns
+        -------
+        float
+            The smallest non-bonded contact distance found, or
+            ``math.inf`` when none is within ``cutoff``.
+        """
+        centers, points, _, distances = self.structure.get_neighbor_list(r=cutoff)
+        if len(distances) == 0:
+            return math.inf
+        # pair key = lo * n + hi; self-image contacts (i == i) can
+        # never collide with a bond key since the graph has no loops
+        n = len(self)
+        lo = np.minimum(centers, points).astype(np.int64)
+        hi = np.maximum(centers, points).astype(np.int64)
+        bonded = np.array(
+            sorted({min(i, j) * n + max(i, j) for i, j in self.graph.edges()}),
+            dtype=np.int64,
+        )
+        unbonded = ~np.isin(lo * n + hi, bonded)
+        if not unbonded.any():
+            return math.inf
+        return float(distances[unbonded].min())
 
     # ------------------------------------------------------------------
     # crystallographic exports

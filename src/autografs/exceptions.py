@@ -22,3 +22,9 @@ class TopologyExtractionError(AutografsError):
 
 class StackingError(AutografsError):
     """Raised when a framework cannot be stacked as 2D layers."""
+
+
+class OverlapError(AutografsError):
+    """Raised when a built framework has non-bonded atoms closer than
+    the requested minimum distance (overlapping or interpenetrating
+    output)."""
