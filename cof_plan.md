@@ -134,12 +134,14 @@ modes and the interlayer default.
 
 ## Verification checklist (from the v3 sessions' hard lessons)
 
-- [ ] hcb renders a honeycomb (visual + coordination check), not a
+- [x] hcb renders a honeycomb (visual + coordination check), not a
       setting-mangled net — the dia origin bug says *check, don't
-      assume*.
-- [ ] Every oblique/rectangular plane group verified against at least
-      one net with known geometry.
-- [ ] Fixture regeneration byte-identical when rerun (determinism).
-- [ ] Full-library conversion stats recorded in `progress.md`
-      (usable count, remaining failures by class).
-- [ ] c stays exactly frozen through refine_cell=True.
+      assume*. (tests/test_plane_groups.py + COF-1 golden build)
+- [x] Every oblique/rectangular plane group verified against at least
+      one net with known geometry. (scripts/verify_plane_groups.py:
+      all 200 RCSR 2D nets, 16 groups, 0 endpoint misses)
+- [x] Fixture regeneration byte-identical when rerun (determinism).
+- [x] Full-library conversion stats recorded in `progress.md`
+      (usable count, remaining failures by class). 2464 → 2686.
+- [x] c stays exactly frozen through refine_cell=True.
+      (golden test asserts lattice.c == pad exactly)
