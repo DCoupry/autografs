@@ -130,12 +130,16 @@ def topology_from_string(
     lines = [line[2:].split() for line in cgd.splitlines() if len(line) > 2]
     elements = []
     xyz = []
+    name: str | None = None
     is_2d = False
     plane_group: str | None = None
     for tokens in lines:
-        if tokens[0].startswith("NAME"):
+        # keys are matched case-insensitively: a few RCSR entries
+        # write 'Name' instead of 'NAME'
+        key = tokens[0].upper()
+        if key.startswith("NAME"):
             name = tokens[1].strip()
-        elif tokens[0].startswith("GROUP"):
+        elif key.startswith("GROUP"):
             raw_groupname = tokens[1].strip()
             # plane groups first: layer nets are expanded with explicit
             # 2D operators, never through a 3D setting (see the module
@@ -149,7 +153,7 @@ def topology_from_string(
             except ValueError:
                 # e.g. nonstandard monoclinic settings
                 return raw_groupname, None, 0, False
-        elif tokens[0].startswith("CELL"):
+        elif key.startswith("CELL"):
             parameters = [float(p) for p in tokens[1:]]
             if len(parameters) == 3:
                 # 2D net, only one angle and two vectors.
@@ -157,15 +161,15 @@ def topology_from_string(
                 parameters = parameters[0:2] + [10.0, 90.0, 90.0] + parameters[2:]
                 is_2d = True
             lattice = Lattice.from_parameters(*parameters)
-        elif tokens[0].startswith("NODE"):
+        elif key.startswith("NODE"):
             # the element encodes the coordination number (Z = CN)
             elements.append(get_el_sp(int(tokens[2])))
             xyz.append(np.array(tokens[3:], dtype=float))
-        elif tokens[0].startswith("EDGE_CENTER"):
+        elif key.startswith("EDGE_CENTER"):
             # add a linear connector, represented by He
             elements.append(get_el_sp(2))
             xyz.append(np.array(tokens[1:], dtype=float))
-        elif tokens[0].startswith("EDGE"):
+        elif key.startswith("EDGE"):
             # append two dummies at the quarter points of the edge
             midpoint = int((len(tokens) + 1) / 2)
             ends = np.stack(
@@ -179,6 +183,8 @@ def topology_from_string(
             dummy_element = get_el_sp("X")
             xyz += [quarter_points[0], quarter_points[1]]
             elements += [dummy_element, dummy_element]
+    if name is None:
+        raise ValueError("CGD entry without a NAME line.")
     coords = np.stack(xyz, axis=0)
     if is_2d:
         # node coordinates need to be padded to 3D
