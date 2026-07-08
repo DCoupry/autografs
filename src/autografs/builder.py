@@ -38,7 +38,7 @@ import autografs.alignment
 import autografs.data
 import autografs.topology_io
 import autografs.utils
-from autografs.exceptions import AlignmentError
+from autografs.exceptions import AlignmentError, OverlapError
 from autografs.fragment import Fragment
 from autografs.framework import Framework
 from autografs.topology import Topology
@@ -57,6 +57,7 @@ def build_framework(
     refine_cell: bool = True,
     verbose: bool = False,
     max_rmsd: float | None = None,
+    min_distance: float | None = None,
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -79,6 +80,8 @@ def build_framework(
         Log alignment details.
     max_rmsd : float or None, optional
         Directional shape-mismatch gate; see Autografs.build.
+    min_distance : float or None, optional
+        Post-build overlap gate; see Autografs.build.
 
     Returns
     -------
@@ -128,19 +131,32 @@ def build_framework(
             f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
         )
     graph = autografs.utils.fragments_to_networkx(best_alignment, cell=lattice.matrix)
-    return Framework(graph, name=topology.name)
+    framework = Framework(graph, name=topology.name)
+    if min_distance is not None:
+        contact = framework.min_contact(cutoff=min_distance)
+        if contact < min_distance:
+            raise OverlapError(
+                f"Closest non-bonded contact is {contact:.2f} A, below "
+                f"min_distance={min_distance:.2f} A, on topology "
+                f"{topology.name}: overlapping or interpenetrating output."
+            )
+    return framework
 
 
 def _build_task(
-    args: tuple[Topology, dict[int, Fragment], bool, float | None],
+    args: tuple[Topology, dict[int, Fragment], bool, float | None, float | None],
 ) -> Framework | None:
     """Worker-safe build: expected failures become None, not raises."""
-    topology, mappings, refine_cell, max_rmsd = args
+    topology, mappings, refine_cell, max_rmsd, min_distance = args
     try:
         return build_framework(
-            topology, mappings, refine_cell=refine_cell, max_rmsd=max_rmsd
+            topology,
+            mappings,
+            refine_cell=refine_cell,
+            max_rmsd=max_rmsd,
+            min_distance=min_distance,
         )
-    except (AssertionError, AlignmentError, ValueError):
+    except (AssertionError, AlignmentError, OverlapError, ValueError):
         return None
 
 
@@ -242,6 +258,7 @@ class Autografs:
         topology_subset: list[str] | None = None,
         refine_cell: bool = True,
         max_rmsd: float | None = None,
+        min_distance: float | None = None,
         max_per_topology: int | None = None,
         seed: int | None = None,
         n_jobs: int = 1,
@@ -260,6 +277,10 @@ class Autografs:
         max_rmsd : float or None, optional
             Per-slot alignment RMSD gate forwarded to build(); rejected
             structures are counted as errors, by default None
+        min_distance : float or None, optional
+            Post-build overlap gate forwarded to build(); structures
+            with non-bonded atoms closer than this are counted as
+            errors, by default None
         max_per_topology : int or None, optional
             Cap on the SBU combinations attempted per topology. The
             full product over slot types explodes combinatorially on
@@ -306,7 +327,9 @@ class Autografs:
                         zip(slot_types, choice, strict=True)
                     )
                     validated = self._validate_mappings(topology=topology, mappings=raw)
-                    tasks.append((topology, validated, refine_cell, max_rmsd))
+                    tasks.append(
+                        (topology, validated, refine_cell, max_rmsd, min_distance)
+                    )
                 attempted += len(tasks)
                 results: Iterable[Framework | None]
                 if executor is None:
@@ -331,6 +354,7 @@ class Autografs:
         refine_cell: bool = True,
         verbose: bool = False,
         max_rmsd: float | None = None,
+        min_distance: float | None = None,
     ) -> Framework:
         """
         Generates a framework from a mapping of SBU to topology slots.
@@ -354,6 +378,12 @@ class Autografs:
             slot exceeds it, AlignmentError is raised instead of
             silently returning a distorted structure. None (default)
             disables the gate.
+        min_distance : float or None, optional
+            Minimum acceptable distance in Angstrom between non-bonded
+            atoms in the built framework, all periodic images
+            included. If any pair is closer, OverlapError is raised
+            instead of returning an overlapping or interpenetrating
+            structure. None (default) disables the screening.
 
         Returns
         -------
@@ -367,6 +397,9 @@ class Autografs:
         AlignmentError
             If an SBU's connection count does not match its slot, or if
             max_rmsd is set and any slot alignment exceeds it.
+        OverlapError
+            If min_distance is set and any non-bonded contact in the
+            output is closer than it.
         ValueError
             If the mappings leave topology slots unfilled.
         """
@@ -385,6 +418,7 @@ class Autografs:
             refine_cell=refine_cell,
             verbose=verbose,
             max_rmsd=max_rmsd,
+            min_distance=min_distance,
         )
 
     def _validate_mappings(
