@@ -80,7 +80,7 @@ class Framework:
     # ------------------------------------------------------------------
 
     def __len__(self) -> int:
-        return self.graph.number_of_nodes()
+        return int(self.graph.number_of_nodes())
 
     def __repr__(self) -> str:
         abc = tuple(round(float(x), 2) for x in self.lattice.abc)
@@ -306,7 +306,7 @@ class Framework:
         stacked = networkx.Graph(cell=new_cell)
         stacked.add_nodes_from(self.graph.nodes(data=True))
         stacked.add_edges_from(self.graph.edges(data=True))
-        if n_layers == 2:
+        if offset is not None:
             shift = offset[0] * cell[0] + offset[1] * cell[1]
             shift[2] += interlayer
             relabel = len(self.graph)

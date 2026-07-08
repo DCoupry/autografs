@@ -25,7 +25,7 @@ import itertools
 import logging
 import math
 import time
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -302,10 +302,13 @@ class Autografs:
                 options = [sbu_dict[slot_type] for slot_type in slot_types]
                 tasks = []
                 for choice in _iter_combinations(options, max_per_topology, rng):
-                    raw = dict(zip(slot_types, choice, strict=True))
+                    raw: dict[Fragment | int, Fragment | str] = dict(
+                        zip(slot_types, choice, strict=True)
+                    )
                     validated = self._validate_mappings(topology=topology, mappings=raw)
                     tasks.append((topology, validated, refine_cell, max_rmsd))
                 attempted += len(tasks)
+                results: Iterable[Framework | None]
                 if executor is None:
                     results = map(_build_task, tasks)
                 else:
@@ -367,16 +370,18 @@ class Autografs:
         ValueError
             If the mappings leave topology slots unfilled.
         """
-        mappings = self._validate_mappings(topology=topology, mappings=mappings)
+        validated = self._validate_mappings(topology=topology, mappings=mappings)
         if verbose:
             logger.info("Starting building process:")
             logger.info(f"\tTopology =  {topology}")
-            formatted_mappings = autografs.utils.format_mappings(mappings)
+            formatted_mappings = autografs.utils.format_mappings(
+                {slot: sbu.name for slot, sbu in validated.items()}
+            )
             logger.info(f"\tMappings =  {formatted_mappings}")
             logger.info("Aligning with cell scaling...")
         return build_framework(
             topology,
-            mappings,
+            validated,
             refine_cell=refine_cell,
             verbose=verbose,
             max_rmsd=max_rmsd,
@@ -477,19 +482,20 @@ class Autografs:
             data_dir = Path(autografs.data.__path__[0])
             json_default = data_dir / "topologies.json.gz"
             if json_default.exists():
-                topofile = json_default
+                path = json_default
             else:
-                topofile = data_dir / "topologies.pkl"
-        topofile = Path(topofile)
-        if topofile.name.endswith((".json", ".json.gz")):
-            topologies = autografs.topology_io.load_topologies(topofile)
+                path = data_dir / "topologies.pkl"
+        else:
+            path = Path(topofile)
+        if path.name.endswith((".json", ".json.gz")):
+            topologies = autografs.topology_io.load_topologies(path)
         else:
             logger.warning(
                 "Loading topologies from a pickle file. Pickles can execute "
                 "arbitrary code and break across pymatgen versions; convert "
                 "to JSON with autografs.topology_io.save_topologies."
             )
-            with open(topofile, "rb") as topo:
+            with open(path, "rb") as topo:
                 topologies = dill.load(topo)
         logger.info(
             f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."

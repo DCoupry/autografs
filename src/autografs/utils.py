@@ -65,6 +65,14 @@ def format_indices(iterable: Iterable[int]) -> str:
         return f"{lst[0]}"
 
 
+def _format_runs(indices: list[int]) -> str:
+    """Format sorted indices with consecutive runs grouped (e.g. "0-2,5")."""
+    counter = count()
+    # n - next(counter) is constant along a consecutive run
+    grouped = groupby(sorted(indices), lambda n: n - next(counter))
+    return ",".join(format_indices(g) for _, g in grouped)
+
+
 def format_mappings(mappings: dict[int, str]) -> str:
     """Format slot-to-SBU mappings into a readable string.
 
@@ -87,16 +95,12 @@ def format_mappings(mappings: dict[int, str]) -> str:
     >>> print(format_mappings(mappings))
     SBU_A : 0-2; SBU_B : 3
     """
-    new_dict = defaultdict(list)
-    for k, v in mappings.items():
-        new_dict[v].append(k)
+    new_dict: defaultdict[str, list[int]] = defaultdict(list)
+    for slot, sbu_name in mappings.items():
+        new_dict[sbu_name].append(slot)
     out_mappings = []
-    for k, v in new_dict.items():
-        v = sorted(v)
-        # fresh count() per lambda: consecutive-run grouping idiom
-        grouped_indices = groupby(v, lambda n, c=count(): n - next(c))  # noqa: B008
-        v = ",".join(format_indices(g) for _, g in grouped_indices)
-        out_mappings.append(f"{k} : {v}")
+    for sbu_name, slots in new_dict.items():
+        out_mappings.append(f"{sbu_name} : {_format_runs(slots)}")
     return "; ".join(out_mappings)
 
 

@@ -156,9 +156,14 @@ Run tests: `python -m pytest tests/ -q` (pytest config in pyproject handles `src
       codecs.escape_decode dropped (02d8588)
 
 ### Step 6 leftover
-- mypy burn-down: 50 errors (mostly numpy/pymatgen strictness plus a
-  few loose internal annotations); flip the CI typecheck job to
-  blocking when clean.
+- [x] mypy burn-down done (branch `mypy-burndown`, 2026-07-08): 47
+      errors -> 0. Mostly annotations + variable-rebinding cleanups;
+      real changes: SlotPlacement.arm_for_target is now a required
+      field (was Optional, always set immediately after construction),
+      match_directions uses an impossible-index sentinel instead of
+      perm=None, verbose build logging prints SBU names instead of
+      Fragment reprs. CI typecheck job flipped to blocking and added
+      to the build job's needs.
 
 ## Session log (final)
 - **2026-07-03**: Steps 1-7 all complete. Branch ready for PR to master:
