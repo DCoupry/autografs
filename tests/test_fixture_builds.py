@@ -30,7 +30,13 @@ class TestFixtureLibrary:
     """The fixture loads with correct crystallographic content."""
 
     def test_all_nets_present(self, mofgen):
-        assert sorted(mofgen.topologies) == ["acs", "dia", "pcu", "srs"]
+        assert sorted(mofgen.topologies) == ["acs", "dia", "hcb", "pcu", "sql", "srs"]
+
+    def test_layer_nets_flagged_2d(self, mofgen):
+        for net in ("hcb", "sql"):
+            assert mofgen.topologies[net].is_2d
+        for net in ("pcu", "srs", "dia", "acs"):
+            assert not mofgen.topologies[net].is_2d
 
     @pytest.mark.parametrize(
         "net, n_slots, node_pg, node_conn, n_nodes, sg",
@@ -43,6 +49,9 @@ class TestFixtureLibrary:
             # symmetry is exactly Td (cosines 1/3, 0, -2/3) - higher
             # than the D3h site symmetry. The label reflects the star.
             ("acs", 8, "Td", 6, 2, 194),
+            # 2D nets store the plane-group number (17 = p6mm, 11 = p4mm)
+            ("hcb", 5, "D3h", 3, 2, 17),
+            ("sql", 3, "D4h", 4, 1, 11),
         ],
     )
     def test_net_crystallography(
@@ -187,6 +196,91 @@ class TestGoldenBuilds:
         serial = mofgen.build_all(n_jobs=1, **kwargs)
         parallel = mofgen.build_all(n_jobs=2, **kwargs)
         assert [fw.formula for fw in serial] == [fw.formula for fw in parallel]
+
+    def test_cof1_like_build(self, mofgen):
+        """hcb + boroxine + benzene = the COF-1 prototype layer.
+
+        Golden regression for the 2D pipeline: plane-group expansion,
+        layer-mode cell optimization (a = b, gamma = 120 by
+        construction, c exactly frozen at the slab padding), and
+        stacking. The layer must render a bonded honeycomb, not a
+        setting-mangled net.
+        """
+        topology = mofgen.topologies["hcb"]
+        assert topology.is_2d
+        pad_c = topology.cell.c
+        mappings = self._mappings_by_connectivity(
+            topology, {3: "Boroxine_triangle", 2: "Benzene_linear"}
+        )
+        framework = mofgen.build(
+            topology, mappings=mappings, refine_cell=True, max_rmsd=0.5
+        )
+
+        # expected atom count: sum over slots of (atoms - dummies)
+        expected = 0
+        for key, indices in topology.mappings.items():
+            sbu = mofgen.sbu[mappings[key]]
+            n_real = len(sbu.atoms) - len(sbu.atoms.indices_from_symbol("X"))
+            expected += n_real * len(indices)
+        assert len(framework) == expected
+
+        # layer-mode parametrization: hexagonal to machine precision
+        # (the 1-ulp noise comes from Lattice recomputing parameters
+        # from the matrix, not from the optimizer), c untouched by
+        # refine_cell=True
+        lattice = framework.lattice
+        assert abs(lattice.a - lattice.b) < 1e-12
+        assert abs(lattice.gamma - 120.0) < 1e-12
+        assert abs(lattice.alpha - 90.0) < 1e-12
+        assert abs(lattice.beta - 90.0) < 1e-12
+        assert lattice.c == pad_c
+        # COF-1 experimental a = 15.0 A (dummy-overlap convention
+        # lands slightly short, like MOF-5 at 12.77 vs 12.9)
+        assert 13.0 < lattice.a < 16.5
+
+        # layer planarity: everything in a thin window around z = 0.
+        # The default Boroxine_triangle SBU is slightly pyramidal
+        # (its O/B/X atoms sit up to ~0.5 A off its arm plane), so the
+        # layer has real thickness; the linkers must stay exactly flat
+        z = framework.cart_coords[:, 2]
+        assert np.abs(z).max() < 1.0
+        carbons = [s == "C" for s in framework.symbols]
+        assert np.abs(z[carbons]).max() < 1e-9
+
+        # honeycomb connectivity: one bonded component, no dangling SBU
+        import networkx
+
+        assert networkx.is_connected(framework.graph)
+        degrees = [d for _, d in framework.graph.degree()]
+        assert min(degrees) >= 1
+
+        # stacking replaces the padding with a real interlayer spacing
+        aa = framework.stack(mode="AA", interlayer=3.35)
+        assert len(aa) == len(framework)
+        assert abs(aa.lattice.c - 3.35) < 1e-9
+        ab = framework.stack(mode="AB", interlayer=3.35)
+        assert len(ab) == 2 * len(framework)
+        assert abs(ab.lattice.c - 6.70) < 1e-9
+
+    def test_sql_build_stays_square(self, mofgen):
+        """sql (p4mm): square layer cell with frozen c."""
+        topology = mofgen.topologies["sql"]
+        available = mofgen.list_building_units(sieve="sql")
+        by_conn = {
+            len(k.atoms.indices_from_symbol("X")): (k, v) for k, v in available.items()
+        }
+        assert 4 in by_conn, "no square-planar SBU matched sql nodes"
+        key4, sbus4 = by_conn[4]
+        key2, _ = by_conn[2]
+        framework = mofgen.build(
+            topology,
+            mappings={key4: sorted(sbus4)[0], key2: "Benzene_linear"},
+            refine_cell=True,
+        )
+        lattice = framework.lattice
+        assert abs(lattice.a - lattice.b) < 1e-12
+        assert abs(lattice.gamma - 90.0) < 1e-12
+        assert lattice.c == topology.cell.c
 
     def test_acs_build_stays_hexagonal(self, mofgen):
         """acs (P6_3/mmc): the optimized cell keeps hexagonal symmetry.

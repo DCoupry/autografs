@@ -28,7 +28,9 @@ logging.basicConfig(level=logging.INFO)
 # pcu: uninodal 6-c (alpha-Po, cubic); srs: uninodal 3-c (SrSi2,
 # cubic); dia: uninodal 4-c (diamond, cubic); acs: uninodal 6-c
 # trigonal-prismatic (hexagonal - exercises the 2-parameter cell
-# path). All with edge-center 2-c slots.
+# path); hcb: uninodal 3-c honeycomb (p6mm - 2D plane-group layer
+# net, the COF workhorse); sql: uninodal 4-c square lattice (p4mm).
+# All with edge-center 2-c slots.
 FIXTURE_CGD = """CRYSTAL
   NAME pcu
   GROUP Pm-3m
@@ -61,12 +63,28 @@ CRYSTAL
   EDGE  0.66667 0.33333 0.25000   0.33333 -0.33333 -0.25000
 # EDGE_CENTER  0.50000 0.00000 0.00000
 END
+CRYSTAL
+  NAME hcb
+  GROUP p6mm
+  CELL 1.73205 1.73205 120.0000
+  NODE 1 3  0.33333 0.66667
+  EDGE  0.33333 0.66667   0.66667 0.33333
+# EDGE_CENTER  0.50000 0.50000
+END
+CRYSTAL
+  NAME sql
+  GROUP p4mm
+  CELL 1.00000 1.00000 90.0000
+  NODE 1 4  0.00000 0.00000
+  EDGE  0.00000 0.00000   0.00000 1.00000
+# EDGE_CENTER  0.00000 0.50000
+END
 """
 
 
 def main() -> None:
     topologies = read_cgd_data(FIXTURE_CGD)
-    expected = {"pcu", "srs", "dia", "acs"}
+    expected = {"pcu", "srs", "dia", "acs", "hcb", "sql"}
     missing = expected - topologies.keys()
     if missing:
         raise SystemExit(f"Fixture generation failed for: {sorted(missing)}")

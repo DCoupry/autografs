@@ -235,8 +235,11 @@ class CellParametrization:
             # construction of the padded 2D lattice
             pad_c = self.blueprint_abc[2]
             if system == "layer_hexagonal":
+                # 120 exactly: the plane-group operator tables assume
+                # the standard hexagonal setting, and the blueprint
+                # angle carries matrix-roundtrip noise
                 (a,) = free
-                return (a, a, pad_c, 90.0, 90.0, self.blueprint_angles[2])
+                return (a, a, pad_c, 90.0, 90.0, 120.0)
             if system == "layer_square":
                 (a,) = free
                 return (a, a, pad_c, 90.0, 90.0, 90.0)
