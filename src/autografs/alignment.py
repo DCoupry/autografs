@@ -11,13 +11,18 @@ replacing the earlier pymatgen-object pipeline. Two ideas drive it:
    slot's unit arm vectors (Hungarian assignment + Kabsch, proper
    rotations only, so chiral SBUs are never silently mirrored).
 
-2. **Pair-coincidence cell objective.** Every blueprint dummy site is
+2. **Bond-length pair objective.** Every blueprint dummy site is
    shared by the two slots it connects (their tags coincide), and the
-   built structure bonds those two SBU dummies together. The correct
-   cell is therefore the one where paired dummy images coincide, and
-   the optimization objective is the RMS distance between paired
-   dummies - not the distance to blueprint positions, whose arbitrary
-   arm lengths previously pulled cubic nets into anisotropic cells.
+   built structure bonds the two SBU atoms that carried those dummies
+   (the *anchors*). The correct cell is therefore the one where each
+   paired anchor image sits one covalent bond length from its partner,
+   and the optimization objective is the RMS deviation of the paired
+   anchor distances from their Cordero covalent-radius targets - not
+   the distance to blueprint positions, whose arbitrary arm lengths
+   previously pulled cubic nets into anisotropic cells, and not dummy
+   coincidence, which hard-codes whatever bond length the SBU library's
+   dummy placement implies (0.7 A dummies = a 1.4 A bond for every
+   element pair; MOF-5 came out at 12.77 A instead of ~12.9).
 
 Everything is precomputed once per build into plain numpy arrays: the
 cell optimization loop runs no pymatgen construction and no deep
@@ -32,6 +37,7 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
+from pymatgen.analysis.local_env import CovalentRadius
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 from scipy.optimize import linear_sum_assignment
@@ -320,6 +326,10 @@ class SlotPlacement:
     arm_lengths: np.ndarray  # (n,) SBU arm lengths, Angstrom
     sbu_center: np.ndarray  # (3,) SBU dummy centroid, cartesian
     dummy_indices: list[int]  # SBU atom index per arm
+    # per arm: the anchor is the SBU atom bonded through that arm (the
+    # dummy's nearest real atom); paired anchors bond in the output
+    anchor_vecs: np.ndarray  # (n, 3) anchor positions minus center, cartesian
+    anchor_radii: np.ndarray  # (n,) anchor covalent radii, Angstrom
     # arm assignment (perm) computed at the reference cell
     arm_for_target: np.ndarray
 
@@ -329,11 +339,11 @@ class SlotPlacement:
         ordered_arms = self.arm_units[self.arm_for_target]
         return kabsch(ordered_arms, directions), directions
 
-    def dummy_positions(self, matrix: np.ndarray) -> np.ndarray:
-        """Cartesian SBU dummy positions (target order) in this cell."""
+    def anchor_positions(self, matrix: np.ndarray) -> np.ndarray:
+        """Cartesian SBU anchor positions (target order) in this cell."""
         rotation, _ = self.rotation_for(matrix)
         center = self.frac_center @ matrix
-        ordered = (self.arm_units * self.arm_lengths[:, None])[self.arm_for_target]
+        ordered = self.anchor_vecs[self.arm_for_target]
         return np.asarray(center + ordered @ rotation.T)
 
 
@@ -370,12 +380,12 @@ class BuildPlan:
     def initial_parameters(self) -> np.ndarray:
         """Analytic starting parameters from bond-through distances.
 
-        Each dummy pair wants its two slot centers separated by the sum
-        of the two arm lengths; the blueprint separation scales with
-        the cell, so the ratio of sums is a near-optimal isotropic
-        starting scale (exact for uninodal cubic nets). The resulting
-        (a, b, c) guess is reduced to the crystal system's free
-        parameters.
+        Each anchor pair wants its two slot centers separated by the
+        center-to-anchor spans plus the bond length; the blueprint
+        separation scales with the cell, so the ratio of sums is a
+        near-optimal isotropic starting scale (exact for uninodal
+        cubic nets). The resulting (a, b, c) guess is reduced to the
+        crystal system's free parameters.
         """
         blueprint = self._blueprint_matrix
         required = 0.0
@@ -383,9 +393,12 @@ class BuildPlan:
         for index_a, target_a, index_b, target_b, offset in self.pairs:
             pa = self.placements[index_a]
             pb = self.placements[index_b]
-            required += float(
-                pa.arm_lengths[pa.arm_for_target[target_a]]
-                + pb.arm_lengths[pb.arm_for_target[target_b]]
+            span_a = np.linalg.norm(pa.anchor_vecs[pa.arm_for_target[target_a]])
+            span_b = np.linalg.norm(pb.anchor_vecs[pb.arm_for_target[target_b]])
+            required += (
+                float(span_a)
+                + float(span_b)
+                + self._pair_bond_length(index_a, target_a, index_b, target_b)
             )
             separation = (pa.frac_center - pb.frac_center - offset) @ blueprint
             current += float(np.linalg.norm(separation))
@@ -403,10 +416,22 @@ class BuildPlan:
             abc_guess = self.blueprint_abc * (required / current)
         return self.cell_param.seed(abc_guess)
 
+    def _pair_bond_length(
+        self, index_a: int, target_a: int, index_b: int, target_b: int
+    ) -> float:
+        """Target bond length between a pair's two anchors."""
+        pa = self.placements[index_a]
+        pb = self.placements[index_b]
+        return float(
+            pa.anchor_radii[pa.arm_for_target[target_a]]
+            + pb.anchor_radii[pb.arm_for_target[target_b]]
+        )
+
     def residual(self, free: np.ndarray) -> float:
-        """RMS distance between paired dummy images at these parameters."""
+        """RMS deviation of paired anchor distances from their bond
+        lengths at these parameters."""
         matrix = self.matrix_for(free)
-        positions = [p.dummy_positions(matrix) for p in self.placements]
+        positions = [p.anchor_positions(matrix) for p in self.placements]
         total = 0.0
         for index_a, target_a, index_b, target_b, offset in self.pairs:
             delta = (
@@ -414,7 +439,10 @@ class BuildPlan:
                 - positions[index_b][target_b]
                 - offset @ matrix
             )
-            total += float(delta @ delta)
+            gap = float(np.sqrt(delta @ delta)) - self._pair_bond_length(
+                index_a, target_a, index_b, target_b
+            )
+            total += gap * gap
         return float(np.sqrt(total / len(self.pairs)))
 
     def finalize(
@@ -465,6 +493,35 @@ class BuildPlan:
         return fragments, lattice, slot_rmsds
 
 
+def _find_anchors(
+    sbu: Fragment, dummy_indices: list[int], center: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Anchor vectors (relative to center) and covalent radii per arm.
+
+    The anchor of an arm is the real atom bonded through it - the
+    dummy's nearest non-dummy atom; the built structure bonds paired
+    anchors together, so the cell objective targets one covalent bond
+    length between them. A fragment with no real atoms (synthetic test
+    fixtures) falls back to the dummies themselves with zero radius,
+    which turns the pair objective back into dummy coincidence.
+    """
+    coords = np.asarray(sbu.atoms.cart_coords)
+    real = [i for i, site in enumerate(sbu.atoms) if site.specie.symbol != "X"]
+    if not real:
+        return coords[dummy_indices] - center, np.zeros(len(dummy_indices))
+    vecs = np.empty((len(dummy_indices), 3))
+    radii = np.empty(len(dummy_indices))
+    for k, dummy in enumerate(dummy_indices):
+        distances = np.linalg.norm(coords[real] - coords[dummy], axis=1)
+        nearest = real[int(np.argmin(distances))]
+        vecs[k] = coords[nearest] - center
+        symbol = sbu.atoms[nearest].specie.symbol
+        # an element missing from the Cordero table keeps the library's
+        # half-bond convention: the dummy sits half a bond from its anchor
+        radii[k] = CovalentRadius.radius.get(symbol, float(distances.min()))
+    return vecs, radii
+
+
 def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPlan:
     """Precompute all geometry for building one framework.
 
@@ -513,6 +570,7 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
         arm_vectors = sbu_dummies - sbu_center
         arm_lengths = np.linalg.norm(arm_vectors, axis=1)
         arm_units = _unit(arm_vectors)
+        anchor_vecs, anchor_radii = _find_anchors(sbu, sbu_dummy_idx, sbu_center)
 
         frac_arms = slot_frac - frac_center
         # reference assignment at the blueprint cell
@@ -528,6 +586,8 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
             arm_lengths=arm_lengths,
             sbu_center=sbu_center,
             dummy_indices=sbu_dummy_idx,
+            anchor_vecs=anchor_vecs,
+            anchor_radii=anchor_radii,
             arm_for_target=perm,
         )
         index = len(placements)

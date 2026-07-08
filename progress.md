@@ -210,6 +210,26 @@ Branch `distance-screening` (off `mypy-burndown`).
   calculator, so this needs a dependency decision first.
 - CLI wizard intentionally untouched (no min-distance prompt yet).
 
+## Bond-length pair targets branch — 2026-07-08
+Branch `bond-length-targets`. Closes the Step 3 backlog item.
+- [x] The cell objective now targets one Cordero covalent bond length
+      between paired *anchors* (each dummy's nearest real atom — the
+      atoms that actually bond in the output), replacing dummy
+      coincidence, which hard-coded whatever bond the SBU library's
+      dummy placement implied (0.7 A dummies = 1.4 A bonds for every
+      element pair).
+- [x] Golden numbers: MOF-5 12.77 → **12.895 A** (exp. 12.9); COF-1
+      15.58 → **14.67 A** (exp. 15.0 — boroxine's dummy placement
+      implied a 1.9 A B-C bond; now pinned at Cordero 1.57, remaining
+      gap is SBU-internal geometry). Tests tightened accordingly +
+      new assertion that every tag-paired bond sits at its Cordero
+      target.
+- [x] initial_parameters() analytic seed updated to the same target
+      (still exact for uninodal isotropic nets).
+- All-dummy fragments (synthetic test SBUs) fall back to coincidence:
+  anchor = dummy, radius 0. Elements missing from the Cordero table
+  keep the half-bond convention (radius = dummy-anchor distance).
+
 ## COF branch — 2D plane-group nets + stacking (cof_plan.md) — COMPLETE
 Branch `cof-implementation`, 2026-07-08. All five parts of cof_plan.md.
 

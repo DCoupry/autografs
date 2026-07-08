@@ -92,7 +92,7 @@ def build_framework(
     plan = autografs.alignment.prepare_build(topology, mappings)
     x0 = plan.initial_parameters()
     if refine_cell and plan.has_pairs:
-        # Nelder-Mead on the pair-coincidence residual over the
+        # Nelder-Mead on the bond-length pair residual over the
         # crystal system's free parameters only (a cubic net
         # optimizes a single length); the objective is pure numpy,
         # no object copies per evaluation

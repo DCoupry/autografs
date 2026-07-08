@@ -102,9 +102,9 @@ class TestGoldenBuilds:
         """pcu + Zn4O + benzene = the MOF-5 prototype.
 
         Golden regression for the directional alignment core: the
-        pair-coincidence objective must find the cubic MOF-5 cell
-        (experimental a = 12.9 A; the dummy-overlap convention of the
-        SBU library gives ~12.8).
+        bond-length pair objective must find the cubic MOF-5 cell
+        (experimental a = 12.9 A; the old dummy-coincidence objective
+        landed at 12.77 by hard-coding 1.4 A inter-fragment bonds).
         """
         topology = mofgen.topologies["pcu"]
         mappings = self._mappings_by_connectivity(
@@ -126,10 +126,23 @@ class TestGoldenBuilds:
         # like MOF-5
         abc = np.linalg.norm(framework.cell, axis=1)
         np.testing.assert_allclose(abc, abc[0], rtol=1e-3)
-        assert 12.0 < abc[0] < 13.5
+        assert 12.8 < abc[0] < 13.0
         # every atom bonded: no isolated nodes
         degrees = [d for _, d in framework.graph.degree()]
         assert min(degrees) >= 1
+        # inter-fragment (tag-paired) bonds sit at the Cordero C-C
+        # bond length, not at whatever the dummy placement implies
+        structure = framework.structure
+        tags = structure.site_properties["tags"]
+        by_tag = {}
+        for i, tag in enumerate(tags):
+            if tag > 0:
+                by_tag.setdefault(tag, []).append(i)
+        assert by_tag, "no inter-fragment bonds found"
+        for pair in by_tag.values():
+            assert len(pair) == 2
+            distance = structure.get_distance(*pair)
+            assert distance == pytest.approx(1.46, abs=0.02)
 
     def test_mof5_build_is_deterministic(self, mofgen):
         topology = mofgen.topologies["pcu"]
@@ -234,9 +247,12 @@ class TestGoldenBuilds:
         assert abs(lattice.alpha - 90.0) < 1e-12
         assert abs(lattice.beta - 90.0) < 1e-12
         assert lattice.c == pad_c
-        # COF-1 experimental a = 15.0 A (dummy-overlap convention
-        # lands slightly short, like MOF-5 at 12.77 vs 12.9)
-        assert 13.0 < lattice.a < 16.5
+        # COF-1 experimental a = 15.0 A. The bond-length pair objective
+        # gives ~14.7 with B-C pinned at the Cordero 1.57 A (the old
+        # dummy-coincidence objective overshot to 15.6 because the
+        # boroxine dummy placement implied a 1.9 A B-C bond); the
+        # remaining gap is SBU-internal geometry, not the cell fit
+        assert 14.3 < lattice.a < 15.1
 
         # layer planarity: everything in a thin window around z = 0.
         # The default Boroxine_triangle SBU is slightly pyramidal
