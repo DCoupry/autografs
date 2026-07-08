@@ -183,12 +183,13 @@ def _validate_positive_int(text: str) -> bool | str:
 
 def _pick_name(message: str, names: list[str]) -> str | None:
     """Type-to-search prompt over a list of names; None on cancel."""
-    return questionary.autocomplete(
+    answer: str | None = questionary.autocomplete(
         message,
         choices=names,
         match_middle=True,
         validate=lambda text: text in names or "Pick one of the suggested names",
     ).ask()
+    return answer
 
 
 def _pick_max_rmsd() -> float | None | str:
@@ -315,7 +316,9 @@ def choose_topology(session: Session) -> Topology | None:
             return topology
 
 
-def choose_sbus(session: Session, topology: Topology) -> dict[Fragment, str] | None:
+def choose_sbus(
+    session: Session, topology: Topology
+) -> dict[Fragment | int, Fragment | str] | None:
     """One SBU per slot type, from the compatibility sieve; None on
     cancel or when a slot type has no compatible SBU at all."""
     options = session.gen.list_building_units(sieve=topology.name)
@@ -331,7 +334,7 @@ def choose_sbus(session: Session, topology: Topology) -> dict[Fragment, str] | N
             console.print(f"  - {label}")
         console.print("Add candidates with [bold]--xyz your_sbus.xyz[/bold].")
         return None
-    chosen: dict[Fragment, str] = {}
+    chosen: dict[Fragment | int, Fragment | str] = {}
     for slot_type in sorted_slot_types(topology):
         candidates = options[slot_type]
         message = f"SBU for {labels[slot_type]}:"
@@ -347,13 +350,13 @@ def choose_sbus(session: Session, topology: Topology) -> dict[Fragment, str] | N
 
 def choose_build_options() -> tuple[bool, float | None] | None:
     """(refine_cell, max_rmsd); None on cancel."""
-    refine_cell = questionary.confirm(
+    refine_cell: bool | None = questionary.confirm(
         "Refine the cell parameters? (recommended)", default=True
     ).ask()
     if refine_cell is None:
         return None
     max_rmsd = _pick_max_rmsd()
-    if max_rmsd == "cancel":
+    if isinstance(max_rmsd, str):  # "cancel"
         return None
     return refine_cell, max_rmsd
 
@@ -361,10 +364,10 @@ def choose_build_options() -> tuple[bool, float | None] | None:
 def run_build(
     session: Session,
     topology: Topology,
-    mappings: dict[Fragment, str],
+    mappings: dict[Fragment | int, Fragment | str],
     refine_cell: bool,
     max_rmsd: float | None,
-) -> tuple[Framework, dict[Fragment, str]] | None:
+) -> tuple[Framework, dict[Fragment | int, Fragment | str]] | None:
     """Build with an interactive recovery loop on alignment failure.
 
     Returns the framework together with the mappings actually used
@@ -499,7 +502,8 @@ def build_wizard(session: Session) -> None:
         return
     framework, mappings = result
     framework = maybe_stack(framework, topology)
-    export_step(framework, default_output_name(topology.name, list(mappings.values())))
+    sbu_names = [sbu if isinstance(sbu, str) else sbu.name for sbu in mappings.values()]
+    export_step(framework, default_output_name(topology.name, sbu_names))
 
 
 def browse_topologies(session: Session) -> None:
@@ -577,7 +581,7 @@ def batch_build(session: Session) -> None:
     if per_topology is None:
         return
     max_rmsd = _pick_max_rmsd()
-    if max_rmsd == "cancel":
+    if isinstance(max_rmsd, str):  # "cancel"
         return
     outdir = questionary.text("Output directory:", default="frameworks").ask()
     if outdir is None:

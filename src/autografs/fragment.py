@@ -151,6 +151,7 @@ class Fragment:
             Crystallographic orbit id for topology slots.
         """
         self._symmetry = symmetry
+        self._pointgroup: str | None
         if symmetry is not None:
             self._pointgroup = symmetry.sch_symbol
         else:
@@ -247,11 +248,11 @@ class Fragment:
         connectivity; compatibility and alignment both work on them.
         """
         dummy_idx = list(self.atoms.indices_from_symbol("X"))
-        dummies = self.atoms.cart_coords[dummy_idx]
+        dummies = np.asarray(self.atoms.cart_coords)[dummy_idx]
         arms = dummies - dummies.mean(axis=0)
         norms = np.linalg.norm(arms, axis=1, keepdims=True)
         norms[norms < 1e-12] = 1.0
-        return arms / norms
+        return np.asarray(arms / norms)
 
     @functools.cached_property
     def _shape_signature(self) -> np.ndarray:

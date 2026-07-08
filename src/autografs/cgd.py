@@ -36,7 +36,7 @@ import numpy as np
 import pymatgen.symmetry
 import requests
 from pymatgen.core.lattice import Lattice
-from pymatgen.core.periodic_table import get_el_sp
+from pymatgen.core.periodic_table import Element, Species, get_el_sp
 from pymatgen.core.structure import Molecule, Structure
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer, SpacegroupAnalyzer
 from pymatgen.symmetry.groups import SpaceGroup
@@ -79,9 +79,10 @@ def build_group_lookup() -> dict[str, str]:
     encoding table). Without this translation, over half of the RCSR
     nets fail the spacegroup lookup and are silently dropped.
     """
-    spacegroups = json.loads(
-        pkgutil.get_data(pymatgen.symmetry.__name__, "symm_data.json")
-    )["space_group_encoding"]
+    symm_data = pkgutil.get_data(pymatgen.symmetry.__name__, "symm_data.json")
+    if symm_data is None:
+        raise RuntimeError("pymatgen symm_data.json package data not found.")
+    spacegroups = json.loads(symm_data)["space_group_encoding"]
     lookup: dict[str, str] = {}
     for key in spacegroups:
         lookup.setdefault(key.replace("_", ""), key)
@@ -128,7 +129,7 @@ def topology_from_string(
     plane-group number (1-17) and is_2d is True.
     """
     lines = [line[2:].split() for line in cgd.splitlines() if len(line) > 2]
-    elements = []
+    elements: list[Element | Species] = []
     xyz = []
     name: str | None = None
     is_2d = False
@@ -204,7 +205,7 @@ def topology_from_string(
         # and the group's int number would silently drop (reverting
         # e.g. Fd-3m:2 to origin choice 1 and generating a wrong net).
         topology = Structure.from_spacegroup(
-            sg=groupname, lattice=lattice, species=elements, coords=coords
+            sg=groupname, lattice=lattice, species=elements, coords=coords.tolist()
         )
         group_number = spacegroup.int_number
     # remove any duplicate sites

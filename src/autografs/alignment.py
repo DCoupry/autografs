@@ -29,7 +29,7 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 from pymatgen.core.lattice import Lattice
@@ -80,7 +80,7 @@ def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:
     u, _, vt = np.linalg.svd(covariance)
     sign = np.sign(np.linalg.det(vt.T @ u.T))
     correction = np.diag([1.0, 1.0, sign])
-    return vt.T @ correction @ u.T
+    return np.asarray(vt.T @ correction @ u.T)
 
 
 def match_directions(
@@ -114,13 +114,15 @@ def match_directions(
     best: tuple[float, np.ndarray, np.ndarray] | None = None
     for start in _CUBE_ROTATIONS:
         rotation = start
-        perm = None
+        # impossible assignment: never equal to a real permutation, so
+        # the first iteration always refines
+        perm = np.full(n, -1)
         for _ in range(_MATCH_ITERATIONS):
             rotated = arms @ rotation.T
             # cost = squared distance between unit vectors
             cost = -2.0 * (targets @ rotated.T)
             _, new_perm = linear_sum_assignment(cost)
-            if perm is not None and np.array_equal(new_perm, perm):
+            if np.array_equal(new_perm, perm):
                 break
             perm = new_perm
             rotation = kabsch(arms[perm], targets)
@@ -130,6 +132,8 @@ def match_directions(
             best = (score, rotation, perm)
             if score < 1e-9:
                 break
+    if best is None:  # pragma: no cover - _CUBE_ROTATIONS is never empty
+        raise AlignmentError("No rotation start produced a match.")
     score, rotation, perm = best
     return rotation, perm, score
 
@@ -139,7 +143,7 @@ def _unit(vectors: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(vectors, axis=1, keepdims=True)
     if np.any(norms < 1e-9):
         raise AlignmentError("Degenerate (zero-length) arm vector.")
-    return vectors / norms
+    return np.asarray(vectors / norms)
 
 
 # cell angles are clipped into this range during optimization to keep
@@ -317,7 +321,7 @@ class SlotPlacement:
     sbu_center: np.ndarray  # (3,) SBU dummy centroid, cartesian
     dummy_indices: list[int]  # SBU atom index per arm
     # arm assignment (perm) computed at the reference cell
-    arm_for_target: np.ndarray | None = field(default=None)
+    arm_for_target: np.ndarray
 
     def rotation_for(self, matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Rotation and target directions in the given cell matrix."""
@@ -330,7 +334,7 @@ class SlotPlacement:
         rotation, _ = self.rotation_for(matrix)
         center = self.frac_center @ matrix
         ordered = (self.arm_units * self.arm_lengths[:, None])[self.arm_for_target]
-        return center + ordered @ rotation.T
+        return np.asarray(center + ordered @ rotation.T)
 
 
 @dataclass
@@ -357,7 +361,8 @@ class BuildPlan:
 
     @functools.cached_property
     def _blueprint_matrix(self) -> np.ndarray:
-        return Lattice.from_parameters(*self.blueprint_abc, *self.angles).matrix
+        a, b, c = self.blueprint_abc
+        return Lattice.from_parameters(a, b, c, *self.angles).matrix
 
     def matrix_for(self, free: np.ndarray) -> np.ndarray:
         return Lattice.from_parameters(*self.cell_param.expand(free)).matrix
@@ -378,12 +383,12 @@ class BuildPlan:
         for index_a, target_a, index_b, target_b, offset in self.pairs:
             pa = self.placements[index_a]
             pb = self.placements[index_b]
-            required += (
+            required += float(
                 pa.arm_lengths[pa.arm_for_target[target_a]]
                 + pb.arm_lengths[pb.arm_for_target[target_b]]
             )
             separation = (pa.frac_center - pb.frac_center - offset) @ blueprint
-            current += np.linalg.norm(separation)
+            current += float(np.linalg.norm(separation))
         if not self.pairs or current < 1e-9:
             # no shared dummies: fall back to matching mean arm lengths
             arms = np.concatenate([p.arm_lengths for p in self.placements]).mean()
@@ -509,21 +514,22 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
         arm_lengths = np.linalg.norm(arm_vectors, axis=1)
         arm_units = _unit(arm_vectors)
 
+        frac_arms = slot_frac - frac_center
+        # reference assignment at the blueprint cell
+        directions = _unit(frac_arms @ blueprint.matrix)
+        _, perm, _ = match_directions(directions, arm_units)
         placement = SlotPlacement(
             slot_index=slot_index,
             frac_center=frac_center,
-            frac_arms=slot_frac - frac_center,
+            frac_arms=frac_arms,
             tags=slot_tags,
             sbu=sbu,
             arm_units=arm_units,
             arm_lengths=arm_lengths,
             sbu_center=sbu_center,
             dummy_indices=sbu_dummy_idx,
+            arm_for_target=perm,
         )
-        # reference assignment at the blueprint cell
-        directions = _unit(placement.frac_arms @ blueprint.matrix)
-        _, perm, _ = match_directions(directions, arm_units)
-        placement.arm_for_target = perm
         index = len(placements)
         placements.append(placement)
         for target_index, (tag, frac) in enumerate(
@@ -550,10 +556,14 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
             "not constrain the cell."
         )
     abc = np.array(blueprint.abc, dtype=float)
-    angles = tuple(float(x) for x in blueprint.angles)
+    angles = (
+        float(blueprint.angles[0]),
+        float(blueprint.angles[1]),
+        float(blueprint.angles[2]),
+    )
     cell_param = CellParametrization(
         spacegroup_number=getattr(topology, "spacegroup_number", None),
-        blueprint_abc=tuple(float(x) for x in abc),
+        blueprint_abc=(float(abc[0]), float(abc[1]), float(abc[2])),
         blueprint_angles=angles,
         is_2d=getattr(topology, "is_2d", False),
     )
