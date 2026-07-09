@@ -210,6 +210,27 @@ Branch `distance-screening` (off `mypy-burndown`).
   calculator, so this needs a dependency decision first.
 - CLI wizard intentionally untouched (no min-distance prompt yet).
 
+## PORMAKE SBU import branch — 2026-07-08
+Branch `pormake-sbu-import`. SBU expansion option 1 (Damien's chosen
+order: pormake import → curated high-connectivity nodes → examine
+MOF-deconstruction feasibility; SMILES generator not planned).
+- [x] scripts/import_pormake_bbs.py converts the PORMAKE BB library
+      (MIT, github.com/Sangwon91/PORMAKE, src/pormake/database/bbs)
+      to data/pormake.xyz: 867/867 blocks imported (648 nodes, 219
+      edges), 1.05 MB, names prefixed pormake_. License copy shipped
+      as data/PORMAKE_LICENSE.md; README credits + citation.
+- [x] _setup_sbu loads pormake.xyz alongside defaults.xyz when
+      present: 930 SBUs, init still fast (~1.6 s with fixture).
+- [x] Connectivity gaps filled: 7-c x5, 9-c x3, 10-c x10, 12-c x30,
+      24-c x1 (rht node!), plus 116 8-c. X-anchor distances vary
+      (0.49-1.28 A) - harmless since the bond-length pair objective
+      ignores dummy placement.
+- [x] scripts/sbu_coverage.py: % of topologies with at least one full
+      SBU assignment - the metric library growth should move.
+- Empirical note: strict-gate builds (max_rmsd 0.4 + min_distance
+  0.9) pass for ~1/3 of random pcu pormake combinations; the gates
+  correctly reject the geometric clashes the rest produce.
+
 ## Bond-length pair targets branch — 2026-07-08
 Branch `bond-length-targets`. Closes the Step 3 backlog item.
 - [x] The cell objective now targets one Cordero covalent bond length
