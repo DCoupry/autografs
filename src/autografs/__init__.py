@@ -59,19 +59,26 @@ __all__ = [
     "topology_io",
     "builder",
     "exceptions",
+    "relax",
     "Autografs",
     "AlignmentError",
     "AutografsError",
     "Fragment",
     "Framework",
     "OverlapError",
+    "RelaxationError",
     "Topology",
 ]
 
 import logging
 
 from autografs.builder import Autografs
-from autografs.exceptions import AlignmentError, AutografsError, OverlapError
+from autografs.exceptions import (
+    AlignmentError,
+    AutografsError,
+    OverlapError,
+    RelaxationError,
+)
 from autografs.fragment import Fragment
 from autografs.framework import Framework
 from autografs.topology import Topology

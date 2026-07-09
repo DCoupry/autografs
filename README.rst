@@ -180,6 +180,28 @@ Working with the result
     mof.graph              # networkx bond graph: symbols, coords,
                            # UFF4MOF atom types, bond orders, tags
 
+UFF4MOF relaxation
+------------------
+
+``relax`` optimizes the geometry and cell with the UFF4MOF force
+field through LAMMPS, in-process, and returns a new ``Framework``
+with the same bond graph:
+
+.. code-block:: bash
+
+    pip install "autografs[relax]"
+
+.. code-block:: python
+
+    relaxed = mof.relax()          # UFF4MOF, alternating cell + FIRE
+    relaxed.energy                 # kcal/mol per unit cell
+    relaxed.write_cif("relaxed.cif")
+
+Cells smaller than the non-bonded cutoff (12.5 Angstrom by default)
+are relaxed as an internal supercell and folded back transparently.
+On Windows, the LAMMPS wheel additionally needs the Microsoft MPI
+runtime (``winget install Microsoft.MSMPI``).
+
 2D COFs
 -------
 

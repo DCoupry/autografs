@@ -28,3 +28,8 @@ class OverlapError(AutografsError):
     """Raised when a built framework has non-bonded atoms closer than
     the requested minimum distance (overlapping or interpenetrating
     output)."""
+
+
+class RelaxationError(AutografsError):
+    """Raised when the optional LAMMPS relaxation backend is missing
+    or a framework cannot be relaxed."""

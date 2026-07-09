@@ -233,6 +233,29 @@ MOF-deconstruction feasibility; SMILES generator not planned).
   0.9) pass for ~1/3 of random pcu pormake combinations; the gates
   correctly reject the geometric clashes the rest produce.
 
+## LAMMPS/UFF4MOF relaxation branch — 2026-07-08
+Branch `lammps-relax`. Damien's decision: LAMMPS route ("we can be
+heavy but the FF relaxation is important"). Closes the second half of
+v3_plan §3.6.
+- [x] `Framework.relax(force_field="UFF4MOF", cutoff=12.5)`:
+      lammps-interface types + generates inputs (its CLI flow driven
+      programmatically via a staged sys.argv), LAMMPS python module
+      runs the alternating box-relax/FIRE minimization in-process.
+      Returns a new Framework, same bond graph, relaxed coords + cell,
+      `.energy` in kcal/mol per unit cell.
+- [x] Supercell fold-back: lammps-interface replicates small cells for
+      the cutoff; relaxation preserves translational symmetry, so the
+      primitive cell is the supercell / replication counts and atoms
+      map back by species-constrained min-image linear_sum_assignment
+      (never trust atom ordering).
+- [x] Optional extras `autografs[relax]`; typed RelaxationError; CI
+      `relax` job (ubuntu) runs the real end-to-end minimization.
+- Windows: LAMMPS pip wheel needs the MS-MPI runtime (not installed
+  on this machine — admin prompt; local runs raise a helpful
+  RelaxationError at runtime load, everything upstream verified).
+- lammps-interface prompts interactively (input()) if it detects free
+  molecules; relax() converts the EOFError to RelaxationError.
+
 ## Bond-length pair targets branch — 2026-07-08
 Branch `bond-length-targets`. Closes the Step 3 backlog item.
 - [x] The cell objective now targets one Cordero covalent bond length
