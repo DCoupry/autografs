@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "AuToGraFS"
 version = "3.0.0"
 description = "Automatic Topological Generator for Framework Structures"
-readme = "README.rst"
+readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "Damien Coupry", email = "damien.coupry@gmail.com"}
@@ -59,11 +59,6 @@ dev = [
     "ruff>=0.5.0",
     "mypy>=1.8.0",
 ]
-docs = [
-    "sphinx>=7.0.0",
-    "sphinx-rtd-theme>=2.0.0",
-    "myst-parser>=3.0.0",
-]
 # UFF4MOF relaxation backend (Framework.relax). On Windows the LAMMPS
 # wheel additionally requires the Microsoft MPI runtime.
 relax = [
@@ -87,8 +82,7 @@ include = [
     "src",
     "tests",
     "scripts",
-    "docs",
-    "README.rst",
+    "README.md",
     "LICENSE.txt",
     "COPYING",
     "COPYING.LESSER",
