@@ -22,6 +22,7 @@ from __future__ import annotations
 import functools
 import logging
 import math
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -35,6 +36,7 @@ from autografs.exceptions import StackingError
 
 if TYPE_CHECKING:
     import ase
+    from pymatgen.core.structure import Molecule
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,22 @@ class Framework:
     def formula(self) -> str:
         """Chemical formula of the unit cell."""
         return self.structure.composition.formula
+
+    @property
+    def slots(self) -> dict[int, str]:
+        """SBU name per placed slot, keyed by slot index.
+
+        The slot index identifies one placed SBU: pass it to
+        ``rotate``, ``flip`` or ``defects`` to edit that unit.
+        Slot ids of a supercell or stacked framework are offset
+        per copy, so every placed unit stays individually
+        addressable.
+        """
+        found: dict[int, str] = {}
+        for _, data in self.graph.nodes(data=True):
+            if "slot" in data:
+                found[data["slot"]] = data["sbu"]
+        return dict(sorted(found.items()))
 
     def min_contact(self, cutoff: float = 3.0) -> float:
         """Smallest periodic distance between non-bonded atoms.
@@ -300,6 +318,219 @@ class Framework:
         )
 
     # ------------------------------------------------------------------
+    # post-build editing (implementations in autografs.editing)
+    # ------------------------------------------------------------------
+
+    def rotate(self, slot: int, theta: float) -> Framework:
+        """Rotate one placed 2-connected SBU around its bond axis.
+
+        The alignment of a 2-connected SBU (a linker) is
+        underdetermined: any rotation around the axis through its two
+        connection points fits the slot equally well. This picks a
+        different one after the fact, e.g. to relieve a steric clash
+        or break an artificial symmetry.
+
+        Parameters
+        ----------
+        slot : int
+            The placed SBU to rotate; see ``slots`` for the available
+            indices and their SBU names.
+        theta : float
+            Rotation angle in radians, around the axis through the
+            SBU's two connection (anchor) atoms. The anchors do not
+            move, so all framework bonds are preserved exactly.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the slot is unknown or the SBU is not 2-connected.
+        """
+        from autografs.editing import rotate_sbu
+
+        return rotate_sbu(self, slot=slot, theta=theta)
+
+    def flip(self, slot: int) -> Framework:
+        """Mirror one placed SBU while keeping its connection points.
+
+        Applies a reflection that fixes the SBU's anchor atoms: for a
+        2-connected SBU, through a plane containing the anchor axis;
+        for a higher-connected SBU whose anchors are coplanar, through
+        the anchor plane. The result is the mirror image of the placed
+        unit (chirality inverted), still bonded exactly as before.
+
+        Parameters
+        ----------
+        slot : int
+            The placed SBU to flip; see ``slots``.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the slot is unknown, or no anchor-preserving mirror
+            exists (non-coplanar anchors, or a strictly linear unit).
+        """
+        from autografs.editing import flip_sbu
+
+        return flip_sbu(self, slot=slot)
+
+    def supercell(self, scale: int | tuple[int, int, int]) -> Framework:
+        """Replicate the framework into a supercell.
+
+        Bonds crossing the original cell boundary are remapped onto
+        the correct periodic image, so the supercell's bond graph is
+        exact - a prerequisite for statistical defects, which need
+        whole SBUs removable without breaking the network bookkeeping.
+
+        Parameters
+        ----------
+        scale : int or tuple[int, int, int]
+            Multiplier along each cell vector; an int applies to all
+            three.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged. Slot indices are
+            offset per copy (see ``slots``), tags stay pair-unique.
+        """
+        from autografs.editing import make_supercell
+
+        return make_supercell(self, scale=scale)
+
+    def defects(
+        self,
+        fraction: float | None = None,
+        slots: Iterable[int] | None = None,
+        sbu: str | None = None,
+        cap: str | None = "H",
+        seed: int | None = None,
+    ) -> Framework:
+        """Remove whole placed SBUs (missing-linker/node defects).
+
+        Removes either an explicit list of slots or a seeded random
+        fraction of them, and caps the dangling connection points left
+        on the surviving neighbors. Combine with ``supercell`` for
+        statistically defective crystals::
+
+            defective = mof.supercell(2).defects(
+                fraction=0.25, sbu="Benzene_linear", seed=42
+            )
+
+        Parameters
+        ----------
+        fraction : float or None, optional
+            Fraction of the candidate slots to remove; the count is
+            rounded to the nearest integer and the slots are drawn
+            without replacement from a seeded generator.
+        slots : Iterable[int] or None, optional
+            Explicit slot indices to remove instead of sampling.
+            Exactly one of ``fraction`` and ``slots`` must be given.
+        sbu : str or None, optional
+            Restrict the candidates to placed SBUs with this name
+            (e.g. remove only linkers, only nodes...).
+        cap : str or None, optional
+            Element used to cap each dangling anchor, placed along
+            the removed bond direction at the Cordero covalent
+            distance; by default "H". None leaves open coordination
+            sites (no capping).
+        seed : int or None, optional
+            Seed for the sampling generator.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged.
+
+        Raises
+        ------
+        ValueError
+            On unknown slots, an sbu filter matching nothing, or an
+            invalid fraction.
+        """
+        from autografs.editing import make_defects
+
+        return make_defects(
+            self, fraction=fraction, slots=slots, sbu=sbu, cap=cap, seed=seed
+        )
+
+    def functionalizable_sites(
+        self, symbol: str = "H", sbu: str | None = None
+    ) -> list[int]:
+        """Atom indices where ``functionalize`` can graft a group.
+
+        A site is functionalizable when it is a terminal atom of the
+        requested element: single-bonded to exactly one neighbor and
+        not itself a framework connection point.
+
+        Parameters
+        ----------
+        symbol : str, optional
+            Element to look for, by default "H".
+        sbu : str or None, optional
+            Only list sites on placed SBUs with this name.
+
+        Returns
+        -------
+        list[int]
+            Sorted atom indices, usable directly as ``index`` in
+            ``functionalize``.
+        """
+        from autografs.editing import functionalizable_sites
+
+        return functionalizable_sites(self, symbol=symbol, sbu=sbu)
+
+    def functionalize(
+        self,
+        index: int | Iterable[int],
+        functional_group: str | Molecule,
+    ) -> Framework:
+        """Replace terminal atoms with a functional group.
+
+        The post-build counterpart of ``Fragment.functionalize``:
+        grafts the group onto the framework itself, so one built
+        structure can be decorated site by site (including sites made
+        inequivalent by a supercell). The group is aligned along the
+        existing bond direction and placed at the tabulated
+        parent-to-group bond length.
+
+        Parameters
+        ----------
+        index : int or Iterable[int]
+            Atom indices to replace, from ``functionalizable_sites``.
+            Each must be a terminal atom (exactly one bond) that is
+            not a framework connection point.
+        functional_group : str or Molecule
+            A key of ``pymatgen.core.structure.FunctionalGroups``
+            (e.g. "amine", "methyl", "nitro"), or a custom pymatgen
+            Molecule containing exactly one dummy atom ("X") marking
+            the attachment point.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If a site is not terminal, is a connection point, or the
+            functional group has no unique attachment dummy.
+        """
+        from autografs.editing import functionalize
+
+        return functionalize(self, index=index, functional_group=functional_group)
+
+    # ------------------------------------------------------------------
     # layer stacking
     # ------------------------------------------------------------------
 
@@ -399,15 +630,25 @@ class Framework:
             shift = offset[0] * cell[0] + offset[1] * cell[1]
             shift[2] += interlayer
             relabel = len(self.graph)
-            # duplicated tags stay unique so tag-pair semantics survive
+            # duplicated tags and slot ids stay unique so tag-pair
+            # semantics and placed-SBU identity survive
             tag_base = max(
                 (data["tag"] for _, data in self.graph.nodes(data=True)), default=0
+            )
+            slot_base = (
+                max(
+                    (data.get("slot", 0) for _, data in self.graph.nodes(data=True)),
+                    default=0,
+                )
+                + 1
             )
             for node, data in self.graph.nodes(data=True):
                 copied = dict(data)
                 copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
                 if copied["tag"] > 0:
                     copied["tag"] += tag_base
+                if "slot" in copied:
+                    copied["slot"] += slot_base
                 stacked.add_node(node + relabel, **copied)
             for i, j, data in self.graph.edges(data=True):
                 stacked.add_edge(i + relabel, j + relabel, **data)

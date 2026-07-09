@@ -345,6 +345,53 @@ Branch `cof-implementation`, 2026-07-08. All five parts of cof_plan.md.
     do not attempt casually (backlog).
   - 4 unparseable entries, 2 oversize (rht-x, txt: 36-c > 24 limit).
 
+## Post-build editing branch — v2.x feature parity — 2026-07-09
+Branch `post-build-editing`. Closes the README roadmap gap: built
+frameworks are now editable (supercells + statistical defects,
+rotation/flip of placed SBUs, framework functionalization).
+
+- [x] Provenance: fragments_to_networkx records `slot` (topology slot
+      index) and `sbu` (name) per node; build_framework passes
+      sorted(mappings); stack() offsets second-layer slot ids like it
+      does tags. `Framework.slots` lists placed units. This is the
+      enabling change - everything else is graph surgery keyed on it.
+- [x] `Framework.supercell(scale)`: exact graph replication. Each
+      edge's periodic image shift is recovered by min-image rounding
+      of the unwrapped-coordinate difference (intra-SBU bonds round
+      to 0, tag-pair bonds through a boundary to +-1), then a bond
+      from u in image m runs to v in image (m + s) mod scale. Tag
+      pairs re-tagged uniquely per (pair, image). Verified against
+      pymatgen: StructureMatcher.fit(structure.make_supercell(...))
+      and min_contact strictly preserved.
+- [x] `Framework.defects(fraction=|slots=, sbu=, cap="H", seed=)`:
+      v2 semantics (delete SBUs from a supercell, cap lone anchors
+      with H) as one seeded operation. Caps placed along the removed
+      bond direction (min-image, so boundary defects cap correctly)
+      at pymatgen get_bond_length; surviving unpaired anchors lose
+      their tag; refuses to empty the framework.
+- [x] `Framework.rotate(slot, theta)` (2-anchor axis, radians) and
+      `Framework.flip(slot)` (mirror fixing the anchors: through the
+      axis+farthest-atom plane for 2-c, through the best-fit anchor
+      plane for >=3 coplanar anchors - the octahedral node correctly
+      refuses). Anchors sit on the axis/plane, so all bonds are
+      preserved exactly; flip is an involution.
+- [x] `Framework.functionalize(index|indices, group)` +
+      `functionalizable_sites(symbol="H", sbu=)`: replaces terminal
+      single-bonded non-anchor atoms with a pymatgen FunctionalGroups
+      entry or a custom one-X Molecule. Group aligned along the old
+      bond direction, head placed at get_bond_length; new atoms typed
+      by find_mmtypes in their local environment (parent included)
+      and inherit the parent's slot/sbu.
+- [x] All ops return new Frameworks (graph copied, node ids kept
+      contiguous - min_contact indexes structure sites by sorted node
+      id, so editing must never leave gaps). New module
+      autografs/editing.py; framework.py holds thin delegates
+      (lazy import, mirroring the relax pattern).
+- [x] tests/test_editing.py: 35 tests on a real MOF-5 fixture build
+      (+ hcb stack provenance). Full suite green incl. -m slow;
+      ruff + mypy clean. README: "Post-build editing" section
+      (snippet executed verbatim), architecture + roadmap updated.
+
 ## Session log
 - **2026-07-02**: Reviewed codebase, wrote v3_plan.md + CLAUDE.md. Confirmed
   bug 1.1 empirically in the conda env. Baseline test run: 3 stale failures,

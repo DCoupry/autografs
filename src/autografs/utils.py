@@ -347,7 +347,9 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
 
 
 def fragments_to_networkx(
-    fragments: list[Fragment], cell: np.ndarray | None = None
+    fragments: list[Fragment],
+    cell: np.ndarray | None = None,
+    slots: list[int] | None = None,
 ) -> networkx.Graph:
     """Combine multiple fragments into a single networkx Graph.
 
@@ -360,22 +362,29 @@ def fragments_to_networkx(
         List of aligned Fragment objects to combine.
     cell : np.ndarray or None, optional
         3x3 cell matrix for periodic structures. Stored as graph attribute.
+    slots : list[int] or None, optional
+        Topology slot index per fragment; falls back to the fragment's
+        position in the list. Recorded per node so post-build editing
+        (rotation, defects, functionalization) can recover which atoms
+        belong to which placed SBU.
 
     Returns
     -------
     networkx.Graph
-        Molecular graph with node attributes (symbol, coord, tag, ufftype)
-        and edge attributes (bond_order).
+        Molecular graph with node attributes (symbol, coord, tag,
+        ufftype, slot, sbu) and edge attributes (bond_order).
 
     Examples
     --------
     >>> graph = fragments_to_networkx(aligned_fragments, cell=topology.cell.matrix)
     >>> print(f"Atoms: {graph.number_of_nodes()}, Bonds: {graph.number_of_edges()}")
     """
+    if slots is None:
+        slots = list(range(len(fragments)))
     full_graph = networkx.Graph(cell=cell)
     subgraphs = [fragment_to_molgraph(f) for f in fragments]
     offset = 0
-    for subgraph in subgraphs:
+    for slot, fragment, subgraph in zip(slots, fragments, subgraphs, strict=True):
         # obtaining non-standard cutoffs from the maximum UFF radius
         bond_lengths = find_element_cutoffs(*load_uff_lib(subgraph.molecule))
         this_len = len(subgraph.molecule)
@@ -387,7 +396,15 @@ def fragments_to_networkx(
         for i, (s, c, t, m) in enumerate(
             zip(species, coords, tags, mmtypes, strict=True)
         ):
-            full_graph.add_node(i + offset, symbol=s, coord=c, tag=t, ufftype=m)
+            full_graph.add_node(
+                i + offset,
+                symbol=s,
+                coord=c,
+                tag=t,
+                ufftype=m,
+                slot=slot,
+                sbu=fragment.name,
+            )
         for i in range(this_len):
             for j, ij_dist in [
                 (s.index, s.dist) for s in subgraph.get_connected_sites(i)

@@ -130,7 +130,9 @@ def build_framework(
         logger.info(
             f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
         )
-    graph = autografs.utils.fragments_to_networkx(best_alignment, cell=lattice.matrix)
+    graph = autografs.utils.fragments_to_networkx(
+        best_alignment, cell=lattice.matrix, slots=sorted(mappings)
+    )
     framework = Framework(graph, name=topology.name)
     if min_distance is not None:
         contact = framework.min_contact(cutoff=min_distance)

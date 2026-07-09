@@ -308,6 +308,7 @@ flowchart LR
         MC["min_contact(cutoff)"]
         RX["relax(force_field, cutoff)"]
         SK["stack(mode, interlayer)"]
+        PE["supercell / defects /<br/>rotate / flip / functionalize"]
     end
     LT --> CS
     LB --> CS
@@ -319,6 +320,7 @@ flowchart LR
     BD --> FW
     SK --> FW
     RX --> FW
+    PE --> FW
 ```
 
 ## Repository architecture
@@ -333,7 +335,9 @@ src/autografs/
 ├── topology.py      Topology: lattice + slots + orbit grouping
 ├── topology_io.py   versioned JSON (de)serialization, lazy library
 ├── framework.py     Framework: structure views, CIF/ASE/GULP export,
-│                    min_contact, stack, relax
+│                    min_contact, stack, relax, post-build editing API
+├── editing.py       post-build editing: supercells, statistical
+│                    defects, placed-SBU rotation/flip, functionalize
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
@@ -358,6 +362,9 @@ flowchart TD
     builder --> topology_io
     builder --> framework
     builder --> utils
+    framework -. "lazy import" .-> editing
+    editing --> framework
+    editing --> utils
     alignment --> fragment
     alignment --> topology
     alignment --> plane_groups
@@ -462,6 +469,7 @@ mof.lattice            # pymatgen Lattice
 mof.bonds              # [(i, j, bond_order), ...]
 mof.mmtypes            # UFF4MOF atom types, node order
 mof.min_contact()      # closest non-bonded contact (all images)
+mof.slots              # {slot index: SBU name} for every placed unit
 
 mof.write_cif("out.cif", symprec=None)   # symprec symmetrizes if set
 atoms = mof.to_ase()                     # periodic ase.Atoms
@@ -538,6 +546,49 @@ linker.functionalize(index=3, functional_group="amine")  # H -> NH2 etc.
 
 mof = mofgen.build(topology, mappings={edge_type: linker, node_type: "Zn_mof5_octahedral"})
 ```
+
+### Post-build editing
+
+A built `Framework` records which placed SBU every atom belongs to
+(`mof.slots` lists them), so a structure can keep being edited after the
+build. All editing methods return a new `Framework` and leave the input
+untouched, so they chain:
+
+```python
+mof = mofgen.build(topology, mappings)
+
+# supercells: bonds crossing the cell boundary are remapped onto the
+# correct periodic image, so the supercell bond graph is exact
+big = mof.supercell(2)                    # 2x2x2
+big = mof.supercell((2, 2, 1))
+
+# statistical defects: remove whole SBUs, cap the dangling connection
+# points with hydrogen (missing-linker / missing-node defects)
+defective = big.defects(fraction=0.1, sbu="Benzene_linear", seed=42)
+defective = big.defects(slots=[5, 13])    # explicit choice instead
+defective = big.defects(fraction=0.1, cap=None)   # open metal sites
+
+# re-orient one placed unit (see mof.slots for the indices):
+# rotate a 2-connected linker around its bond axis, or mirror a unit
+# through a plane that keeps its connection points fixed
+mof = mof.rotate(slot=1, theta=3.14159 / 2)
+mof = mof.flip(slot=1)
+
+# graft functional groups onto the framework itself - site by site,
+# including sites made inequivalent by a supercell or a defect
+sites = mof.functionalizable_sites()               # terminal H atoms
+tagged = mof.functionalize(sites[0], "amine")      # one site
+tagged = mof.functionalize(sites[:4], "methyl")    # several at once
+```
+
+`functionalize` accepts every group in
+`pymatgen.core.structure.FunctionalGroups` or any pymatgen `Molecule`
+with exactly one `X` dummy marking the attachment point. Defect capping
+and group placement both use tabulated covalent bond lengths, and new
+atoms get UFF4MOF types from their local environment — edited
+frameworks stay valid inputs for `relax()`, `min_contact()` and every
+export. Since defects and grafts distort nothing else, a final
+`relax()` is the recommended clean-up for production structures.
 
 ### Error handling
 
@@ -685,11 +736,13 @@ generators.
 
 ## Roadmap
 
-Some 2.x features are not yet reimplemented in the 3.x line: functionalization
-of *built* frameworks (SBU-level `Fragment.functionalize` exists), supercells
-with statistical defects, and rotation/flipping of *placed* SBUs. See
-`v3_plan.md` and `progress.md` in the repository for the current state and
-direction.
+The 3.x line has reached feature parity with 2.x: post-build
+functionalization, supercells with statistical defects, and
+rotation/flipping of placed SBUs are all available on `Framework` (see
+[Post-build editing](#post-build-editing)). Remaining directions —
+IZA zeolite import, curated high-connectivity SBU packs for the last
+uncovered nets — are tracked in `v3_plan.md` and `progress.md` in the
+repository.
 
 ## Citing
 
