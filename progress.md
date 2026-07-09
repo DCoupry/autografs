@@ -227,6 +227,8 @@ MOF-deconstruction feasibility; SMILES generator not planned).
       ignores dummy placement.
 - [x] scripts/sbu_coverage.py: % of topologies with at least one full
       SBU assignment - the metric library growth should move.
+      **Coverage: 45.7% (1227/2686) -> 90.2% (2424/2686).** Full-
+      library run takes ~14 min warm (63-SBU subset: ~1 min).
 - Empirical note: strict-gate builds (max_rmsd 0.4 + min_distance
   0.9) pass for ~1/3 of random pcu pormake combinations; the gates
   correctly reject the geometric clashes the rest produce.
