@@ -41,11 +41,16 @@ SYMMETRY_TOLERANCE = 0.1
 
 # Default directional-RMSD threshold for slot/SBU compatibility.
 # Deliberately permissive: the sieve lists what is worth attempting,
-# and build(max_rmsd=...) is the strict acceptance gate. 0.25 accepts
-# mildly distorted stars (e.g. slightly pyramidalized trigonal
-# linkers) and rejects genuinely different vertex figures (square vs
-# tetrahedral scores ~0.6).
-COMPATIBILITY_MAX_RMSD = 0.25
+# and build(max_rmsd=...) / build(min_distance=...) are the strict
+# acceptance gates. 0.35 accepts distorted stars (profiling the
+# library showed nearly all real vertex figures fall within 0.35 of
+# an existing SBU, while genuinely different figures - square vs
+# tetrahedral - score ~0.6); raising it from 0.25 moved topology
+# coverage from 90.2% to 96.5%. Alignment places SBUs by their own
+# arm directions, so a permissive sieve costs distortion only where
+# the SBU truly differs from the slot - screen with the build gates
+# and clean up with Framework.relax().
+COMPATIBILITY_MAX_RMSD = 0.35
 
 
 @functools.cache
