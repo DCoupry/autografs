@@ -61,6 +61,9 @@ class Framework:
         ``bond_order``. Source of truth for connectivity.
     name : str
         Human-readable identifier, usually the topology name.
+    energy : float or None
+        Force-field energy per unit cell in kcal/mol; set by
+        ``relax()``, None for as-built frameworks.
     """
 
     def __init__(self, graph: networkx.Graph, name: str = "framework") -> None:
@@ -75,6 +78,7 @@ class Framework:
         """
         self.graph = graph
         self.name = name
+        self.energy: float | None = None
 
     # ------------------------------------------------------------------
     # basic views
@@ -248,6 +252,52 @@ class Framework:
         from ase.visualize import view
 
         view(self.to_ase())
+
+    def relax(
+        self,
+        force_field: str = "UFF4MOF",
+        cutoff: float = 12.5,
+        verbose: bool = False,
+    ) -> Framework:
+        """Relax geometry and cell with LAMMPS (UFF4MOF by default).
+
+        Requires the optional backends: ``pip install "autografs[relax]"``
+        (on Windows the LAMMPS wheel also needs the Microsoft MPI
+        runtime). Runs the lammps-interface minimization protocol
+        (alternating cell box-relax and FIRE) in-process and maps the
+        relaxed geometry back onto this framework's bond graph.
+
+        Parameters
+        ----------
+        force_field : str, optional
+            Force field known to lammps-interface, by default
+            "UFF4MOF"; "UFF" and "Dreiding" also work.
+        cutoff : float, optional
+            Non-bonded cutoff in Angstrom, by default 12.5. Cells too
+            small for it are relaxed as an internal supercell and
+            folded back.
+        verbose : bool, optional
+            Pass the backend output through instead of suppressing it.
+
+        Returns
+        -------
+        Framework
+            A new Framework with identical connectivity, relaxed
+            coordinates and cell, and the force-field energy per unit
+            cell (kcal/mol) in ``.energy``. This framework is
+            unchanged.
+
+        Raises
+        ------
+        RelaxationError
+            If the backends are missing or the structure cannot be
+            relaxed and mapped back.
+        """
+        from autografs.relax import relax_framework
+
+        return relax_framework(
+            self, force_field=force_field, cutoff=cutoff, verbose=verbose
+        )
 
     # ------------------------------------------------------------------
     # layer stacking
