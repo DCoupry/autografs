@@ -40,6 +40,10 @@ Highlights of version 3:
 - **2686 RCSR topologies** ship with the package - it works out of the
   box, no database generation step. This includes the 200 2D layer
   nets (hcb, sql, kgm, ...) that COF chemistry builds on.
+- **930 building blocks**: 63 curated SBUs plus the 867-block PORMAKE
+  library (MIT, Sangwon Lee et al.; curated from ToBaCCo and CoRE MOF),
+  covering 2- to 24-connected nodes - including the high-connectivity
+  metal clusters (7-, 9-, 10-, 12-, 24-c) that nets like rht need.
 - **Geometric matching**: SBUs are matched to topology slots by
   optimally rotating their connection vectors (proper rotations only,
   so chiral building blocks are never silently mirrored). Point-group
@@ -292,3 +296,9 @@ License
 -------
 
 MIT License - see LICENSE.txt for details.
+
+The bundled building-block library ``pormake.xyz`` is converted from
+`PORMAKE <https://github.com/Sangwon91/PORMAKE>`_ (MIT License,
+Copyright (c) 2022 Sangwon; see ``src/autografs/data/PORMAKE_LICENSE.md``).
+If you use those building blocks, please cite
+*S. Lee et al., ACS Appl. Mater. Interfaces 2021, 13, 23647*.

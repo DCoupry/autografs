@@ -482,8 +482,13 @@ class Autografs:
             Custom SBUs with the same name as defaults will override them.
         """
         t0 = time.time()
-        default_path = Path(autografs.data.__path__[0]) / "defaults.xyz"
-        sbu = autografs.utils.xyz_to_sbu(str(default_path))
+        data_dir = Path(autografs.data.__path__[0])
+        sbu = autografs.utils.xyz_to_sbu(str(data_dir / "defaults.xyz"))
+        # the PORMAKE building-block library (MIT, see PORMAKE_LICENSE.md
+        # in the data directory), converted by scripts/import_pormake_bbs.py
+        pormake_path = data_dir / "pormake.xyz"
+        if pormake_path.exists():
+            sbu.update(autografs.utils.xyz_to_sbu(str(pormake_path)))
         logger.info(
             f"\t[x] loaded {len(sbu)} default building units in {time.time() - t0:.0f} seconds."
         )
