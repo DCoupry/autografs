@@ -233,6 +233,24 @@ MOF-deconstruction feasibility; SMILES generator not planned).
   0.9) pass for ~1/3 of random pcu pormake combinations; the gates
   correctly reject the geometric clashes the rest produce.
 
+## Sieve threshold + coverage documentation — 2026-07-08
+Branch `sieve-threshold`. Follows the uncovered-topology profiling.
+- [x] COMPATIBILITY_MAX_RMSD 0.25 -> 0.35: profiling showed 219 of
+      the 262 uncovered topologies were sieve near-misses (nothing in
+      the library misses a real vertex figure by more than 0.6, and
+      184 slot types missed by <= 0.10). Coverage 90.2% -> **96.5%
+      (2593/2686)**. Safe because quality gating happens at build
+      time (max_rmsd/min_distance) and relax() cleans distortion.
+- [x] README "Library coverage" section: the numbers, sieve
+      semantics, and the full lists of the remaining 93 nets — 50
+      shape-missed, 43 hard-blocked on 11/13/14/15/16/17/18/20-c
+      vertices (mostly -x augmented and -d duals) — plus how to
+      supply a custom SBU for them.
+- Profiling artifacts: scratchpad profile_uncovered.py; top missing
+  shape unlocks only 5 topologies, so broad node curation has weak
+  leverage — a small hard-block pack (e.g. 14-c) is the only curated
+  work still worth considering.
+
 ## LAMMPS/UFF4MOF relaxation branch — 2026-07-08
 Branch `lammps-relax`. Damien's decision: LAMMPS route ("we can be
 heavy but the FF relaxation is important"). Closes the second half of
