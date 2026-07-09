@@ -83,6 +83,27 @@ jobs:
           name: codecov-umbrella
           fail_ci_if_error: false
 
+  # end-to-end LAMMPS/UFF4MOF relaxation; separate job because the
+  # LAMMPS wheel is heavy and only this path needs it
+  relax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with relax extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,relax]"
+
+      - name: Run relaxation tests (including slow)
+        run: pytest tests/test_relax.py -m "slow or not slow" -v
+
   build:
     runs-on: ubuntu-latest
     needs: [lint, typecheck, test]

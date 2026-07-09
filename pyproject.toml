@@ -64,6 +64,12 @@ docs = [
     "sphinx-rtd-theme>=2.0.0",
     "myst-parser>=3.0.0",
 ]
+# UFF4MOF relaxation backend (Framework.relax). On Windows the LAMMPS
+# wheel additionally requires the Microsoft MPI runtime.
+relax = [
+    "lammps-interface>=0.2.2",
+    "lammps",
+]
 
 [project.urls]
 Homepage = "https://github.com/DCoupry/autografs"
