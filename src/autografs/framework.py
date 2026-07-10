@@ -247,6 +247,48 @@ class Framework:
         logger.info(f"Wrote {self!r} to {path}")
         return path
 
+    def save(self, path: str | Path) -> Path:
+        """Save the framework to a versioned JSON file.
+
+        Unlike CIF export, this persists everything a Framework is:
+        the bond graph with bond orders, UFF4MOF types, anchor tags,
+        and the per-atom slot/SBU provenance - so a framework saved in
+        one session can be reloaded with ``Framework.load`` and edited
+        (supercell, defects, functionalize, ...) in another.
+
+        Parameters
+        ----------
+        path : str or Path
+            Output path; gzip-compressed and compact when it ends in
+            ``.gz``, pretty-printed JSON otherwise.
+
+        Returns
+        -------
+        Path
+            The written path.
+        """
+        from autografs.framework_io import save_framework
+
+        return save_framework(self, path)
+
+    @classmethod
+    def load(cls, path: str | Path) -> Framework:
+        """Load a framework saved with ``save``.
+
+        Parameters
+        ----------
+        path : str or Path
+            Input path (.json or .json.gz).
+
+        Returns
+        -------
+        Framework
+            The loaded framework, editable exactly like the saved one.
+        """
+        from autografs.framework_io import load_framework
+
+        return load_framework(path)
+
     def to_ase(self) -> ase.Atoms:
         """The framework as an ASE Atoms object (wrapped, periodic)."""
         from ase import Atoms
