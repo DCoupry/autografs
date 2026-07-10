@@ -210,6 +210,41 @@ class TestGoldenBuilds:
         parallel = mofgen.build_all(n_jobs=2, **kwargs)
         assert [fw.formula for fw in serial] == [fw.formula for fw in parallel]
 
+    def test_deduplicate_helper_drops_equivalent_structures(self, mofgen):
+        """Equivalent crystals collapse to their first representative."""
+        from autografs.builder import _deduplicate_frameworks
+
+        topology = mofgen.topologies["pcu"]
+        mappings = {}
+        for key in topology.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            mappings[key] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[conn]
+        mof = mofgen.build(topology, mappings=mappings, refine_cell=False)
+        twin = mofgen.build(topology, mappings=mappings, refine_cell=False)
+        hcb = mofgen.topologies["hcb"]
+        layer_mappings = {}
+        for key in hcb.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            layer_mappings[key] = {3: "Boroxine_triangle", 2: "Benzene_linear"}[conn]
+        layer = mofgen.build(hcb, mappings=layer_mappings, max_rmsd=0.5)
+
+        kept = _deduplicate_frameworks([mof, twin, layer])
+        assert kept == [mof, layer]  # first occurrence wins, order stable
+
+    def test_build_all_deduplicate_flag(self, mofgen):
+        kwargs = dict(
+            topology_subset=["pcu"],
+            max_per_topology=3,
+            seed=42,
+            refine_cell=False,
+        )
+        raw = mofgen.build_all(**kwargs)
+        deduped = mofgen.build_all(deduplicate=True, **kwargs)
+        assert 0 < len(deduped) <= len(raw)
+        # the deduplicated list is a stable subsequence of the raw one
+        it = iter(fw.formula for fw in raw)
+        assert all(any(f == g for g in it) for f in (fw.formula for fw in deduped))
+
     def test_cof1_like_build(self, mofgen):
         """hcb + boroxine + benzene = the COF-1 prototype layer.
 

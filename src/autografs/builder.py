@@ -202,6 +202,36 @@ def _batched(iterable: Iterable, size: int):
         yield chunk
 
 
+def _deduplicate_frameworks(frameworks: list[Framework]) -> list[Framework]:
+    """Keep the first representative of each equivalence class.
+
+    Structures are pre-binned by reduced formula (different formulas
+    can never match), then compared within a bin with pymatgen's
+    StructureMatcher at its default tolerances. First occurrence wins,
+    so the result order is a stable subsequence of the input.
+    """
+    from pymatgen.analysis.structure_matcher import StructureMatcher
+
+    matcher = StructureMatcher()
+    kept: list[Framework] = []
+    kept_by_formula: dict[str, list[int]] = {}
+    for framework in frameworks:
+        formula = framework.structure.composition.reduced_formula
+        indices = kept_by_formula.setdefault(formula, [])
+        if any(
+            matcher.fit(kept[index].structure, framework.structure) for index in indices
+        ):
+            continue
+        indices.append(len(kept))
+        kept.append(framework)
+    if len(kept) < len(frameworks):
+        logger.info(
+            f"\t[x] Removed {len(frameworks) - len(kept)} structurally "
+            "equivalent duplicates."
+        )
+    return kept
+
+
 def _iter_combinations(
     options: list[list[str]],
     max_count: int | None,
@@ -304,6 +334,7 @@ class Autografs:
         max_per_topology: int | None = None,
         seed: int | None = None,
         n_jobs: int = 1,
+        deduplicate: bool = False,
     ) -> list[Framework]:
         """
         Builds all available structures based on the SBU and Topologies libraries
@@ -338,6 +369,13 @@ class Autografs:
             spawn start method re-imports the package (pymatgen
             included) in every worker, so a few seconds of warmup
             precede the first results.
+        deduplicate : bool, optional
+            Drop structurally equivalent duplicates from the result
+            (different SBU combinations can converge to the same
+            crystal). Matching uses pymatgen's StructureMatcher, keeps
+            the first representative of each equivalence class, and is
+            off by default: it is quadratic per composition group, and
+            the raw enumeration is sometimes the point.
 
         Returns
         -------
@@ -415,6 +453,8 @@ class Autografs:
             logger.info(
                 f"\t[x] Rate of error: {1.0 - len(frameworks) / attempted:2.2%}."
             )
+        if deduplicate:
+            frameworks = _deduplicate_frameworks(frameworks)
         return frameworks
 
     def build(
