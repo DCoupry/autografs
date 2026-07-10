@@ -57,13 +57,16 @@ SYMMETRY_TOLERANCE = 0.1
 COMPATIBILITY_MAX_RMSD = 0.35
 
 
-@functools.cache
+@functools.lru_cache(maxsize=65536)
 def _match_rmsd_cached(this_bytes: bytes, that_bytes: bytes, size: int) -> float:
     """Memoized directional match RMSD between two arm-unit sets.
 
     Keyed on rounded coordinate bytes: the same star shapes recur
     across the topology library (every Oh 6-c vertex, every linear
     edge...), so the full matcher runs once per distinct shape pair.
+    Bounded (unlike functools.cache) so a long session sieving many
+    user-supplied SBUs cannot grow it without limit; 65536 entries
+    comfortably hold the shipped library's distinct shape pairs.
     """
     # local import: alignment imports Fragment for construction, so
     # fragment cannot import it at module level
@@ -306,9 +309,16 @@ class Fragment:
         if len(this_units) <= 2:
             return True
         # cheap rotation/permutation-invariant prefilter: grossly
-        # different pairwise-angle multisets cannot match
+        # different pairwise-angle multisets cannot match. The margin
+        # must scale with sqrt(n): a directional RMSD of r over n arms
+        # can concentrate a residual of r*sqrt(n) on a single arm, and
+        # a sorted-signature entry moves by at most the sum of the two
+        # residuals it involves, so 2*r*sqrt(n) bounds the gap a true
+        # match can produce. The previous flat 4*r bound was only safe
+        # for n <= 4 and could over-reject high-connectivity stars.
+        n_arms = len(this_units)
         gap = float(np.abs(self._shape_signature - other._shape_signature).max())
-        if gap > 4.0 * max_rmsd:
+        if gap > 2.0 * max_rmsd * float(np.sqrt(n_arms)):
             return False
         return (
             _match_rmsd_cached(
