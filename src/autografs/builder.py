@@ -58,7 +58,9 @@ logger = logging.getLogger(__name__)
 # Constants for cell parameter optimization
 NELDER_MEAD_XATOL = 0.1  # Absolute tolerance for cell parameter convergence
 NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
-NELDER_MEAD_MAXITER = 100  # Maximum iterations for optimization
+# Iteration budget PER FREE CELL PARAMETER: cubic optimizes a single
+# length, triclinic six parameters - a flat budget starved the latter
+NELDER_MEAD_MAXITER = 100
 
 
 def build_framework(
@@ -113,7 +115,7 @@ def build_framework(
             options={
                 "xatol": NELDER_MEAD_XATOL,
                 "fatol": NELDER_MEAD_FATOL,
-                "maxiter": NELDER_MEAD_MAXITER,
+                "maxiter": NELDER_MEAD_MAXITER * plan.cell_param.n_free,
             },
         )
         best_parameters = result.x
@@ -469,6 +471,14 @@ class Autografs:
         true_mappings: dict[int, Fragment] = {}
         for k, v in mappings.items():
             if not isinstance(k, int):
+                if k not in topology.mappings:
+                    valid = ", ".join(repr(s) for s in topology.mappings)
+                    raise ValueError(
+                        f"{k!r} is not a slot type of topology "
+                        f"{topology.name!r}; its slot types are: {valid}. "
+                        "Use the keys from list_building_units(sieve=...) "
+                        "or plain slot indices."
+                    )
                 fragment = to_fragment(v)
                 for i in topology.mappings[k]:
                     true_mappings[i] = fragment.copy()
@@ -615,14 +625,16 @@ class Autografs:
         sieve: str | None = None,
         verbose: bool = False,
         subset: list[str] | None = None,
-    ) -> dict[Fragment, list[str]]:
+    ) -> dict[Fragment | int, list[str]]:
         """List available SBUs, optionally filtered by topology compatibility.
 
         Parameters
         ----------
         sieve : str or None, optional
             Name of a topology to filter SBUs by compatibility.
-            Returns SBUs grouped by compatible slot types.
+            Returns SBUs grouped by compatible slot types. Without a
+            sieve, all SBUs are returned grouped by connectivity
+            (integer keys = number of connection points).
         verbose : bool, optional
             If True, logs detailed information about available SBUs per slot.
         subset : list[str] or None, optional
@@ -630,11 +642,11 @@ class Autografs:
 
         Returns
         -------
-        dict[Fragment, list[str]]
-            Compatible SBU names keyed by slot type (the topology's
-            representative slot Fragments). Slot types with no
-            compatible SBU are absent from the dict; without a sieve
-            the dict is empty.
+        dict[Fragment | int, list[str]]
+            With a sieve: compatible SBU names keyed by slot type (the
+            topology's representative slot Fragments); slot types with
+            no compatible SBU are absent from the dict. Without a
+            sieve: all SBU names keyed by connectivity (int).
 
         Examples
         --------
@@ -642,30 +654,45 @@ class Autografs:
         >>> sbu_dict = mofgen.list_building_units(sieve="pcu")
         >>> for slot, sbus in sbu_dict.items():
         ...     print(f"Slot {slot}: {len(sbus)} compatible SBUs")
+        >>> by_connectivity = mofgen.list_building_units()
+        >>> print(sorted(by_connectivity))  # [1, 2, 3, 4, ...]
         """
         if subset is not None:
             sbus = [self.sbu[k] for k in subset]
         else:
             sbus = list(self.sbu.values())
-        building_units: dict[Fragment, set[str]] = {}
-        topology = self.topologies[sieve] if sieve is not None else None
-        if topology is not None:
-            if verbose:
-                logger.info(
-                    f"filtering building units for compatibility with {topology} topology..."
-                )
+        if sieve is None:
+            # no topology to sieve against: an empty dict here read as
+            # "no SBUs exist", so group the whole library by
+            # connectivity instead (cheap: dummy counts only)
+            by_connectivity: dict[Fragment | int, set[str]] = {}
             for sbu in sbus:
-                compatible = topology.get_compatible_slots(candidate=sbu)
-                for slot_type, indices in compatible.items():
-                    if indices:
-                        building_units.setdefault(slot_type, set()).add(sbu.name)
-        out_dict = {k: sorted(v) for k, v in building_units.items()}
+                connectivity = len(sbu.atoms.indices_from_symbol("X"))
+                by_connectivity.setdefault(connectivity, set()).add(sbu.name)
+            grouped = {k: sorted(v) for k, v in sorted(by_connectivity.items())}
+            if verbose:
+                for conn, names in grouped.items():
+                    logger.info(f"\t[x] {len(names):>5} SBU with {conn} connections")
+            return grouped
+        building_units: dict[Fragment, set[str]] = {}
+        topology = self.topologies[sieve]
+        if verbose:
+            logger.info(
+                f"filtering building units for compatibility with {topology} topology..."
+            )
+        for sbu in sbus:
+            compatible = topology.get_compatible_slots(candidate=sbu)
+            for slot_type, indices in compatible.items():
+                if indices:
+                    building_units.setdefault(slot_type, set()).add(sbu.name)
+        out_dict: dict[Fragment | int, list[str]] = {
+            k: sorted(v) for k, v in building_units.items()
+        }
         if verbose:
             for k, v in out_dict.items():
                 logger.info(f"\t[x] {len(v):>5} SBU available for slot {k}")
             # report slot types that no SBU can fill
-            if topology is not None:
-                for k in topology.mappings:
-                    if k not in out_dict:
-                        logger.info(f"\t[!] {0:>5} SBU available for slot {k}")
+            for slot_type in topology.mappings:
+                if slot_type not in out_dict:
+                    logger.info(f"\t[!] {0:>5} SBU available for slot {slot_type}")
         return out_dict
