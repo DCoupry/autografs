@@ -134,6 +134,12 @@ def topology_from_string(
     name: str | None = None
     is_2d = False
     plane_group: str | None = None
+    # entries missing a GROUP or CELL line must fail as ValueError so
+    # read_cgd_data counts them as parse errors instead of crashing on
+    # an unbound local
+    lattice: Lattice | None = None
+    groupname: str | None = None
+    spacegroup: SpaceGroup | None = None
     for tokens in lines:
         # keys are matched case-insensitively: a few RCSR entries
         # write 'Name' instead of 'NAME'
@@ -186,6 +192,10 @@ def topology_from_string(
             elements += [dummy_element, dummy_element]
     if name is None:
         raise ValueError("CGD entry without a NAME line.")
+    if lattice is None:
+        raise ValueError(f"CGD entry {name} without a CELL line.")
+    if not xyz:
+        raise ValueError(f"CGD entry {name} without NODE or EDGE lines.")
     coords = np.stack(xyz, axis=0)
     if is_2d:
         # node coordinates need to be padded to 3D
@@ -200,6 +210,8 @@ def topology_from_string(
     else:
         if is_2d:
             raise ValueError(f"2D CELL without a plane group in entry {name}.")
+        if groupname is None or spacegroup is None:
+            raise ValueError(f"CGD entry {name} without a GROUP line.")
         # generate the crystal. Pass the normalized symbol string: it
         # keeps the setting suffix, which both SpaceGroup(...).symbol
         # and the group's int number would silently drop (reverting
@@ -304,8 +316,9 @@ def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, To
     parse_error_counter = 0
     extraction_errors: dict[str, str] = {}
     group_lookup = build_group_lookup()
-    # split the file by topology
-    split_cgd = [t.strip().strip("CRYSTAL") for t in cgd.split("END")]
+    # split the file by topology; removeprefix, NOT strip: strip("CRYSTAL")
+    # would eat any leading/trailing C/R/Y/S/T/A/L characters
+    split_cgd = [t.strip().removeprefix("CRYSTAL") for t in cgd.split("END")]
     for cgd_string in tqdm(split_cgd, desc="Creating topologies"):
         if not cgd_string:
             continue
