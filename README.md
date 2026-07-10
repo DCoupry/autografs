@@ -174,6 +174,9 @@ A guided session covers the whole workflow without writing a script:
   the combinations per topology, and write every resulting CIF to a directory.
 - 2D layer builds offer **COF stacking** (AA / AB / serrated / staggered,
   chosen interlayer spacing) before export.
+- The final menu is an **edit/export loop**: make a supercell, add statistical
+  defects, functionalize sites, rotate a placed linker, interpenetrate
+  (catenate), or relax with UFF4MOF — each edit feeds the next — then export.
 - Export formats: CIF, GULP input (UFF4MOF optimization), or straight into the
   ASE viewer.
 

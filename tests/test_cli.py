@@ -17,6 +17,9 @@ from autografs.cli import (
     connectivity,
     default_output_name,
     main,
+    parse_indices,
+    parse_multipliers,
+    rotatable_slots,
     slot_label,
     slot_labels,
     sorted_slot_types,
@@ -105,6 +108,40 @@ class TestSlotTypeOrdering:
             int(label.split(" - ")[1].split()[0]) for label in labels.values()
         )
         assert n_labeled == len(topology)
+
+
+class TestEditingHelpers:
+    """Pure helpers behind the edit/export menu."""
+
+    def test_parse_multipliers_single_value(self):
+        assert parse_multipliers("2") == (2, 2, 2)
+
+    def test_parse_multipliers_three_values(self):
+        assert parse_multipliers("2, 1 3") == (2, 1, 3)
+
+    def test_parse_multipliers_rejects_garbage(self):
+        with pytest.raises(ValueError):
+            parse_multipliers("2 2")
+        with pytest.raises(ValueError):
+            parse_multipliers("0")
+        with pytest.raises(ValueError):
+            parse_indices("")
+
+    def test_parse_indices(self):
+        assert parse_indices("3, 1 2, 3") == [1, 2, 3]
+
+    def test_rotatable_slots_are_the_linkers(self, mofgen):
+        topology = mofgen.topologies["pcu"]
+        mappings = {}
+        for key in topology.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            mappings[key] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[conn]
+        mof5 = mofgen.build(topology, mappings=mappings, refine_cell=False)
+        linkers = rotatable_slots(mof5)
+        assert linkers
+        assert all(mof5.slots[s] == "Benzene_linear" for s in linkers)
+        node = next(s for s, n in mof5.slots.items() if n == "Zn_mof5_octahedral")
+        assert node not in linkers
 
 
 class TestEntryPoint:
