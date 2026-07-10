@@ -190,6 +190,10 @@ class Topology:
                 scaled_coords,
                 site_properties=slot.atoms.site_properties,
             )
+            # deepcopy carries the cached_property values of the source
+            # slot in __dict__; after anisotropic scaling those cached
+            # arm directions are wrong for the new geometry
+            scaled_slot._clear_geometry_caches()
             scaled_slots.append(scaled_slot)
         self.slots = np.array(scaled_slots, dtype=object)
         self.cell = scaled_cell
