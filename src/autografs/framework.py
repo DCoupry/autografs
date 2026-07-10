@@ -199,6 +199,75 @@ class Framework:
         return float(distances[unbonded].min())
 
     # ------------------------------------------------------------------
+    # porosity descriptors (implementations in autografs.porosity)
+    # ------------------------------------------------------------------
+
+    @property
+    def density(self) -> float:
+        """Crystal density in g/cm3."""
+        return float(self.structure.density)
+
+    def void_fraction(self, probe_radius: float = 0.0, spacing: float = 0.4) -> float:
+        """Fraction of the cell volume where a probe sphere fits.
+
+        Parameters
+        ----------
+        probe_radius : float, optional
+            Probe radius in Angstrom; 0.0 (default) gives the
+            geometric void fraction outside the vdW surfaces. 1.2
+            approximates a helium probe, 1.86 nitrogen.
+        spacing : float, optional
+            Grid resolution in Angstrom; smaller is more accurate and
+            slower.
+
+        Returns
+        -------
+        float
+            Accessible-volume fraction, in [0, 1].
+        """
+        from autografs.porosity import void_fraction
+
+        return void_fraction(self, probe_radius=probe_radius, spacing=spacing)
+
+    def largest_cavity_diameter(self, spacing: float = 0.4) -> float:
+        """Diameter of the largest sphere fitting in the structure (LCD).
+
+        Parameters
+        ----------
+        spacing : float, optional
+            Grid resolution in Angstrom.
+
+        Returns
+        -------
+        float
+            The LCD in Angstrom; 0.0 for a dense structure.
+        """
+        from autografs.porosity import largest_cavity_diameter
+
+        return largest_cavity_diameter(self, spacing=spacing)
+
+    def pore_limiting_diameter(self, spacing: float = 0.4) -> float:
+        """Diameter of the largest sphere that can percolate through (PLD).
+
+        The limiting bottleneck of the pore network: the widest probe
+        that can travel through the periodic structure in any
+        direction. Always <= the largest cavity diameter.
+
+        Parameters
+        ----------
+        spacing : float, optional
+            Grid resolution in Angstrom.
+
+        Returns
+        -------
+        float
+            The PLD in Angstrom; 0.0 when no channel percolates.
+        """
+        from autografs.porosity import pore_limiting_diameter
+
+        return pore_limiting_diameter(self, spacing=spacing)
+
+    # ------------------------------------------------------------------
     # crystallographic exports
     # ------------------------------------------------------------------
 
