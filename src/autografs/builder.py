@@ -71,6 +71,7 @@ def build_framework(
     verbose: bool = False,
     max_rmsd: float | None = None,
     min_distance: float | None = None,
+    verify_net: bool = False,
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -95,6 +96,8 @@ def build_framework(
         Directional shape-mismatch gate; see Autografs.build.
     min_distance : float or None, optional
         Post-build overlap gate; see Autografs.build.
+    verify_net : bool, optional
+        Topological gate; see Autografs.build.
 
     Returns
     -------
@@ -155,6 +158,8 @@ def build_framework(
                 f"min_distance={min_distance:.2f} A, on topology "
                 f"{topology.name}: overlapping or interpenetrating output."
             )
+    if verify_net:
+        framework.verify_net(topology)
     return framework
 
 
@@ -465,6 +470,7 @@ class Autografs:
         verbose: bool = False,
         max_rmsd: float | None = None,
         min_distance: float | None = None,
+        verify_net: bool = False,
     ) -> Framework:
         """
         Generates a framework from a mapping of SBU to topology slots.
@@ -494,6 +500,13 @@ class Autografs:
             included. If any pair is closer, OverlapError is raised
             instead of returning an overlapping or interpenetrating
             structure. None (default) disables the screening.
+        verify_net : bool, optional
+            If True, verify that the output realizes the requested
+            topology by comparing labeled quotient graphs (see
+            Framework.verify_net); NetMismatchError is raised on a
+            mismatch. Catches mis-paired anchors and wrong periodic
+            images, which the geometric gates cannot see. False by
+            default.
 
         Returns
         -------
@@ -510,6 +523,9 @@ class Autografs:
         OverlapError
             If min_distance is set and any non-bonded contact in the
             output is closer than it.
+        NetMismatchError
+            If verify_net is set and the output does not realize the
+            blueprint's net.
         ValueError
             If the mappings leave topology slots unfilled.
         """
@@ -529,6 +545,7 @@ class Autografs:
             verbose=verbose,
             max_rmsd=max_rmsd,
             min_distance=min_distance,
+            verify_net=verify_net,
         )
 
     def _validate_mappings(

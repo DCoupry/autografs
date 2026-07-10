@@ -30,6 +30,12 @@ class OverlapError(AutografsError):
     output)."""
 
 
+class NetMismatchError(AutografsError):
+    """Raised when a built framework's quotient graph does not realize
+    the blueprint topology (mis-paired anchors or a bond through the
+    wrong periodic image)."""
+
+
 class RelaxationError(AutografsError):
     """Raised when the optional LAMMPS relaxation backend is missing
     or a framework cannot be relaxed."""
