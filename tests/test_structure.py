@@ -628,6 +628,23 @@ class TestTopologyScaleSlots:
         new_abc = simple_topology.cell.abc
         np.testing.assert_array_almost_equal(new_abc, (1.0, 1.0, 1.0))
 
+    def test_anisotropic_scale_refreshes_cached_geometry(self):
+        """Regression: deepcopy carried the pre-scaling arm_units cache
+        onto the scaled slots, so compatibility checks after an
+        anisotropic scale answered for the wrong shape."""
+        mol = Molecule(["C", "X", "X"], [[0, 0, 0], [1, 1, 0], [-1, -1, 0]])
+        mol.add_site_property("tags", [0, 1, 2])
+        topo = Topology(
+            name="diag", slots=[Fragment(atoms=mol, name="slot")], cell=np.eye(3) * 10
+        )
+        _ = topo.slots[0].arm_units  # populate the cache, as the sieve does
+        topo.scale_slots(scales=(30.0, 10.0, 10.0))
+        slot = topo.slots[0]
+        dummies = slot.extract_dummies().cart_coords
+        arm = dummies[0] - dummies.mean(axis=0)
+        expected = arm / np.linalg.norm(arm)
+        np.testing.assert_allclose(slot.arm_units[0], expected, atol=1e-9)
+
 
 # =============================================================================
 # Hypothesis Property-Based Tests
