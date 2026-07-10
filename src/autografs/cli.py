@@ -457,20 +457,208 @@ def maybe_stack(framework: Framework, topology: Topology) -> Framework:
     return stacked
 
 
+# ----------------------------------------------------------------------
+# post-build editing (pure helpers first, prompts below)
+# ----------------------------------------------------------------------
+
+
+def parse_multipliers(text: str) -> tuple[int, int, int]:
+    """Parse '2' or '2 2 1' (spaces or commas) into three positive ints."""
+    parts = [p for p in re.split(r"[,\s]+", text.strip()) if p]
+    if len(parts) == 1:
+        parts = parts * 3
+    if len(parts) != 3:
+        raise ValueError("give one multiplier or three (a b c)")
+    a, b, c = (int(p) for p in parts)
+    if min(a, b, c) < 1:
+        raise ValueError("multipliers must be >= 1")
+    return (a, b, c)
+
+
+def parse_indices(text: str) -> list[int]:
+    """Parse comma/space-separated atom indices into a sorted list."""
+    parts = [p for p in re.split(r"[,\s]+", text.strip()) if p]
+    if not parts:
+        raise ValueError("no indices given")
+    return sorted({int(p) for p in parts})
+
+
+def rotatable_slots(framework: Framework) -> list[int]:
+    """Placed SBUs with exactly two connection points (rotatable linkers)."""
+    anchors: dict[int, int] = {}
+    for _, data in framework.graph.nodes(data=True):
+        if data.get("tag", 0) > 0 and "slot" in data:
+            anchors[data["slot"]] = anchors.get(data["slot"], 0) + 1
+    return sorted(slot for slot, count in anchors.items() if count == 2)
+
+
+def _edit_supercell(framework: Framework) -> Framework | None:
+    text = questionary.text("Multipliers (one value or 'a b c'):", default="2").ask()
+    if text is None:
+        return None
+    try:
+        return framework.supercell(parse_multipliers(text))
+    except ValueError as exc:
+        console.print(f"[red]Supercell failed:[/red] {exc}")
+        return None
+
+
+def _edit_defects(framework: Framework) -> Framework | None:
+    names = sorted(set(framework.slots.values()))
+    if not names:
+        console.print("[yellow]No placed SBUs to remove.[/yellow]")
+        return None
+    target = questionary.select("Remove which SBU?", choices=["any"] + names).ask()
+    if target is None:
+        return None
+    fraction_text = questionary.text(
+        "Fraction to remove (0-1):",
+        default="0.1",
+        validate=_validate_positive_float,
+    ).ask()
+    if fraction_text is None:
+        return None
+    seed_text = questionary.text("Random seed (empty = unseeded):").ask()
+    if seed_text is None:
+        return None
+    try:
+        return framework.defects(
+            fraction=float(fraction_text),
+            sbu=None if target == "any" else target,
+            seed=int(seed_text) if seed_text.strip() else None,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Defect generation failed:[/red] {exc}")
+        return None
+
+
+def _edit_functionalize(framework: Framework) -> Framework | None:
+    from pymatgen.core.structure import FunctionalGroups
+
+    symbol = questionary.text("Element to replace:", default="H").ask()
+    if symbol is None:
+        return None
+    sites = framework.functionalizable_sites(symbol=symbol.strip())
+    if not sites:
+        console.print(f"[yellow]No functionalizable {symbol} sites.[/yellow]")
+        return None
+    group = questionary.select(
+        f"Functional group for {len(sites)} candidate sites:",
+        choices=sorted(FunctionalGroups),
+    ).ask()
+    if group is None:
+        return None
+    which = questionary.select(
+        "Which sites?",
+        choices=[f"All {len(sites)} sites", "Enter site indices..."],
+    ).ask()
+    if which is None:
+        return None
+    chosen = sites
+    if which.startswith("Enter"):
+        text = questionary.text(f"Indices (candidates: {sites}):").ask()
+        if text is None:
+            return None
+        try:
+            chosen = parse_indices(text)
+        except ValueError as exc:
+            console.print(f"[red]Bad indices:[/red] {exc}")
+            return None
+    try:
+        return framework.functionalize(chosen, group)
+    except ValueError as exc:
+        console.print(f"[red]Functionalization failed:[/red] {exc}")
+        return None
+
+
+def _edit_rotate(framework: Framework) -> Framework | None:
+    candidates = rotatable_slots(framework)
+    if not candidates:
+        console.print("[yellow]No 2-connected placed SBU to rotate.[/yellow]")
+        return None
+    labels = {f"slot {s} ({framework.slots[s]})": s for s in candidates}
+    pick = questionary.select("Rotate which linker?", choices=list(labels)).ask()
+    if pick is None:
+        return None
+    angle_text = questionary.text(
+        "Angle in degrees:", default="90", validate=_validate_positive_float
+    ).ask()
+    if angle_text is None:
+        return None
+    try:
+        import math
+
+        return framework.rotate(labels[pick], math.radians(float(angle_text)))
+    except ValueError as exc:
+        console.print(f"[red]Rotation failed:[/red] {exc}")
+        return None
+
+
+def _edit_interpenetrate(framework: Framework) -> Framework | None:
+    n_text = questionary.text(
+        "Number of interlocked nets:", default="2", validate=_validate_positive_int
+    ).ask()
+    if n_text is None:
+        return None
+    try:
+        catenated = framework.interpenetrate(n=int(n_text))
+        contact = catenated.min_contact()
+        console.print(f"Closest contact in the catenated result: {contact:.2f} A")
+        return catenated
+    except ValueError as exc:
+        console.print(f"[red]Interpenetration failed:[/red] {exc}")
+        return None
+
+
+def _edit_relax(framework: Framework) -> Framework | None:
+    from autografs.exceptions import RelaxationError
+
+    try:
+        with console.status("Relaxing with UFF4MOF via LAMMPS..."):
+            relaxed = framework.relax()
+        console.print(
+            f"[green]Relaxed[/green] {relaxed!r} "
+            f"(energy {relaxed.energy:.1f} kcal/mol per cell)"
+        )
+        return relaxed
+    except RelaxationError as exc:
+        console.print(f"[red]Relaxation failed:[/red] {exc}")
+        return None
+
+
 def export_step(framework: Framework, default_name: str) -> None:
-    """Export loop: CIF, GULP input, ASE viewer; repeats until Done."""
+    """Edit / export loop: post-build editing and exports until Done.
+
+    Every edit produces a new framework that the loop continues with;
+    a failed edit keeps the current one.
+    """
+    edits = {
+        "Make a supercell": _edit_supercell,
+        "Add statistical defects": _edit_defects,
+        "Functionalize sites": _edit_functionalize,
+        "Rotate a placed linker": _edit_rotate,
+        "Interpenetrate (catenate)": _edit_interpenetrate,
+        "Relax with UFF4MOF": _edit_relax,
+    }
     while True:
         action = questionary.select(
-            "Export:",
+            "Edit or export:",
             choices=[
                 "Write CIF",
                 "Write GULP input (UFF4MOF optimization)",
                 "Open in the ASE viewer",
+                *edits,
                 "Done",
             ],
         ).ask()
         if action is None or action == "Done":
             return
+        if action in edits:
+            edited = edits[action](framework)
+            if edited is not None:
+                framework = edited
+                console.print(f"[green]Now editing[/green] {framework!r}")
+            continue
         if action == "Write CIF":
             path = questionary.text("Output path:", default=default_name).ask()
             if not path:
