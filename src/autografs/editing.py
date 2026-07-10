@@ -504,6 +504,11 @@ def functionalize(
     group_axis /= np.linalg.norm(group_axis)
 
     graph = _copy_graph(framework.graph)
+    # the grafted local environment is congruent for every site with
+    # the same parent element (the group is rigid and the head sits at
+    # the tabulated bond length), so UFF types and intra-group bond
+    # orders are computed once per parent element, not once per site
+    typing_cache: dict[str, tuple[list[str], list[tuple[int, int, float]]]] = {}
     for site in indices:
         if site not in graph:
             raise ValueError(f"No atom with index {site}.")
@@ -521,35 +526,53 @@ def functionalize(
             )
         parent = neighbors[0]
         parent_data = graph.nodes[parent]
+        parent_symbol = parent_data["symbol"]
         parent_coord = np.asarray(parent_data["coord"], dtype=float)
         direction = np.asarray(data["coord"], dtype=float) - parent_coord
         direction /= np.linalg.norm(direction)
         rotation = _rotation_between(group_axis, direction)
-        length = float(
-            get_bond_length(parent_data["symbol"], head_symbol, bond_order=1)
-        )
+        length = float(get_bond_length(parent_symbol, head_symbol, bond_order=1))
         head_position = parent_coord + length * direction
         placed = (
             group_coords[real_indices] - group_coords[head]
         ) @ rotation.T + head_position
 
-        # type the new atoms in their local environment (parent included
-        # so the head's coordination is right); bond orders as at build
-        local = Molecule(
-            [parent_data["symbol"]] + [group[i].specie.symbol for i in real_indices],
-            np.vstack([parent_coord, placed]),
-        )
-        strategy = EconNN(
-            tol=autografs.utils.BOND_TOLERANCE,
-            use_fictive_radius=True,
-            cutoff=autografs.utils.BOND_CUTOFF,
-        )
-        molgraph = MoleculeGraph.from_local_env_strategy(local, strategy=strategy)
-        uff_lib, uff_symbs = autografs.utils.load_uff_lib(local)
-        mmtypes = autografs.utils.find_mmtypes(
-            molgraph=molgraph, uff_lib=uff_lib, uff_symbs=uff_symbs
-        )
-        cutoffs = autografs.utils.find_element_cutoffs(uff_lib, uff_symbs)
+        if parent_symbol not in typing_cache:
+            # type the new atoms in their local environment (parent
+            # included so the head's coordination is right); bond
+            # orders as at build
+            local = Molecule(
+                [parent_symbol] + [group[i].specie.symbol for i in real_indices],
+                np.vstack([parent_coord, placed]),
+            )
+            strategy = EconNN(
+                tol=autografs.utils.BOND_TOLERANCE,
+                use_fictive_radius=True,
+                cutoff=autografs.utils.BOND_CUTOFF,
+            )
+            molgraph = MoleculeGraph.from_local_env_strategy(local, strategy=strategy)
+            uff_lib, uff_symbs = autografs.utils.load_uff_lib(local)
+            mmtypes = autografs.utils.find_mmtypes(
+                molgraph=molgraph, uff_lib=uff_lib, uff_symbs=uff_symbs
+            )
+            cutoffs = autografs.utils.find_element_cutoffs(uff_lib, uff_symbs)
+            local_symbols = [s.specie.symbol for s in local]
+            group_bonds: list[tuple[int, int, float]] = []
+            for i in range(len(local)):
+                for connected in molgraph.get_connected_sites(i):
+                    j, distance = connected.index, connected.dist
+                    if i == 0 or j == 0 or j <= i:
+                        continue  # parent bond handled below; count each once
+                    order = get_bond_order(
+                        local_symbols[i],
+                        local_symbols[j],
+                        distance,
+                        tol=0.2,
+                        default_bl=cutoffs[(local_symbols[i], local_symbols[j])],
+                    )
+                    group_bonds.append((i, j, float(order)))
+            typing_cache[parent_symbol] = (mmtypes, group_bonds)
+        mmtypes, group_bonds = typing_cache[parent_symbol]
 
         graph.remove_node(site)
         base = max(graph) + 1
@@ -565,18 +588,6 @@ def functionalize(
             )
         head_node = base + real_indices.index(head)
         graph.add_edge(parent, head_node, bond_order=1.0)
-        local_symbols = [s.specie.symbol for s in local]
-        for i in range(len(local)):
-            for connected in molgraph.get_connected_sites(i):
-                j, distance = connected.index, connected.dist
-                if i == 0 or j == 0 or j <= i:
-                    continue  # parent bonds handled above; count each once
-                order = get_bond_order(
-                    local_symbols[i],
-                    local_symbols[j],
-                    distance,
-                    tol=0.2,
-                    default_bl=cutoffs[(local_symbols[i], local_symbols[j])],
-                )
-                graph.add_edge(base + i - 1, base + j - 1, bond_order=order)
+        for i, j, order in group_bonds:
+            graph.add_edge(base + i - 1, base + j - 1, bond_order=order)
     return Framework(_relabel(graph), name=framework.name)

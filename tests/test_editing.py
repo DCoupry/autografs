@@ -321,6 +321,32 @@ class TestFunctionalize:
             mof5.structure.composition["H"] + 2 * 4
         )
 
+    def test_multi_site_typing_is_identical_per_site(self, mof5):
+        """Same parent element => congruent grafts => identical UFF
+        typing on every grafted group (this is what the per-parent-
+        element typing cache relies on and preserves)."""
+        sites = mof5.functionalizable_sites()[:4]
+        single = mof5.functionalize(sites[0], "amine")
+        multi = mof5.functionalize(sites, "amine")
+
+        def graft_signature(framework, n_removed):
+            # grafted atoms had the highest pre-relabel ids, so after
+            # relabeling they are exactly the tail beyond the survivors
+            survivors = len(mof5) - n_removed
+            return sorted(
+                (
+                    framework.graph.nodes[n]["symbol"],
+                    framework.graph.nodes[n]["ufftype"],
+                )
+                for n in framework.graph
+                if n >= survivors
+            )
+
+        single_sig = graft_signature(single, 1)
+        multi_sig = graft_signature(multi, len(sites))
+        # the multi-site build is the single-site typing, repeated
+        assert multi_sig == sorted(single_sig * len(sites))
+
     def test_custom_group_molecule(self, mof5):
         from pymatgen.core.structure import Molecule
 
