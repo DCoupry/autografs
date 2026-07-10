@@ -203,6 +203,26 @@ class TestXyzToSbu:
         # the symbol is still available on demand
         assert sbus["Test_Linear"].pointgroup == "D*h"
 
+    def test_nonexistent_path_raises(self, tmp_path):
+        """A missing file raises FileNotFoundError."""
+        missing = tmp_path / "does_not_exist.xyz"
+        with pytest.raises(FileNotFoundError):
+            utils.xyz_to_sbu(str(missing))
+
+    def test_bad_atom_count_raises_value_error(self, tmp_path):
+        """A structure declaring more atoms than it has is malformed."""
+        bad = tmp_path / "bad_count.xyz"
+        bad.write_text("5\nname=Bad\nC 0.0 0.0 0.0\nH 1.0 0.0 0.0\n")
+        with pytest.raises(ValueError, match="Malformed XYZ file"):
+            utils.xyz_to_sbu(str(bad))
+
+    def test_garbage_content_raises_value_error(self, tmp_path):
+        """Non-XYZ garbage content raises a clear ValueError."""
+        garbage = tmp_path / "garbage.xyz"
+        garbage.write_text("this is not\nan xyz file\nat all garbage garbage\n")
+        with pytest.raises(ValueError, match="Malformed XYZ file"):
+            utils.xyz_to_sbu(str(garbage))
+
 
 # =============================================================================
 # load_uff_lib Tests

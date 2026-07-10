@@ -50,6 +50,19 @@ from pymatgen.io.xyz import XYZ
 from autografs.data.uff4mof import UFF4MOF, UFFType
 from autografs.fragment import Fragment
 
+__all__ = [
+    "format_mappings",
+    "get_xyz_names",
+    "xyz_to_sbu",
+    "load_uff_lib",
+    "find_element_cutoffs",
+    "find_mmtypes",
+    "fragment_to_molgraph",
+    "fragments_to_networkx",
+    "view_graph",
+    "networkx_to_gulp",
+]
+
 logger = logging.getLogger(__name__)
 
 # Constants for molecular analysis
@@ -163,16 +176,34 @@ def xyz_to_sbu(path: str) -> dict[str, Fragment]:
     dict[str, Fragment]
         Dictionary mapping SBU names to Fragment objects.
 
+    Raises
+    ------
+    FileNotFoundError
+        If ``path`` does not exist.
+    ValueError
+        If the file is not valid XYZ (bad atom counts, unparseable
+        coordinates, or mismatched structure/comment counts).
+
     Examples
     --------
     >>> sbus = xyz_to_sbu("custom_sbus.xyz")
     >>> print(sbus.keys())  # dict_keys(['SBU_1', 'SBU_2', ...])
     """
-    xyz = XYZ.from_file(path)
+    try:
+        xyz = XYZ.from_file(path)
+    except (IndexError, ValueError) as exc:
+        # pymatgen surfaces malformed content as bare IndexError/ValueError
+        raise ValueError(f"Malformed XYZ file '{path}': {exc}") from exc
     names = get_xyz_names(path)
+    molecules = xyz.all_molecules
+    if len(molecules) != len(names):
+        raise ValueError(
+            f"Malformed XYZ file '{path}': parsed {len(molecules)} "
+            f"structure(s) but found {len(names)} comment line(s)"
+        )
     return {
         name: Fragment(atoms=molecule, name=name)
-        for molecule, name in zip(xyz.all_molecules, names, strict=True)
+        for molecule, name in zip(molecules, names, strict=True)
     }
 
 

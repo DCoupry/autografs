@@ -10,6 +10,11 @@ Classes
 Autografs
     Main framework maker class for generating structures.
 
+Functions
+---------
+build_framework
+    Library-independent build core, usable from worker processes.
+
 Examples
 --------
 >>> from autografs.builder import Autografs
@@ -42,6 +47,11 @@ from autografs.exceptions import AlignmentError, OverlapError
 from autografs.fragment import Fragment
 from autografs.framework import Framework
 from autografs.topology import Topology
+
+__all__ = [
+    "Autografs",
+    "build_framework",
+]
 
 logger = logging.getLogger(__name__)
 

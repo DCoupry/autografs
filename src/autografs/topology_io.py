@@ -31,6 +31,14 @@ from pymatgen.core.structure import Molecule
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 
+__all__ = [
+    "LazyTopologyLibrary",
+    "topology_to_dict",
+    "topology_from_dict",
+    "save_topologies",
+    "load_topologies",
+]
+
 logger = logging.getLogger(__name__)
 
 

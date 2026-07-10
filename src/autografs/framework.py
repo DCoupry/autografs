@@ -38,6 +38,10 @@ if TYPE_CHECKING:
     import ase
     from pymatgen.core.structure import Molecule
 
+__all__ = [
+    "Framework",
+]
+
 logger = logging.getLogger(__name__)
 
 # graphite-like default; typical COF interlayer range is 3.3-3.6 A
