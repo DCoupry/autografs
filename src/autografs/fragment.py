@@ -160,15 +160,12 @@ class Fragment:
             Crystallographic orbit id for topology slots.
         """
         self._symmetry = symmetry
-        self._pointgroup: str | None
-        if symmetry is not None:
-            self._pointgroup = symmetry.sch_symbol
-        else:
-            self._pointgroup = pointgroup
+        self._pointgroup: str | None = (
+            symmetry.sch_symbol if symmetry is not None else pointgroup
+        )
         self.atoms = atoms
         self.name = name
         self.equivalence_class = equivalence_class
-        return None
 
     @property
     def symmetry(self) -> PointGroupAnalyzer:
@@ -348,7 +345,6 @@ class Fragment:
                 indices=sites, theta=theta, axis=axis, anchor=anchor
             )
             self._clear_geometry_caches()
-        return None
 
     def flip(self) -> None:
         """
@@ -405,4 +401,3 @@ class Fragment:
                 idx -= 1
             self.atoms[idx].species = "X"
         self._clear_geometry_caches()
-        return None

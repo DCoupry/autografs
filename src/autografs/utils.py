@@ -33,7 +33,6 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
-import re
 from collections import defaultdict
 from collections.abc import Iterable
 from itertools import count, groupby
@@ -138,20 +137,41 @@ def get_xyz_names(path: str) -> list[str]:
     >>> names = get_xyz_names("sbus.xyz")
     >>> print(names)  # ['Benzene_linear', 'Zn_paddlewheel', ...]
     """
+
+    def is_count(line: str) -> bool:
+        return line.strip().isdigit()
+
     names = []
-    white_space = r"[ \t\r\f\v]"
-    natoms_line = white_space + r"*\d+" + white_space + r"*\n"
     with open(path) as xyz_file:
-        data = re.split(natoms_line, xyz_file.read())
-        comment_lines = [
-            list(y)[0] for x, y in itertools.groupby(data, lambda z: z == "") if not x
-        ]
-        for cl in comment_lines:
-            if "name=" in cl:
-                name = cl.split("name=")[1].split(" ")[0]
-                names.append(name)
-            else:
-                names.append("Unnamed")
+        lines = xyz_file.readlines()
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if not stripped:
+            i += 1
+            continue
+        if not is_count(lines[i]):
+            raise ValueError(
+                f"Malformed XYZ file {path}: expected an atom count on "
+                f"line {i + 1}, got {stripped!r}."
+            )
+        # a count line directly followed by another count line (or EOF)
+        # is a stray with no molecule behind it; pymatgen's XYZ reader
+        # skips those, so the name walk must too to stay in step
+        if i + 1 >= len(lines) or is_count(lines[i + 1]):
+            i += 1
+            continue
+        comment = lines[i + 1]
+        name = next(
+            (
+                token.removeprefix("name=")
+                for token in comment.split()
+                if token.startswith("name=")
+            ),
+            "Unnamed",
+        )
+        names.append(name)
+        i += 2 + int(stripped)
     return names
 
 

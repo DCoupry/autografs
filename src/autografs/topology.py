@@ -77,7 +77,10 @@ class Topology:
             the name given to the topology (RCSR symbol in defaults)
         slots : list[Fragment]
             the list of Fragment objects describing the orientation and
-            connectivity of slots in the topology.
+            connectivity of slots in the topology. The fragments are
+            stored as-is (not copied); when equivalence_classes is
+            given, their ``equivalence_class`` attribute is set in
+            place.
         cell : np.ndarray
             The information on periodicity in matrix form (3x3)
         equivalence_classes : list[int] or None, optional
@@ -122,7 +125,6 @@ class Topology:
         for i, slot_type in enumerate(slots):
             mappings.setdefault(slot_type, []).append(i)
         self.mappings = mappings
-        return None
 
     def __len__(self):
         return len(self.slots)
@@ -191,4 +193,3 @@ class Topology:
             scaled_slots.append(scaled_slot)
         self.slots = np.array(scaled_slots, dtype=object)
         self.cell = scaled_cell
-        return None
