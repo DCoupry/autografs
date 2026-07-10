@@ -34,6 +34,10 @@ from scipy.spatial.distance import pdist
 if TYPE_CHECKING:
     pass
 
+__all__ = [
+    "Fragment",
+]
+
 logger = logging.getLogger(__name__)
 
 # Tolerance for point group symmetry detection on dummy arrangements

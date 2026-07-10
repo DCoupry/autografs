@@ -27,6 +27,10 @@ from pymatgen.core.structure import Molecule
 
 from autografs.fragment import Fragment
 
+__all__ = [
+    "Topology",
+]
+
 logger = logging.getLogger(__name__)
 
 

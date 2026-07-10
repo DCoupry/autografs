@@ -34,6 +34,15 @@ from pymatgen.core.structure import FunctionalGroups, Molecule
 import autografs.utils
 from autografs.framework import Framework
 
+__all__ = [
+    "rotate_sbu",
+    "flip_sbu",
+    "make_supercell",
+    "make_defects",
+    "functionalizable_sites",
+    "functionalize",
+]
+
 logger = logging.getLogger(__name__)
 
 # maximum out-of-plane deviation (Angstrom) for the anchors of a

@@ -47,6 +47,15 @@ from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 
+__all__ = [
+    "kabsch",
+    "match_directions",
+    "CellParametrization",
+    "SlotPlacement",
+    "BuildPlan",
+    "prepare_build",
+]
+
 logger = logging.getLogger(__name__)
 
 # Deterministic rotation multi-start for the direction matcher: the 24
