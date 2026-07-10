@@ -411,11 +411,20 @@ class TestListBuildingUnits:
             assert isinstance(result, dict)
 
     @requires_data
-    def test_without_sieve_returns_empty(self, full_mofgen):
-        """Test that without sieve parameter returns empty dict."""
+    def test_without_sieve_groups_by_connectivity(self, full_mofgen):
+        """Without a sieve, the whole library is returned grouped by
+        connectivity (an empty dict used to read as 'no SBUs exist')."""
         mofgen = full_mofgen
         result = mofgen.list_building_units()
-        assert result == {}
+        assert result
+        assert all(isinstance(k, int) for k in result)
+        listed = {name for names in result.values() for name in names}
+        assert listed == set(mofgen.sbu)
+        # each SBU sits under its own dummy count
+        for conn, names in result.items():
+            for name in names:
+                sbu = mofgen.sbu[name]
+                assert len(sbu.atoms.indices_from_symbol("X")) == conn
 
 
 # =============================================================================
@@ -468,6 +477,31 @@ class TestValidateMappings:
                     with pytest.raises(ValueError, match="Unfilled"):
                         mofgen._validate_mappings(topo, incomplete)
                     break
+
+    @requires_data
+    def test_unknown_slot_type_key_raises_helpful_error(self, full_mofgen):
+        """A Fragment key that matches no slot type must fail with a
+        message naming the valid slot types, not a bare KeyError."""
+        from pymatgen.core.structure import Molecule
+
+        mofgen = full_mofgen
+        topo = mofgen.topologies[mofgen.list_topologies()[0]]
+        stranger = Fragment(
+            atoms=Molecule(
+                ["C", "X", "X", "X", "X", "X"],
+                [
+                    [0, 0, 0],
+                    [1, 0, 0],
+                    [-1, 0, 0],
+                    [0, 1, 0],
+                    [0, -1, 0],
+                    [0, 0, 1],
+                ],
+            ),
+            name="stranger",
+        )
+        with pytest.raises(ValueError, match="not a slot type"):
+            mofgen._validate_mappings(topo, {stranger: "Benzene_linear"})
 
 
 # =============================================================================
