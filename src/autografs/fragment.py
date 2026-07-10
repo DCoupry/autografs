@@ -328,46 +328,59 @@ class Fragment:
     def rotate(self, theta: float) -> None:
         """
         Rotates in place the atoms in the Fragment.atoms object around the
-        axis provided by dummies by an angle of theta radians. This method will
-        fail if the number of dummies is not 2.
+        axis provided by dummies by an angle of theta radians.
 
         Parameters
         ----------
         theta : float
             angle of rotation in radians
-        """
-        dummies = self.extract_dummies()
-        if len(dummies) == 2:
-            sites = list(range(len(self.atoms)))
-            axis = dummies.cart_coords[0] - dummies.cart_coords[1]
-            anchor = dummies.cart_coords.mean(axis=0)
-            self.atoms.rotate_sites(
-                indices=sites, theta=theta, axis=axis, anchor=anchor
-            )
-            self._clear_geometry_caches()
-
-    def flip(self) -> None:
-        """
-        Flips in-place all the atoms in the Fragment.atoms object using a reflection
-        plane symmetry operation from the Fragment.symmetry object.
-
-        The method finds a reflection plane (mirror symmetry) from the point group
-        symmetry operations and applies it to all atomic coordinates.
 
         Raises
         ------
         ValueError
-            If no reflection plane is found in the symmetry operations.
+            If the number of dummies is not 2: only a linear (2-connected)
+            fragment has a well-defined rotation axis through its dummies.
         """
-        # Get symmetry operations from the PointGroupAnalyzer
+        dummies = self.extract_dummies()
+        if len(dummies) != 2:
+            raise ValueError(
+                f"Fragment {self.name!r} has {len(dummies)} connection "
+                "points; rotation around the dummy axis needs exactly 2."
+            )
+        sites = list(range(len(self.atoms)))
+        axis = dummies.cart_coords[0] - dummies.cart_coords[1]
+        anchor = dummies.cart_coords.mean(axis=0)
+        self.atoms.rotate_sites(indices=sites, theta=theta, axis=axis, anchor=anchor)
+        self._clear_geometry_caches()
+
+    def flip(self) -> None:
+        """
+        Flips in-place all the atoms in the Fragment.atoms object using an
+        improper symmetry operation (a mirror, or more generally any
+        determinant -1 operation) of the dummy arrangement.
+
+        The operation maps the dummy set onto itself, so the fragment
+        stays compatible with the same slots while its chirality is
+        inverted. Symmetry operations are expressed about the dummy
+        centroid (PointGroupAnalyzer centers its input), so they are
+        applied in that frame: an off-center fragment is mirrored in
+        place, not thrown across the origin.
+
+        Raises
+        ------
+        ValueError
+            If the dummy arrangement has no improper symmetry operation
+            (a chiral arrangement cannot be flipped onto itself).
+        """
+        center = self.extract_dummies().cart_coords.mean(axis=0)
         for op in self.symmetry.symmops:
             rot_matrix = op.rotation_matrix
-            # A reflection has det = -1 and trace can vary
-            # For a pure reflection: det(R) = -1
+            # det = -1: a reflection or other improper rotation
             if np.isclose(np.linalg.det(rot_matrix), -1.0):
-                # This is a reflection or improper rotation
-                # Apply the symmetry operation to all coordinates
-                new_coords = op.operate_multi(self.atoms.cart_coords)
+                # the symmop lives in the centered frame of the dummy
+                # arrangement; shift, operate, shift back
+                new_coords = op.operate_multi(self.atoms.cart_coords - center)
+                new_coords += center
                 self.atoms = Molecule(
                     self.atoms.species,
                     new_coords,
@@ -386,11 +399,23 @@ class Fragment:
         Parameters
         ----------
         index : int
-            The index of the atom to substitute
+            The index of the atom to substitute. Must not be a dummy
+            atom: dummies are the fragment's connection points.
         functional_group : str
             The name of the substitution
+
+        Raises
+        ------
+        ValueError
+            If index points at a dummy atom.
         """
         dummies_idx = self.atoms.indices_from_symbol("X")
+        if index in dummies_idx:
+            raise ValueError(
+                f"Atom {index} is a connection point (dummy); replacing it "
+                "would change the fragment's connectivity. Pick a terminal "
+                "real atom instead."
+            )
         self.atoms.replace_species({"X": "H"})
         fg = FunctionalGroups[functional_group]
         # the substitution deletes the atom at index, then appends

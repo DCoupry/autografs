@@ -440,6 +440,17 @@ class TestFragmentRotate:
 
         np.testing.assert_array_almost_equal(coords_before, coords_after)
 
+    def test_rotate_wrong_dummy_count_raises(self):
+        """Rotation needs exactly 2 dummies; anything else must raise,
+        not silently no-op."""
+        mol = Molecule(
+            ["C", "X", "X", "X"],
+            [[0, 0, 0], [1, 0, 0], [-0.5, 0.87, 0], [-0.5, -0.87, 0]],
+        )
+        frag = Fragment(atoms=mol, name="trigonal")
+        with pytest.raises(ValueError, match="exactly 2"):
+            frag.rotate(theta=math.pi / 4)
+
 
 class TestFragmentFlip:
     """Test Fragment.flip method."""
@@ -466,6 +477,50 @@ class TestFragmentFlip:
         frag = Fragment(atoms=mol, symmetry=pg, name="chiral")
         with pytest.raises(ValueError, match="No reflection plane"):
             frag.flip()
+
+    def test_flip_off_center_preserves_dummies(self):
+        """The mirror must act about the dummy centroid: an off-center
+        fragment is flipped in place, its connection points fixed as a
+        set (regression: the symmop used to be applied about the
+        origin, throwing the fragment across space)."""
+        coords = [
+            [5.0, 5.0, 5.0],
+            [6.5, 5.0, 5.0],
+            [3.5, 5.0, 5.0],
+            [5.0, 6.0, 5.0],
+            [5.0, 4.0, 5.3],
+        ]
+        mol = Molecule(["C", "X", "X", "H", "H"], coords)
+        frag = Fragment(atoms=mol, name="offcenter")
+        dummies_before = frag.extract_dummies().cart_coords.copy()
+        frag.flip()
+        dummies_after = frag.extract_dummies().cart_coords
+        # the dummy set maps onto itself (possibly permuted)
+        for dummy in dummies_after:
+            nearest = np.linalg.norm(dummies_before - dummy, axis=1).min()
+            assert nearest < 1e-6
+        # and the fragment stayed in place
+        center_before = dummies_before.mean(axis=0)
+        center_after = dummies_after.mean(axis=0)
+        np.testing.assert_allclose(center_before, center_after, atol=1e-6)
+
+
+class TestFragmentFunctionalize:
+    """Test Fragment.functionalize guards."""
+
+    def test_functionalize_dummy_index_raises(self, linear_fragment):
+        """Replacing a connection point must raise, not silently corrupt
+        the dummy bookkeeping."""
+        dummy_idx = linear_fragment.atoms.indices_from_symbol("X")[0]
+        with pytest.raises(ValueError, match="connection point"):
+            linear_fragment.functionalize(dummy_idx, "methyl")
+
+    def test_functionalize_real_atom_works(self, linear_fragment):
+        """A terminal real atom is still substitutable."""
+        h_idx = linear_fragment.atoms.indices_from_symbol("H")[0]
+        n_dummies = len(linear_fragment.atoms.indices_from_symbol("X"))
+        linear_fragment.functionalize(h_idx, "methyl")
+        assert len(linear_fragment.atoms.indices_from_symbol("X")) == n_dummies
 
 
 # =============================================================================
