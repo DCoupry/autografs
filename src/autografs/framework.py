@@ -591,6 +591,9 @@ class Framework:
         mode: str = "AA",
         interlayer: float = DEFAULT_INTERLAYER,
         offset: tuple[float, float] | None = None,
+        sequence: Iterable[tuple[float, float]] | None = None,
+        n_layers: int | None = None,
+        seed: int | None = None,
     ) -> Framework:
         """Stack this 2D layer into a COF crystal.
 
@@ -605,6 +608,10 @@ class Framework:
           = ``2 * interlayer`` and a second, in-plane-offset copy of
           the layer. Default fractional offsets: AB (1/3, 2/3),
           serrated (1/2, 0), staggered (1/2, 1/2).
+        - ``random``: ``n_layers`` copies with seeded uniform in-plane
+          offsets - a turbostratic (stacking-disorder) model.
+        - an explicit ``sequence`` of per-layer offsets for anything
+          else (ABC and beyond).
 
         Layers are van-der-Waals stacked: intra-layer bonds are
         duplicated per layer and no inter-layer bonds are created.
@@ -612,13 +619,25 @@ class Framework:
         Parameters
         ----------
         mode : str, optional
-            One of ``AA``, ``AB``, ``serrated``, ``staggered``.
+            One of ``AA``, ``AB``, ``serrated``, ``staggered``,
+            ``random``. Ignored when ``sequence`` is given.
         interlayer : float, optional
             Spacing between successive layer planes in Angstrom, by
             default 3.35 (graphite-like; typical COFs are 3.3-3.6).
         offset : tuple[float, float] or None, optional
             Fractional in-plane offset of the second layer, overriding
-            the mode default. Not applicable to AA.
+            the mode default. Only for the two-layer modes.
+        sequence : iterable of (float, float), optional
+            One fractional in-plane offset per layer; layer k sits at
+            height ``k * interlayer`` and c becomes
+            ``len(sequence) * interlayer``. Mutually exclusive with
+            ``offset`` and non-default ``mode``.
+        n_layers : int or None, optional
+            Number of layers for ``mode="random"`` (>= 2); not
+            applicable to the preset modes.
+        seed : int or None, optional
+            Seed for the random offsets; a fixed seed reproduces the
+            same disorder model.
 
         Returns
         -------
@@ -636,14 +655,12 @@ class Framework:
         >>> layer = mofgen.build(hcb, mappings)     # c = pad value
         >>> cof = layer.stack(mode="AA", interlayer=3.35)
         >>> cof = layer.stack(mode="serrated", offset=(0.5, 0))
+        >>> abc = layer.stack(sequence=[(0, 0), (1/3, 2/3), (2/3, 1/3)])
+        >>> disordered = layer.stack(mode="random", n_layers=6, seed=42)
         """
-        if mode not in STACKING_OFFSETS:
-            raise ValueError(
-                f"Unknown stacking mode {mode!r}; "
-                f"expected one of {sorted(STACKING_OFFSETS)}."
-            )
         if interlayer <= 0:
             raise ValueError(f"Interlayer spacing must be positive, got {interlayer}.")
+        offsets = self._stacking_offsets(mode, offset, sequence, n_layers, seed)
         cell = self.cell
         pad_c = float(cell[2, 2])
         # the padded-slab convention puts c along z, perpendicular to
@@ -674,43 +691,82 @@ class Framework:
                 f"interlayer spacing is {interlayer:.2f} A; stacked layers "
                 "will interpenetrate. Check the result with min_contact()."
             )
-        if mode == "AA":
-            if offset is not None:
-                raise ValueError("AA stacking takes no in-plane offset.")
-            n_layers = 1
-        else:
-            if offset is None:
-                offset = STACKING_OFFSETS[mode]
-            n_layers = 2
+        count = len(offsets)
         new_cell = cell.copy()
-        new_cell[2] = [0.0, 0.0, n_layers * interlayer]
+        new_cell[2] = [0.0, 0.0, count * interlayer]
         stacked = networkx.Graph(cell=new_cell)
-        stacked.add_nodes_from(self.graph.nodes(data=True))
-        stacked.add_edges_from(self.graph.edges(data=True))
-        if offset is not None:
-            shift = offset[0] * cell[0] + offset[1] * cell[1]
-            shift[2] += interlayer
-            relabel = len(self.graph)
-            # duplicated tags and slot ids stay unique so tag-pair
-            # semantics and placed-SBU identity survive
-            tag_base = max(
-                (data["tag"] for _, data in self.graph.nodes(data=True)), default=0
+        n_atoms = len(self.graph)
+        # duplicated tags and slot ids stay unique per layer so tag-pair
+        # semantics and placed-SBU identity survive
+        tag_base = max(
+            (data["tag"] for _, data in self.graph.nodes(data=True)), default=0
+        )
+        slot_base = (
+            max(
+                (data.get("slot", 0) for _, data in self.graph.nodes(data=True)),
+                default=0,
             )
-            slot_base = (
-                max(
-                    (data.get("slot", 0) for _, data in self.graph.nodes(data=True)),
-                    default=0,
-                )
-                + 1
-            )
+            + 1
+        )
+        for k, (fx, fy) in enumerate(offsets):
+            shift = fx * cell[0] + fy * cell[1]
+            shift[2] += k * interlayer
             for node, data in self.graph.nodes(data=True):
                 copied = dict(data)
                 copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
                 if copied["tag"] > 0:
-                    copied["tag"] += tag_base
+                    copied["tag"] += k * tag_base
                 if "slot" in copied:
-                    copied["slot"] += slot_base
-                stacked.add_node(node + relabel, **copied)
+                    copied["slot"] += k * slot_base
+                stacked.add_node(node + k * n_atoms, **copied)
             for i, j, data in self.graph.edges(data=True):
-                stacked.add_edge(i + relabel, j + relabel, **data)
-        return Framework(stacked, name=f"{self.name}_{mode}")
+                stacked.add_edge(i + k * n_atoms, j + k * n_atoms, **data)
+        label = mode if sequence is None else f"stack{count}"
+        return Framework(stacked, name=f"{self.name}_{label}")
+
+    @staticmethod
+    def _stacking_offsets(
+        mode: str,
+        offset: tuple[float, float] | None,
+        sequence: Iterable[tuple[float, float]] | None,
+        n_layers: int | None,
+        seed: int | None,
+    ) -> list[tuple[float, float]]:
+        """Resolve the stacking arguments into one offset per layer."""
+        if sequence is not None:
+            if mode != "AA" or offset is not None:
+                raise ValueError(
+                    "Give either an explicit sequence or mode/offset, not both."
+                )
+            if n_layers is not None:
+                raise ValueError("sequence fixes the layer count; drop n_layers.")
+            offsets = [(float(fx), float(fy)) for fx, fy in sequence]
+            if not offsets:
+                raise ValueError("sequence needs at least one layer offset.")
+            return offsets
+        if mode == "random":
+            if n_layers is None or n_layers < 2:
+                raise ValueError("random stacking needs n_layers >= 2.")
+            if offset is not None:
+                raise ValueError("random stacking draws its own offsets.")
+            rng = np.random.default_rng(seed)
+            return [(0.0, 0.0)] + [
+                (float(fx), float(fy)) for fx, fy in rng.random((n_layers - 1, 2))
+            ]
+        if mode not in STACKING_OFFSETS:
+            raise ValueError(
+                f"Unknown stacking mode {mode!r}; expected one of "
+                f"{sorted(STACKING_OFFSETS)} or 'random'."
+            )
+        if n_layers is not None:
+            raise ValueError(
+                "n_layers only applies to mode='random'; repeat preset "
+                "stackings by passing an explicit sequence."
+            )
+        if mode == "AA":
+            if offset is not None:
+                raise ValueError("AA stacking takes no in-plane offset.")
+            return [(0.0, 0.0)]
+        second = offset if offset is not None else STACKING_OFFSETS[mode]
+        assert second is not None  # every non-AA preset has a default
+        return [(0.0, 0.0), (float(second[0]), float(second[1]))]

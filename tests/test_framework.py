@@ -261,11 +261,53 @@ class TestStacking:
 
     def test_bad_arguments_rejected(self, layer):
         with pytest.raises(ValueError, match="Unknown stacking mode"):
-            layer.stack(mode="ABC")
+            layer.stack(mode="ABAB")
         with pytest.raises(ValueError, match="offset"):
             layer.stack(mode="AA", offset=(0.5, 0.5))
         with pytest.raises(ValueError, match="positive"):
             layer.stack(interlayer=-1.0)
+        with pytest.raises(ValueError, match="not both"):
+            layer.stack(mode="AB", sequence=[(0, 0), (0.5, 0.5)])
+        with pytest.raises(ValueError, match="drop n_layers"):
+            layer.stack(sequence=[(0, 0), (0.5, 0.5)], n_layers=2)
+        with pytest.raises(ValueError, match="at least one"):
+            layer.stack(sequence=[])
+        with pytest.raises(ValueError, match="n_layers"):
+            layer.stack(mode="random")
+        with pytest.raises(ValueError, match="n_layers only applies"):
+            layer.stack(mode="AB", n_layers=4)
+
+    def test_explicit_sequence_abc(self, layer):
+        """Three layers at the given offsets, c = 3 * interlayer."""
+        offsets = [(0.0, 0.0), (1 / 3, 2 / 3), (2 / 3, 1 / 3)]
+        cof = layer.stack(sequence=offsets, interlayer=3.0)
+        n = len(layer)
+        assert len(cof) == 3 * n
+        assert cof.graph.number_of_edges() == 3 * layer.graph.number_of_edges()
+        np.testing.assert_allclose(cof.cell[2], [0.0, 0.0, 9.0])
+        for k, (fx, fy) in enumerate(offsets):
+            shift = fx * layer.cell[0] + fy * layer.cell[1] + [0, 0, 3.0 * k]
+            for i in range(n):
+                np.testing.assert_allclose(
+                    cof.graph.nodes[i + k * n]["coord"],
+                    layer.graph.nodes[i]["coord"] + shift,
+                )
+        # tags stay unique across all three layers
+        tags = [d["tag"] for _, d in cof.graph.nodes(data=True) if d["tag"] > 0]
+        assert len(tags) == len(set(tags))
+
+    def test_random_stacking_is_seeded(self, layer):
+        first = layer.stack(mode="random", n_layers=5, seed=42)
+        again = layer.stack(mode="random", n_layers=5, seed=42)
+        other = layer.stack(mode="random", n_layers=5, seed=7)
+        assert len(first) == 5 * len(layer)
+        np.testing.assert_allclose(first.cart_coords, again.cart_coords)
+        assert not np.allclose(first.cart_coords, other.cart_coords)
+        np.testing.assert_allclose(first.cell[2], [0.0, 0.0, 5 * 3.35])
+        # no inter-layer bonds in the disorder model either
+        n = len(layer)
+        for i, j in first.graph.edges():
+            assert i // n == j // n
 
     def test_thick_layer_warns_about_interpenetration(self, layer, caplog):
         """A layer thicker than the interlayer spacing overlaps its own
