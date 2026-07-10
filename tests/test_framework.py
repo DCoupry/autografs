@@ -267,6 +267,34 @@ class TestStacking:
         with pytest.raises(ValueError, match="positive"):
             layer.stack(interlayer=-1.0)
 
+    def test_thick_layer_warns_about_interpenetration(self, layer, caplog):
+        """A layer thicker than the interlayer spacing overlaps its own
+        stacked images; that must be said out loud, not left silent."""
+        import logging
+
+        import networkx
+
+        from autografs.framework import Framework
+
+        thick_graph = networkx.Graph(cell=np.diag([5.0, 5.0, 10.0]))
+        for i, z in enumerate([0.0, 2.0, 4.0]):
+            thick_graph.add_node(
+                i, symbol="C", coord=np.array([1.5 * i, 0.0, z]), tag=0, ufftype="C_R"
+            )
+        thick_graph.add_edge(0, 1, bond_order=1.0)
+        thick_graph.add_edge(1, 2, bond_order=1.0)
+        thick = Framework(thick_graph, name="puckered")
+        with caplog.at_level(logging.WARNING, logger="autografs.framework"):
+            thick.stack(mode="AA", interlayer=3.35)
+        assert any("interpenetrate" in rec.message for rec in caplog.records)
+
+    def test_flat_layer_does_not_warn(self, layer, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="autografs.framework"):
+            layer.stack(mode="AA", interlayer=3.35)
+        assert not any("interpenetrate" in rec.message for rec in caplog.records)
+
     def test_non_layered_input_rejected(self, mof5):
         from autografs.exceptions import StackingError
 
