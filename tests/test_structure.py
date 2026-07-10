@@ -318,6 +318,40 @@ class TestFragmentSymmetryCompatibility:
         assert frag_tri.has_compatible_symmetry(frag_t)
         assert not frag_tri.has_compatible_symmetry(frag_t, max_rmsd=0.1)
 
+    def test_prefilter_never_overrules_matcher_at_high_connectivity(self):
+        """The signature prefilter is an optimization only: whenever the
+        full matcher accepts a pair, the prefilter must too. RMSD
+        averages over n arms while the signature gap does not, so the
+        margin has to scale with sqrt(n) - a flat margin over-rejected
+        high-connectivity stars with one badly fitting arm."""
+        from autografs.alignment import match_directions
+        from autografs.fragment import COMPATIBILITY_MAX_RMSD
+
+        rng = np.random.default_rng(42)
+        accepted = 0
+        for n in (17, 20, 24):
+            for _ in range(10):
+                base = rng.normal(size=(n, 3))
+                base /= np.linalg.norm(base, axis=1, keepdims=True)
+                other = base.copy()
+                # push one arm hard: residual concentrated on a single
+                # arm is the worst case for a flat prefilter margin
+                k = int(rng.integers(n))
+                other[k] = other[k] + rng.normal(scale=0.8, size=3)
+                other[k] /= np.linalg.norm(other[k])
+                frag_a = self._fragment_from_dummy_coords(
+                    (base * 1.5).tolist(), "star_a"
+                )
+                frag_b = self._fragment_from_dummy_coords(
+                    (other * 1.5).tolist(), "star_b"
+                )
+                _, _, rmsd = match_directions(frag_a.arm_units, frag_b.arm_units)
+                if rmsd <= COMPATIBILITY_MAX_RMSD:
+                    accepted += 1
+                    assert frag_a.has_compatible_symmetry(frag_b)
+        # the sample must actually exercise matcher-accepted pairs
+        assert accepted >= 10
+
 
 class TestFragmentLazySymmetry:
     """Fragment can be built without a precomputed PointGroupAnalyzer."""
