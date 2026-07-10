@@ -534,6 +534,47 @@ class Framework:
 
         return flip_sbu(self, slot=slot)
 
+    def interpenetrate(
+        self,
+        n: int = 2,
+        offset: tuple[float, float, float] | str = "auto",
+    ) -> Framework:
+        """Generate an n-fold interpenetrated (catenated) framework.
+
+        Places n displaced copies of this framework in the same cell -
+        the classic catenation of open nets (IRMOF-9/-11, dia-c,
+        pcu-c). Copy k is displaced by ``k * offset`` (fractional);
+        copies are van-der-Waals interlocked, never bonded, and their
+        tags and slot ids stay unique so every placed SBU remains
+        addressable.
+
+        Parameters
+        ----------
+        n : int, optional
+            Number of interpenetrated nets, by default 2.
+        offset : tuple[float, float, float] or "auto", optional
+            Fractional displacement between successive nets. "auto"
+            (default) tries the high-symmetry candidates (body center
+            first, then face and edge centers) and keeps the one whose
+            closest inter-net contact is largest.
+
+        Returns
+        -------
+        Framework
+            A new Framework; this one is unchanged. Check the result
+            with ``min_contact()`` - a dense parent framework cannot
+            host another net without clashes.
+
+        Examples
+        --------
+        >>> catenated = mof.interpenetrate()                  # auto offset
+        >>> catenated = mof.interpenetrate(2, (0.5, 0.5, 0.5))
+        >>> catenated.min_contact()
+        """
+        from autografs.editing import interpenetrate
+
+        return interpenetrate(self, n=n, offset=offset)
+
     def supercell(self, scale: int | tuple[int, int, int]) -> Framework:
         """Replicate the framework into a supercell.
 

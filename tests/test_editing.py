@@ -154,6 +154,63 @@ class TestFlip:
             mof5.flip(node_slot(mof5))
 
 
+class TestInterpenetrate:
+    def test_explicit_offset_geometry(self, mof5):
+        catenated = mof5.interpenetrate(2, (0.5, 0.5, 0.5))
+        n = len(mof5)
+        assert len(catenated) == 2 * n
+        assert catenated.graph.number_of_edges() == 2 * mof5.graph.number_of_edges()
+        assert len(catenated.slots) == 2 * len(mof5.slots)
+        np.testing.assert_allclose(catenated.cell, mof5.cell)
+        shift = np.array([0.5, 0.5, 0.5]) @ mof5.cell
+        for i in range(n):
+            np.testing.assert_allclose(
+                catenated.graph.nodes[i + n]["coord"],
+                mof5.graph.nodes[i]["coord"] + shift,
+            )
+
+    def test_no_internet_bonds(self, mof5):
+        catenated = mof5.interpenetrate(2, (0.5, 0.5, 0.5))
+        n = len(mof5)
+        for i, j in catenated.graph.edges():
+            assert i // n == j // n
+
+    def test_tags_stay_pairwise_and_disjoint_between_nets(self, mof5):
+        from collections import Counter
+
+        catenated = mof5.interpenetrate(2, (0.5, 0.5, 0.5))
+        counts = Counter(
+            d["tag"] for _, d in catenated.graph.nodes(data=True) if d["tag"] > 0
+        )
+        # every anchor pair stays a pair, and the second net's tags do
+        # not collide with the first's
+        assert counts and set(counts.values()) == {2}
+        original = Counter(
+            d["tag"] for _, d in mof5.graph.nodes(data=True) if d["tag"] > 0
+        )
+        assert len(counts) == 2 * len(original)
+
+    def test_auto_picks_a_roomy_offset(self, mof5):
+        """MOF-5's pore center hosts a second net with real clearance."""
+        catenated = mof5.interpenetrate()
+        assert len(catenated) == 2 * len(mof5)
+        # the interlocked nets must not clash
+        assert catenated.min_contact() > 1.0
+
+    def test_threefold(self, mof5):
+        catenated = mof5.interpenetrate(3, (1 / 3, 1 / 3, 1 / 3))
+        assert len(catenated) == 3 * len(mof5)
+        assert len(set(catenated.slots)) == 3 * len(mof5.slots)
+
+    def test_bad_arguments_rejected(self, mof5):
+        with pytest.raises(ValueError, match="n >= 2"):
+            mof5.interpenetrate(1)
+        with pytest.raises(ValueError, match="fractional 3-vector"):
+            mof5.interpenetrate(2, "diagonal")
+        with pytest.raises(ValueError, match="three fractional"):
+            mof5.interpenetrate(2, (0.5, 0.5))
+
+
 class TestSupercell:
     def test_counts_and_cell(self, mof5):
         supercell = mof5.supercell(2)

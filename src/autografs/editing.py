@@ -245,6 +245,107 @@ def flip_sbu(framework: Framework, slot: int) -> Framework:
 
 
 # ----------------------------------------------------------------------
+# interpenetration / catenation
+# ----------------------------------------------------------------------
+
+# high-symmetry displacement candidates tried by offset="auto": body
+# center first (the classic dia-c / pcu-c catenation vector), then
+# face and edge centers
+_CATENATION_CANDIDATES: tuple[tuple[float, float, float], ...] = (
+    (0.5, 0.5, 0.5),
+    (0.5, 0.5, 0.0),
+    (0.5, 0.0, 0.5),
+    (0.0, 0.5, 0.5),
+    (0.5, 0.0, 0.0),
+    (0.0, 0.5, 0.0),
+    (0.0, 0.0, 0.5),
+)
+
+
+def _min_internet_contact(framework: Framework, n_atoms: int, cutoff: float) -> float:
+    """Smallest distance between atoms of different interpenetrated nets.
+
+    Copies are blocks of n_atoms consecutive node ids, so the net of
+    an atom is its id // n_atoms.
+    """
+    import math
+
+    centers, points, _, distances = framework.structure.get_neighbor_list(r=cutoff)
+    if len(distances) == 0:
+        return math.inf
+    different_net = (centers // n_atoms) != (points // n_atoms)
+    if not different_net.any():
+        return math.inf
+    return float(distances[different_net].min())
+
+
+def interpenetrate(
+    framework: Framework,
+    n: int = 2,
+    offset: tuple[float, float, float] | str = "auto",
+) -> Framework:
+    """Generate an n-fold interpenetrated (catenated) framework.
+
+    See Framework.interpenetrate for the user-facing documentation.
+    """
+    if n < 2:
+        raise ValueError(f"Interpenetration needs n >= 2 nets, got {n}.")
+    if isinstance(offset, str):
+        if offset != "auto":
+            raise ValueError(
+                f"offset must be a fractional 3-vector or 'auto', got {offset!r}."
+            )
+        candidates = _CATENATION_CANDIDATES
+    else:
+        candidates = (tuple(float(x) for x in offset),)  # type: ignore[assignment]
+        if len(candidates[0]) != 3:
+            raise ValueError(
+                f"offset must have three fractional components, got {offset!r}."
+            )
+    n_atoms = len(framework.graph)
+    best: tuple[float, Framework] | None = None
+    for candidate in candidates:
+        catenated = _displaced_copies(framework, n, candidate)
+        contact = _min_internet_contact(catenated, n_atoms, cutoff=6.0)
+        if best is None or contact > best[0]:
+            best = (contact, catenated)
+    assert best is not None  # candidates is never empty
+    contact, catenated = best
+    logger.info(
+        f"Interpenetrated {framework.name!r} {n}-fold; closest inter-net "
+        f"contact {contact:.2f} A."
+    )
+    return catenated
+
+
+def _displaced_copies(
+    framework: Framework, n: int, offset: tuple[float, float, float]
+) -> Framework:
+    """n copies of the framework, copy k displaced by k * offset."""
+    cell = framework.cell
+    graph = framework.graph
+    n_atoms = len(graph)
+    combined = networkx.Graph(cell=cell.copy())
+    tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
+    slot_base = (
+        max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1
+    )
+    for k in range(n):
+        shift = (k * np.asarray(offset, dtype=float)) @ cell
+        for node, data in graph.nodes(data=True):
+            copied = dict(data)
+            copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
+            if copied["tag"] > 0:
+                copied["tag"] += k * tag_base
+            if "slot" in copied:
+                copied["slot"] += k * slot_base
+            combined.add_node(node + k * n_atoms, **copied)
+        for i, j, data in graph.edges(data=True):
+            combined.add_edge(i + k * n_atoms, j + k * n_atoms, **dict(data))
+    return Framework(combined, name=f"{framework.name}_cat{n}")
+
+
+# ----------------------------------------------------------------------
 # supercells
 # ----------------------------------------------------------------------
 
