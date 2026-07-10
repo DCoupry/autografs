@@ -163,6 +163,12 @@ class Framework:
         in the graph are exempt (at every image - a bonded pair is
         never reported, even through a boundary).
 
+        Blind spot: because the exemption ignores the image, a bonded
+        pair whose atoms *also* approach each other through a different
+        periodic image (possible in a strongly collapsed cell) is not
+        reported either. Contacts between non-bonded pairs, including
+        self-image contacts, are always seen.
+
         Parameters
         ----------
         cutoff : float, optional
@@ -616,6 +622,15 @@ class Framework:
             raise StackingError(
                 f"Framework {self.name!r} spans {thickness:.2f} A along c "
                 f"(cell {pad_c:.2f} A); not a 2D layer."
+            )
+        # a puckered layer thicker than the spacing overlaps its own
+        # stacked images; legal (interdigitated stackings exist) but
+        # rarely intended, so say so instead of failing silently later
+        if thickness > interlayer:
+            logger.warning(
+                f"Layer {self.name!r} is {thickness:.2f} A thick but the "
+                f"interlayer spacing is {interlayer:.2f} A; stacked layers "
+                "will interpenetrate. Check the result with min_contact()."
             )
         if mode == "AA":
             if offset is not None:
