@@ -90,6 +90,10 @@ class TestFormatIndices:
         result = utils.format_indices([1, 2])
         assert result == "1-2"
 
+    def test_run_of_three_or_more(self):
+        """The run must end at the LAST index, not the second."""
+        assert utils.format_indices([0, 1, 2, 3]) == "0-3"
+
     def test_empty_iterable(self):
         """Test with empty iterable."""
         # This will raise an IndexError - documenting current behavior
@@ -116,8 +120,17 @@ class TestFormatMappings:
         """Test that consecutive indices are grouped."""
         mappings = {0: "SBU_A", 1: "SBU_A", 2: "SBU_A"}
         result = utils.format_mappings(mappings)
-        assert "SBU_A" in result
-        # Should group 0, 1, 2
+        assert result == "SBU_A : 0-2"
+
+    def test_long_run_shows_last_index(self):
+        """Regression: {0..3} used to render as '0-1'."""
+        mappings = {0: "A", 1: "A", 2: "A", 3: "A"}
+        assert utils.format_mappings(mappings) == "A : 0-3"
+
+    def test_run_and_singleton(self):
+        """A run followed by a gap keeps both parts."""
+        mappings = {0: "A", 1: "A", 2: "A", 5: "A"}
+        assert utils.format_mappings(mappings) == "A : 0-2,5"
 
     def test_multiple_sbus(self):
         """Test multiple SBUs in mapping."""
@@ -416,6 +429,43 @@ class TestNetworkxToGulp:
 
         result = utils.networkx_to_gulp(G, name="test", write_to_file=False)
         assert "library uff4mof" in result
+
+    def test_atom_lines_follow_sorted_node_ids(self):
+        """connect records address atoms by node id + 1, so the atom
+        lines must follow sorted node ids even when the graph was built
+        in another insertion order."""
+        import networkx
+
+        G = networkx.Graph(cell=np.eye(3) * 10)
+        # inserted out of id order on purpose
+        G.add_node(1, symbol="H", coord=[9.0, 0.0, 0.0], tag=0, ufftype="H_")
+        G.add_node(0, symbol="C", coord=[1.0, 0.0, 0.0], tag=0, ufftype="C_R")
+        G.add_edge(0, 1, bond_order=1.0)
+
+        result = utils.networkx_to_gulp(G, name="test", write_to_file=False)
+        core_lines = [ln for ln in result.splitlines() if " core " in ln]
+        assert "1.00000000" in core_lines[0]  # node 0 first
+        assert "9.00000000" in core_lines[1]  # node 1 second
+
+    def test_species_labels_are_deterministic(self):
+        """Labels number the (symbol, ufftype) pairs in sorted order,
+        not set iteration order, so output is reproducible."""
+        import networkx
+
+        G = networkx.Graph(cell=np.eye(3) * 10)
+        G.add_node(0, symbol="C", coord=[0, 0, 0], tag=0, ufftype="C_R")
+        G.add_node(1, symbol="C", coord=[1, 0, 0], tag=0, ufftype="C_3")
+        G.add_node(2, symbol="O", coord=[2, 0, 0], tag=0, ufftype="O_2")
+
+        result = utils.networkx_to_gulp(G, name="test", write_to_file=False)
+        lines = result.splitlines()
+        mapping = {}
+        for line in lines[lines.index("species") + 1 :]:
+            if not line.strip():
+                break
+            label, ufftype = line.split()
+            mapping[ufftype] = label
+        assert mapping == {"C_3": "C0", "C_R": "C1", "O_2": "O2"}
 
     def test_bond_order_single(self):
         """Test single bond formatting."""

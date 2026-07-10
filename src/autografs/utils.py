@@ -70,11 +70,11 @@ BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
 
 
 def format_indices(iterable: Iterable[int]) -> str:
+    """Format a consecutive run of indices as "first-last" (or "only")."""
     lst = list(iterable)
     if len(lst) > 1:
-        return f"{lst[0]}-{lst[1]}"
-    else:
-        return f"{lst[0]}"
+        return f"{lst[0]}-{lst[-1]}"
+    return f"{lst[0]}"
 
 
 def _format_runs(indices: list[int]) -> str:
@@ -294,7 +294,10 @@ def find_element_cutoffs(
         prefix = entry.symbol[:2]
         max_radius[prefix] = max(max_radius.get(prefix, 0.0), entry.radius)
     cuts = {}
-    for e0, e1 in itertools.product(uff_symbs, uff_symbs):
+    # element pairs, not atom pairs: uff_symbs is per-atom, and pairing
+    # atoms would make this quadratic in atom count for identical output
+    elements = sorted(set(uff_symbs))
+    for e0, e1 in itertools.product(elements, elements):
         cuts[(e0.strip("_"), e1.strip("_"))] = max_radius[e0] + max_radius[e1]
     return cuts
 
@@ -504,7 +507,10 @@ def view_graph(graph: networkx.Graph) -> None:
     from ase.visualize import view
 
     at = Atoms(cell=graph.graph["cell"], pbc=(True, True, True))
-    for _, d in graph.nodes(data=True):
+    # sorted node id order, like every Framework view: insertion order
+    # is not guaranteed to match node ids after graph editing
+    for node in sorted(graph):
+        d = graph.nodes[node]
         at.append(Atom(d["symbol"], d["coord"]))
     view(at)
 
@@ -549,12 +555,15 @@ def networkx_to_gulp(
     lines.append(f"{cell[2][0]:>.3f} {cell[2][1]:>.3f} {cell[2][2]:>.3f}")
     lines.append("cartesian")
 
-    # Build atom type mapping
-    mmset = list(set([(d["symbol"], d["ufftype"]) for _, d in graph.nodes(data=True)]))
+    # Build atom type mapping; sorted so the species labels (C0, C1...)
+    # are reproducible run to run instead of following set hash order
+    mmset = sorted({(d["symbol"], d["ufftype"]) for _, d in graph.nodes(data=True)})
     mmdict = {u: f"{s}{i}" for i, (s, u) in enumerate(mmset)}
 
-    # Atomic coordinates
-    for _, d in graph.nodes(data=True):
+    # Atomic coordinates, in sorted node id order: the connect records
+    # below refer to atoms by node id + 1, so line i must be node i
+    for node in sorted(graph):
+        d = graph.nodes[node]
         x, y, z = d["coord"]
         s = mmdict[d["ufftype"]]
         lines.append(f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}")
