@@ -477,6 +477,16 @@ mof.view()                               # ASE viewer
 gulp_input = mof.to_gulp()               # UFF4MOF optimization input for GULP
 ```
 
+CIF export is for downstream tools; it loses the bond graph and the
+per-atom provenance that post-build editing needs. To keep a framework
+editable across sessions, save it to the versioned JSON format instead:
+
+```python
+mof.save("mof5.json.gz")                 # bond graph, tags, provenance, energy
+mof = Framework.load("mof5.json.gz")     # editable exactly like the original
+defective = mof.supercell(2).defects(fraction=0.1, seed=42)
+```
+
 ### UFF4MOF relaxation
 
 `relax` optimizes the geometry and cell with the UFF4MOF force field through

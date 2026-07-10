@@ -55,6 +55,7 @@ __all__ = [
     "alignment",
     "fragment",
     "framework",
+    "framework_io",
     "topology",
     "topology_io",
     "builder",
@@ -72,6 +73,10 @@ __all__ = [
 
 import logging
 
+# bind every module listed in __all__ as a package attribute; relax's
+# optional LAMMPS backends are imported lazily inside its functions,
+# so importing the module itself is cheap and always safe
+from autografs import framework_io, relax
 from autografs.builder import Autografs
 from autografs.exceptions import (
     AlignmentError,
