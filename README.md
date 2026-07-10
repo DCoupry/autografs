@@ -471,6 +471,11 @@ mof.mmtypes            # UFF4MOF atom types, node order
 mof.min_contact()      # closest non-bonded contact (all images)
 mof.slots              # {slot index: SBU name} for every placed unit
 
+mof.density                     # g/cm3 (MOF-5: ~0.6)
+mof.void_fraction()             # geometric; probe_radius=1.2 for a He probe
+mof.largest_cavity_diameter()   # LCD, Angstrom (MOF-5: ~15)
+mof.pore_limiting_diameter()    # PLD, Angstrom (MOF-5: ~8) - the channel bottleneck
+
 mof.write_cif("out.cif", symprec=None)   # symprec symmetrizes if set
 atoms = mof.to_ase()                     # periodic ase.Atoms
 mof.view()                               # ASE viewer
