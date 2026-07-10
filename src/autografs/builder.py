@@ -30,8 +30,9 @@ import itertools
 import logging
 import math
 import time
+from collections import deque
 from collections.abc import Iterable, Mapping
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 
 import dill
@@ -157,11 +158,19 @@ def build_framework(
     return framework
 
 
-def _build_task(
-    args: tuple[Topology, dict[int, Fragment], bool, float | None, float | None],
+# combinations are shipped to workers in chunks of this many: the
+# topology is pickled once per chunk instead of once per combination
+BUILD_CHUNK_SIZE = 8
+
+
+def _build_one(
+    topology: Topology,
+    mappings: dict[int, Fragment],
+    refine_cell: bool,
+    max_rmsd: float | None,
+    min_distance: float | None,
 ) -> Framework | None:
     """Worker-safe build: expected failures become None, not raises."""
-    topology, mappings, refine_cell, max_rmsd, min_distance = args
     try:
         return build_framework(
             topology,
@@ -172,6 +181,25 @@ def _build_task(
         )
     except (AssertionError, AlignmentError, OverlapError, ValueError):
         return None
+
+
+def _build_chunk(
+    args: tuple[Topology, list[dict[int, Fragment]], bool, float | None, float | None],
+) -> list[Framework | None]:
+    """Build several combinations against one shared topology pickle."""
+    topology, chunk, refine_cell, max_rmsd, min_distance = args
+    return [
+        _build_one(topology, mappings, refine_cell, max_rmsd, min_distance)
+        for mappings in chunk
+    ]
+
+
+def _batched(iterable: Iterable, size: int):
+    """Consecutive lists of up to ``size`` items (itertools.batched is
+    3.12+ and the runtime floor is 3.11)."""
+    iterator = iter(iterable)
+    while chunk := list(itertools.islice(iterator, size)):
+        yield chunk
 
 
 def _iter_combinations(
@@ -306,7 +334,10 @@ class Autografs:
         n_jobs : int, optional
             Number of worker processes; 1 (default) builds serially in
             this process. Builds are independent, so speedup is close
-            to linear once workers are warm.
+            to linear once workers are warm. On Windows and macOS the
+            spawn start method re-imports the package (pymatgen
+            included) in every worker, so a few seconds of warmup
+            precede the first results.
 
         Returns
         -------
@@ -319,6 +350,9 @@ class Autografs:
         frameworks: list[Framework] = []
         attempted = 0
         executor = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
+        # cap on submitted-but-unfinished chunks: bounds the validated
+        # mappings (deep-copied fragments) alive at any moment
+        max_pending = 2 * n_jobs
         try:
             topology_pbar = tqdm(self.list_topologies(subset=topology_subset))
             for topology_name in topology_pbar:
@@ -335,22 +369,44 @@ class Autografs:
                     continue
                 slot_types = list(sbu_dict.keys())
                 options = [sbu_dict[slot_type] for slot_type in slot_types]
-                tasks = []
-                for choice in _iter_combinations(options, max_per_topology, rng):
-                    raw: dict[Fragment | int, Fragment | str] = dict(
-                        zip(slot_types, choice, strict=True)
+                # combination name-tuples are cheap to hold; the heavy
+                # deep-copied fragment mappings are produced lazily
+                choices = list(_iter_combinations(options, max_per_topology, rng))
+                attempted += len(choices)
+                validated_iter = (
+                    self._validate_mappings(
+                        topology=topology,
+                        mappings=dict(zip(slot_types, choice, strict=True)),
                     )
-                    validated = self._validate_mappings(topology=topology, mappings=raw)
-                    tasks.append(
-                        (topology, validated, refine_cell, max_rmsd, min_distance)
-                    )
-                attempted += len(tasks)
-                results: Iterable[Framework | None]
+                    for choice in choices
+                )
                 if executor is None:
-                    results = map(_build_task, tasks)
-                else:
-                    results = executor.map(_build_task, tasks)
-                frameworks.extend(fw for fw in results if fw is not None)
+                    for mappings in validated_iter:
+                        framework = _build_one(
+                            topology, mappings, refine_cell, max_rmsd, min_distance
+                        )
+                        if framework is not None:
+                            frameworks.append(framework)
+                    continue
+                # chunked, windowed submission: the topology is pickled
+                # once per chunk (not per combination), and the FIFO
+                # window keeps ordering deterministic and memory flat
+                pending: deque[Future[list[Framework | None]]] = deque()
+                for chunk in _batched(validated_iter, BUILD_CHUNK_SIZE):
+                    pending.append(
+                        executor.submit(
+                            _build_chunk,
+                            (topology, chunk, refine_cell, max_rmsd, min_distance),
+                        )
+                    )
+                    if len(pending) >= max_pending:
+                        frameworks.extend(
+                            fw for fw in pending.popleft().result() if fw is not None
+                        )
+                while pending:
+                    frameworks.extend(
+                        fw for fw in pending.popleft().result() if fw is not None
+                    )
         finally:
             if executor is not None:
                 executor.shutdown()
