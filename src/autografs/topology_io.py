@@ -24,6 +24,7 @@ import json
 import logging
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from pymatgen.core.structure import Molecule
@@ -68,6 +69,15 @@ class LazyTopologyLibrary(Mapping):
             f"LazyTopologyLibrary({len(self._raw)} topologies, "
             f"{len(self._cache)} materialized)"
         )
+
+    def raw_items(self) -> Iterator[tuple[str, dict]]:
+        """(name, raw JSON payload) pairs, materializing nothing.
+
+        The payload is the plain-data dict of topology_to_dict; callers
+        can scan cheap metadata (slot species, is_2d, ...) across the
+        whole library without paying Topology reconstruction.
+        """
+        return iter(self._raw.items())
 
 
 FORMAT_VERSION = 1
@@ -148,8 +158,8 @@ def topology_from_dict(name: str, data: dict) -> Topology:
         )
         equivalence_classes.append(slot_data.get("equivalence_class"))
     known_classes = (
-        [c for c in equivalence_classes if c is not None]
-        if all(c is not None for c in equivalence_classes)
+        cast(list[int], equivalence_classes)
+        if None not in equivalence_classes
         else None
     )
     return Topology(

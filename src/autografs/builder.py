@@ -502,7 +502,6 @@ class Autografs:
                 f"\t[x] loaded {len(added_sbu)} custom building units in {time.time() - t0:.0f} seconds."
             )
         self.sbu = sbu
-        return None
 
     def _setup_topologies(self, topofile: str | None = None) -> None:
         """Load topologies from a serialized library file.
@@ -544,7 +543,6 @@ class Autografs:
         # assignment, not dict.update(): the JSON loader returns a lazy
         # mapping, and update() would materialize every topology
         self.topologies = topologies
-        return None
 
     def list_topologies(
         self,

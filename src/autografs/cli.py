@@ -55,6 +55,14 @@ MAX_SELECT_CHOICES = 15
 STRICT_MAX_RMSD = 0.5
 
 
+class _Cancelled:
+    """Sentinel type for a cancelled prompt, distinct from None
+    (which already means 'no gate' in the max-RMSD prompt)."""
+
+
+CANCELLED = _Cancelled()
+
+
 # ----------------------------------------------------------------------
 # pure helpers (unit-tested, no prompts)
 # ----------------------------------------------------------------------
@@ -121,15 +129,15 @@ class TopoInfo:
 def build_topology_index(topologies: Mapping[str, Topology]) -> list[TopoInfo]:
     """Metadata index of a topology library, for filtering prompts.
 
-    A LazyTopologyLibrary (see autografs.topology_io) keeps the parsed
-    JSON payload in ``_raw``; scanning that costs nothing, whereas
-    materializing ~2500 Topology objects takes ~10 s. Plain dicts
-    (legacy pickle libraries) are iterated as-is.
+    A LazyTopologyLibrary (see autografs.topology_io) exposes the
+    parsed JSON payload through ``raw_items()``; scanning that costs
+    nothing, whereas materializing ~2500 Topology objects takes ~10 s.
+    Plain dicts (legacy pickle libraries) are iterated as-is.
     """
-    raw = getattr(topologies, "_raw", None)
+    raw_items = getattr(topologies, "raw_items", None)
     infos = []
-    if raw is not None:
-        for name, data in raw.items():
+    if raw_items is not None:
+        for name, data in raw_items():
             conns = {slot["species"].count("X") for slot in data["slots"]}
             infos.append(
                 TopoInfo(name, bool(data.get("is_2d", False)), tuple(sorted(conns)))
@@ -192,8 +200,8 @@ def _pick_name(message: str, names: list[str]) -> str | None:
     return answer
 
 
-def _pick_max_rmsd() -> float | None | str:
-    """Prompt for the alignment gate; returns 'cancel' on Ctrl-C/ESC
+def _pick_max_rmsd() -> float | None | _Cancelled:
+    """Prompt for the alignment gate; returns CANCELLED on Ctrl-C/ESC
     (None already means 'no gate')."""
     pick = questionary.select(
         "Alignment quality gate (max RMSD)?",
@@ -204,7 +212,7 @@ def _pick_max_rmsd() -> float | None | str:
         ],
     ).ask()
     if pick is None:
-        return "cancel"
+        return CANCELLED
     if pick.startswith("No limit"):
         return None
     if pick.startswith(str(STRICT_MAX_RMSD)):
@@ -214,7 +222,7 @@ def _pick_max_rmsd() -> float | None | str:
         validate=_validate_positive_float,
     ).ask()
     if text is None:
-        return "cancel"
+        return CANCELLED
     return float(text)
 
 
@@ -356,7 +364,7 @@ def choose_build_options() -> tuple[bool, float | None] | None:
     if refine_cell is None:
         return None
     max_rmsd = _pick_max_rmsd()
-    if isinstance(max_rmsd, str):  # "cancel"
+    if isinstance(max_rmsd, _Cancelled):
         return None
     return refine_cell, max_rmsd
 
@@ -581,7 +589,7 @@ def batch_build(session: Session) -> None:
     if per_topology is None:
         return
     max_rmsd = _pick_max_rmsd()
-    if isinstance(max_rmsd, str):  # "cancel"
+    if isinstance(max_rmsd, _Cancelled):
         return
     outdir = questionary.text("Output directory:", default="frameworks").ask()
     if outdir is None:
