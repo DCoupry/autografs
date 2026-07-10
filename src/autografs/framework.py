@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     import ase
     from pymatgen.core.structure import Molecule
 
+    from autografs.topology import Topology
+
 __all__ = [
     "Framework",
 ]
@@ -197,6 +199,34 @@ class Framework:
         if not unbonded.any():
             return math.inf
         return float(distances[unbonded].min())
+
+    def verify_net(self, topology: Topology) -> None:
+        """Check that this as-built framework realizes its blueprint.
+
+        Compares the labeled quotient graphs (one node per slot, one
+        edge per inter-SBU bond with its periodic image voltage) as
+        exact multisets - the check that catches mis-paired anchors or
+        a bond through the wrong image, which the geometric gates
+        cannot see. Also available at build time via
+        ``build(..., verify_net=True)``.
+
+        Only meaningful for as-built frameworks: supercells, stacks
+        and defective frameworks intentionally change the quotient
+        graph.
+
+        Parameters
+        ----------
+        topology : Topology
+            The blueprint this framework was built on.
+
+        Raises
+        ------
+        NetMismatchError
+            If the framework does not realize the blueprint's net.
+        """
+        from autografs.net import verify_net
+
+        verify_net(self, topology)
 
     # ------------------------------------------------------------------
     # porosity descriptors (implementations in autografs.porosity)
