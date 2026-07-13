@@ -166,6 +166,11 @@ A guided session covers the whole workflow without writing a script:
   compatible SBU per slot type (only compatible candidates are offered), set
   the build options, and export. Failed alignments drop into a recovery loop
   (relax the gate, or swap SBUs) instead of dying.
+- **Deconstruct a structure** — read a CIF (or anything pymatgen parses),
+  recover its building units and net, and either write the harvested SBUs to an
+  XYZ file or add them straight into the session library so they are selectable
+  in the next build. Expected refusals (metal-free, rod, disordered) are
+  reported, not crashes.
 - **Browse topologies** — summary table per net plus every compatible SBU per
   slot type.
 - **Browse building units** — composition, connectivity, dummy point group,

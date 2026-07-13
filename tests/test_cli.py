@@ -150,3 +150,95 @@ class TestEntryPoint:
             main(["--help"])
         assert excinfo.value.code == 0
         assert "MOF and COF" in capsys.readouterr().out
+
+
+class _Answer:
+    """Stand-in for a questionary prompt with a scripted answer."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def ask(self):
+        return self.value
+
+
+def _script(monkeypatch, **by_kind):
+    """Monkeypatch questionary.<kind> to return scripted answers in order."""
+    import autografs.cli as cli
+
+    for kind, values in by_kind.items():
+        iterator = iter(values)
+
+        def stub(*_args, _it=iterator, **_kwargs):
+            return _Answer(next(_it))
+
+        monkeypatch.setattr(cli.questionary, kind, stub)
+
+
+class TestDeconstructWizard:
+    """One scripted run through the deconstruct menu, guarding the wiring."""
+
+    @pytest.fixture
+    def session(self, mofgen):
+        from autografs.cli import Session
+
+        return Session(_gen=mofgen)
+
+    @pytest.fixture
+    def mof5_cif(self, mofgen, tmp_path):
+        topology = mofgen.topologies["pcu"]
+        mappings = {
+            key: {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[
+                len(key.atoms.indices_from_symbol("X"))
+            ]
+            for key in topology.mappings
+        }
+        mof = mofgen.build(topology, mappings=mappings, refine_cell=True, max_rmsd=0.5)
+        path = tmp_path / "mof5.cif"
+        mof.write_cif(path)
+        return path
+
+    def test_harvest_into_session_and_xyz(
+        self, monkeypatch, session, mof5_cif, tmp_path
+    ):
+        from autografs.cli import deconstruct_wizard
+
+        out = tmp_path / "mof5_sbus.xyz"
+        _script(
+            monkeypatch,
+            path=[str(mof5_cif)],
+            confirm=[True, True],  # add to session library, then write XYZ
+            text=[str(out)],
+        )
+        deconstruct_wizard(session)
+        # building units landed in the session library and on disk
+        assert "node_C6O13Zn4_6X" in session.gen.sbu
+        assert "linker_C6H4_2X" in session.gen.sbu
+        assert out.is_file()
+        assert "node_C6O13Zn4_6X" in out.read_text()
+
+    def test_missing_file_is_reported(self, monkeypatch, session, capsys):
+        from autografs.cli import deconstruct_wizard
+
+        _script(monkeypatch, path=["does_not_exist.cif"])
+        deconstruct_wizard(session)
+        assert "No such file" in capsys.readouterr().out
+
+    def test_metal_free_refusal_is_caught(
+        self, monkeypatch, session, mofgen, tmp_path, capsys
+    ):
+        from autografs.cli import deconstruct_wizard
+
+        topology = mofgen.topologies["hcb"]
+        mappings = {
+            key: {3: "Boroxine_triangle", 2: "Benzene_linear"}[
+                len(key.atoms.indices_from_symbol("X"))
+            ]
+            for key in topology.mappings
+        }
+        cof = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
+        path = tmp_path / "cof.cif"
+        cof.write_cif(path)
+        _script(monkeypatch, path=[str(path)])
+        deconstruct_wizard(session)  # must not raise
+        assert "Could not deconstruct" in capsys.readouterr().out

@@ -807,12 +807,84 @@ def batch_build(session: Session) -> None:
     console.print(table)
 
 
+def deconstruct_wizard(session: Session) -> None:
+    """Deconstruct a CIF into SBUs + net, then optionally harvest them."""
+    from autografs import AutografsError
+
+    path = questionary.path("Structure file (CIF or anything pymatgen reads):").ask()
+    if not path:
+        return
+    if not Path(path).is_file():
+        console.print(f"[red]No such file:[/red] {path}")
+        return
+    try:
+        with console.status(f"Deconstructing {Path(path).name}..."):
+            result = session.gen.deconstruct(path)
+    except AutografsError as exc:
+        # metal-free, rod, disordered, molecular crystal: expected refusals
+        console.print(f"[yellow]Could not deconstruct:[/yellow] {exc}")
+        return
+    except (OSError, ValueError) as exc:
+        console.print(f"[red]Could not read the structure:[/red] {exc}")
+        return
+
+    net = ", ".join(result.net_candidates) if result.net_candidates else "unidentified"
+    if result.n_periodic_components > 1:
+        net += f"  ({result.n_periodic_components}-fold interpenetrated)"
+    console.print(f"\n[bold]Net:[/bold] {net}")
+    if result.guest_formulas:
+        console.print(
+            f"[dim]Removed guests:[/dim] {', '.join(sorted(set(result.guest_formulas)))}"
+        )
+
+    table = Table(title="Building units")
+    table.add_column("fragment")
+    table.add_column("kind")
+    table.add_column("connections", justify="right")
+    table.add_column("count", justify="right")
+    counts = Counter(unit.name for unit in result.units)
+    kinds = {unit.name: unit.kind for unit in result.units}
+    conns = {unit.name: unit.n_connections for unit in result.units}
+    for name in sorted(counts):
+        table.add_row(name, kinds[name], str(conns[name]), str(counts[name]))
+    console.print(table)
+
+    building_units = {
+        name: fragment
+        for name, fragment in result.fragments.items()
+        if kinds.get(name) in ("node", "linker")
+    }
+    if not building_units:
+        return
+    if questionary.confirm(
+        f"Add these {len(building_units)} building units to the session library "
+        "for building?",
+        default=False,
+    ).ask():
+        session.gen.sbu.update(building_units)
+        console.print(
+            f"[green]Added[/green] {', '.join(sorted(building_units))} - "
+            "now selectable when building."
+        )
+    if questionary.confirm(
+        "Write the building units to an XYZ file?", default=True
+    ).ask():
+        default_name = f"{Path(path).stem}_sbus.xyz"
+        out = questionary.text("Output path:", default=default_name).ask()
+        if out:
+            from autografs.deconstruct import write_fragments_xyz
+
+            written = write_fragments_xyz(building_units, out)
+            console.print(f"[green]Wrote[/green] {written}")
+
+
 def main_menu(session: Session) -> None:
     while True:
         choice = questionary.select(
             "What would you like to do?",
             choices=[
                 "Build a structure",
+                "Deconstruct a structure (CIF to SBUs + net)",
                 "Browse topologies",
                 "Browse building units",
                 "Batch build (all compatible combinations)",
@@ -823,6 +895,8 @@ def main_menu(session: Session) -> None:
             return
         if choice == "Build a structure":
             build_wizard(session)
+        elif choice.startswith("Deconstruct"):
+            deconstruct_wizard(session)
         elif choice == "Browse topologies":
             browse_topologies(session)
         elif choice == "Browse building units":
