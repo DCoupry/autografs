@@ -9,7 +9,9 @@
 **AuToGraFS** — the *Automatic Topological Generator for Framework Structures* —
 generates Metal-Organic Frameworks (MOFs), Covalent Organic Frameworks (COFs)
 and other periodic framework materials by mapping molecular building blocks
-(SBUs) onto topological blueprints (nets).
+(SBUs) onto topological blueprints (nets). It also runs the pipeline in
+reverse: deconstruct an experimental structure back into building blocks and
+identify its net.
 
 ```python
 from autografs import Autografs
@@ -28,24 +30,6 @@ Original publication: [*"Automatic Topological Generator for Framework
 Structures"*](http://pubs.acs.org/doi/abs/10.1021/jp507643v),
 Addicoat, Coupry & Heine, *J. Phys. Chem. A* 2014, 118 (40), 9607.
 
----
-
-**Contents** —
-[Why AuToGraFS?](#why-autografs) ·
-[Installation](#installation) ·
-[Quickstart](#quickstart-mof-5) ·
-[Command line](#the-command-line-interface) ·
-[How it works](#how-it-works) ·
-[Architecture](#repository-architecture) ·
-[Python API tour](#python-api-tour) ·
-[Custom building blocks](#custom-building-blocks-sbus) ·
-[Custom topologies](#custom-topologies) ·
-[Library coverage](#library-coverage) ·
-[Development](#development) ·
-[Citing](#citing)
-
----
-
 ## Why AuToGraFS?
 
 Several excellent framework assemblers exist — notably
@@ -59,7 +43,7 @@ is a ground-up rewrite around a small set of design choices:
   topologies** and **930 building blocks** (63 curated SBUs + the 867-block
   PORMAKE library, 2- to 24-connected). No database generation step, no
   external binaries for building. **96.5 % of the shipped topologies are
-  buildable immediately** (see [Library coverage](#library-coverage)).
+  buildable immediately** (see [library coverage](docs/coverage.md)).
 - **2D nets are first-class.** The 200 RCSR layer nets (hcb, sql, kgm, ...)
   that COF chemistry builds on are stored as plane-group topologies; a build
   produces a flat layer, and `Framework.stack()` turns it into a bulk crystal
@@ -77,6 +61,9 @@ is a ground-up rewrite around a small set of design choices:
 - **Fails loudly, never silently.** Optional hard gates (`max_rmsd`,
   `min_distance`) raise typed exceptions instead of returning distorted or
   interpenetrating structures. Identical inputs give identical outputs.
+- **Runs in reverse.** Deconstruct a CIF (MOF or COF) into library-ready SBUs
+  and identify its net; harvest a whole SBU library from a folder of
+  structures.
 - **Post-processing built in.** UFF4MOF assignment on every output, GULP input
   generation, and one-call in-process LAMMPS relaxation
   (`pip install "autografs[relax]"`).
@@ -86,9 +73,9 @@ is a ground-up rewrite around a small set of design choices:
   topology → SBUs → build → stack → export without writing a script.
 - **MIT licensed**, pure-Python installation on Linux / macOS / Windows.
 
-If you need features AuToGraFS doesn't have yet (see
-[Roadmap](#roadmap)), PORMAKE and ToBaCCo are actively maintained and may fit
-better — comparisons age quickly, so evaluate against their current versions.
+If you need features AuToGraFS doesn't have yet (see [Roadmap](#roadmap)),
+PORMAKE and ToBaCCo are actively maintained and may fit better — comparisons
+age quickly, so evaluate against their current versions.
 
 ## Installation
 
@@ -147,695 +134,77 @@ print(mof)
 mof.write_cif("mof5.cif")
 ```
 
-## The command line interface
+Then keep going: [build options and batch enumeration](docs/building.md),
+[2D COFs](docs/cofs-and-stacking.md), [editing](docs/editing.md), or
+[deconstruction](docs/deconstruction.md).
 
-Two console commands are installed with the package.
+## Command line
 
-### `autografs` — interactive wizard
-
-```bash
-autografs                       # bundled libraries
-autografs --xyz my_sbus.xyz     # add custom building blocks
-autografs --topofile my_topologies.json.gz
-```
-
-A guided session covers the whole workflow without writing a script:
-
-- **Build a structure** — filter the nets (3D / 2D, by slot connectivity),
-  type-to-search a topology, inspect its cell / symmetry / slot types, pick a
-  compatible SBU per slot type (only compatible candidates are offered), set
-  the build options, and export. Failed alignments drop into a recovery loop
-  (relax the gate, or swap SBUs) instead of dying.
-- **Deconstruct a structure** — read a CIF (or anything pymatgen parses),
-  recover its building units and net, and either write the harvested SBUs to an
-  XYZ file or add them straight into the session library so they are selectable
-  in the next build. Expected refusals (rod, disordered, non-framework)
-  are reported, not crashes.
-- **Browse topologies** — summary table per net plus every compatible SBU per
-  slot type.
-- **Browse building units** — composition, connectivity, dummy point group,
-  and how many nets the SBU fits.
-- **Batch build** — a front-end for `build_all`: pick a topology subset, cap
-  the combinations per topology, and write every resulting CIF to a directory.
-- 2D layer builds offer **COF stacking** (AA / AB / serrated / staggered,
-  chosen interlayer spacing) before export.
-- The final menu is an **edit/export loop**: make a supercell, add statistical
-  defects, functionalize sites, rotate a placed linker, interpenetrate
-  (catenate), or relax with UFF4MOF — each edit feeds the next — then export.
-- Export formats: CIF, GULP input (UFF4MOF optimization), or straight into the
-  ASE viewer.
-
-Non-interactive `--topology`/`--sbu` flags are deliberately not provided:
-addressing slot types from a flag is ambiguous on nets with several
-same-connectivity orbits, and scripted use is what the Python API and
-`build_all` are for.
-
-### `autografs-topologies` — topology library generator
+No script needed — the `autografs` wizard covers build, deconstruct, stack, and
+export interactively, and `autografs-topologies` (re)builds a topology library:
 
 ```bash
-# regenerate the full RCSR library
-autografs-topologies --use_rcsr -o topologies.json.gz
-
-# convert your own CGD nets (optionally merged with RCSR)
-autografs-topologies -i my_nets.cgd -o my_topologies.json.gz
-autografs-topologies -i my_nets.cgd --use_rcsr -o combined.json.gz
-
-# admit vertices above the default 24-connected cap
-autografs-topologies --use_rcsr --max-connectivity 32 -o big.json.gz
+autografs                                    # bundled libraries; guided session
+autografs --xyz my_sbus.xyz                  # add custom building blocks
+autografs-topologies --use_rcsr -o topologies.json.gz   # regenerate the library
 ```
 
-See [Custom topologies](#custom-topologies) for the input format.
-
-## How it works
-
-### The idea (the 2014 paper)
-
-The founding insight of the [original
-publication](http://pubs.acs.org/doi/abs/10.1021/jp507643v) is a strict
-separation of *chemistry* from *connectivity*. A crystalline framework is
-described as a **topological blueprint** — a periodic net whose vertices and
-edges are abstract *slots* annotated with connection points — plus a set of
-**molecular building blocks** whose own connection points are marked by
-placeholder "dummy" atoms. Generating a structure then reduces to a geometry
-problem: pick a building block whose connection figure matches each slot,
-align it onto the slot, and scale the cell so the blocks meet at bonding
-distance. Because the blueprint is reusable, one net yields a whole
-combinatorial family of hypothetical materials — MOFs, COFs, ZIFs — and
-because every atom's provenance is known, the output can be automatically
-typed for the UFF4MOF force field and optimized further. The paper
-demonstrated this pipeline on known frameworks (MOF-5, IRMOFs, COFs) and on
-the systematic enumeration of hypothetical ones.
-
-Version 3 keeps that architecture and rebuilds the machinery: pymatgen data
-structures, the full RCSR net database instead of a curated handful, geometric
-(rather than symmetry-symbol) compatibility, an exact treatment of the cell
-degrees of freedom per crystal system, and a bond-length-based cell objective.
-
-### The build pipeline
-
-```mermaid
-flowchart TD
-    subgraph LIB["Libraries"]
-        SBU["SBU library<br/>defaults.xyz + pormake.xyz + user XYZ"]
-        TOPO["Topology library<br/>topologies.json.gz (RCSR) + user CGD"]
-    end
-    SBU --> SIEVE
-    TOPO --> SIEVE
-    SIEVE["Compatibility sieve<br/>directional RMSD of arm vectors &le; 0.35"]
-    SIEVE --> MAP["Mappings<br/>one SBU per slot type (or per slot index)"]
-    MAP --> ALIGN["Per-slot alignment<br/>Hungarian assignment + Kabsch,<br/>proper rotations only"]
-    ALIGN --> CELL["Cell optimization<br/>Nelder-Mead over the crystal system's free parameters;<br/>objective = RMS deviation of anchor pairs<br/>from covalent bond lengths"]
-    CELL --> GATES{"Quality gates"}
-    GATES -- "slot RMSD &gt; max_rmsd" --> AERR["AlignmentError"]
-    GATES -- "contact &lt; min_distance" --> OERR["OverlapError"]
-    GATES -- pass --> FW["Framework<br/>bond graph + cell + UFF4MOF types"]
-    FW --> OUT["write_cif / to_ase / to_gulp / view"]
-    FW --> RELAX["relax()  UFF4MOF via LAMMPS"]
-    FW --> STACK["stack()  2D layer &rarr; COF crystal"]
-```
-
-Step by step:
-
-1. **Libraries.** SBUs are pymatgen `Molecule`s with dummy atoms (`X`) marking
-   connection points, wrapped in `Fragment` objects. Topologies are `Topology`
-   objects: a lattice plus one slot `Fragment` per vertex/edge of the net,
-   grouped into **slot types** by crystallographic orbit (all
-   symmetry-equivalent slots take the same SBU).
-2. **Sieve.** A slot accepts an SBU when their *unit arm vectors* — directions
-   from the dummy centroid to each dummy — can be rotated onto each other to
-   within a directional RMSD of 0.35. Arm *lengths* carry no chemistry (a
-   blueprint's arms are arbitrary), only directions do. The threshold is
-   deliberately permissive: the sieve lists what is worth attempting; strict
-   acceptance happens at build time.
-3. **Alignment.** For each slot, the optimal proper rotation of the SBU's arm
-   vectors onto the slot's is found by iterating Hungarian assignment (which
-   arm goes to which) with Kabsch superposition (the best rotation for that
-   assignment), from 24 deterministic starting rotations. Improper rotations
-   are excluded, so chiral SBUs are never mirrored.
-4. **Cell optimization.** Every blueprint dummy is shared by the two slots it
-   connects; the built structure bonds the two SBU atoms that carried those
-   dummies (the *anchors*). The correct cell is the one where each anchor pair
-   sits at its covalent bond length (Cordero radii). Nelder-Mead minimizes the
-   RMS bond-length deviation over the crystal system's *free* parameters only —
-   a cubic net optimizes one length, a triclinic net six parameters, a 2D net
-   only its in-plane parameters (c stays a frozen slab padding). The whole
-   objective is precomputed numpy; no pymatgen objects are built inside the
-   loop.
-5. **Gates.** `max_rmsd` bounds the per-slot directional mismatch
-   (dimensionless; 0 = perfect shape match), `min_distance` bounds the closest
-   non-bonded contact in the output, all periodic images included. Violations
-   raise `AlignmentError` / `OverlapError` rather than returning bad
-   structures.
-6. **Result.** A `Framework`: a networkx bond graph (symbols, coordinates,
-   bond orders, UFF4MOF atom types, provenance tags) with crystallographic
-   views and exports on top.
-
-### Public API at a glance
-
-```mermaid
-flowchart LR
-    subgraph AG["Autografs  (builder.py)"]
-        LT["list_topologies(sieve=SBU)"]
-        LB["list_building_units(sieve=net)"]
-        BD["build(topology, mappings, gates)"]
-        BA["build_all(subsets, sampling, n_jobs)"]
-        DC["deconstruct(cif) &rarr; SBUs + net"]
-    end
-    subgraph TP["Topology"]
-        TM["mappings: slot type &rarr; slot indices"]
-        CS["get_compatible_slots(candidate)"]
-    end
-    subgraph FR["Fragment  (SBU / slot)"]
-        AU["arm_units"]
-        HC["has_compatible_symmetry(other)"]
-        ED["rotate / flip / functionalize"]
-    end
-    subgraph FW["Framework  (result)"]
-        ST["structure / to_ase / view"]
-        WC["write_cif(symprec)"]
-        TG["to_gulp()"]
-        MC["min_contact(cutoff)"]
-        RX["relax(force_field, cutoff)"]
-        SK["stack(mode, interlayer)"]
-        PE["supercell / defects /<br/>rotate / flip / functionalize"]
-    end
-    LT --> CS
-    LB --> CS
-    CS --> HC
-    HC --> AU
-    ED -. "edit SBUs before building" .-> BD
-    TM --> BD
-    BA --> BD
-    BD --> FW
-    SK --> FW
-    RX --> FW
-    PE --> FW
-```
-
-## Repository architecture
-
-```
-src/autografs/
-├── builder.py       Autografs: libraries, sieve, build / build_all
-├── alignment.py     numpy core: direction matching, Kabsch, cell
-│                    parametrization per crystal system, BuildPlan
-├── fragment.py      Fragment: Molecule + dummies, compatibility,
-│                    rotate / flip / functionalize
-├── topology.py      Topology: lattice + slots + orbit grouping
-├── topology_io.py   versioned JSON (de)serialization, lazy library
-├── framework.py     Framework: structure views, CIF/ASE/GULP export,
-│                    min_contact, stack, relax, post-build editing API
-├── editing.py       post-build editing: supercells, statistical
-│                    defects, placed-SBU rotation/flip, functionalize
-├── net.py           quotient graphs: net verification + identification
-├── deconstruct.py   inverse pipeline: CIF → SBUs + net candidates
-├── porosity.py      grid-based porosity descriptors
-├── framework_io.py  Framework save/load
-├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
-├── plane_groups.py  the 17 plane groups, for 2D layer nets
-├── cgd.py           CGD parser + `autografs-topologies` entry point
-├── cli.py           interactive wizard, `autografs` entry point
-├── utils.py         XYZ parsing, UFF typing, graph conversions, GULP
-├── exceptions.py    AutografsError hierarchy
-└── data/
-    ├── defaults.xyz         63 curated SBUs
-    ├── pormake.xyz          867 PORMAKE building blocks (MIT)
-    ├── topologies.json.gz   2686 RCSR nets, versioned JSON
-    └── uff4mof.py           UFF4MOF force-field parameters
-```
-
-Module dependencies (arrows = imports):
-
-```mermaid
-flowchart TD
-    cli["cli  (wizard)"] --> builder
-    cgd["cgd  (converter)"] --> plane_groups
-    cgd --> topology_io
-    builder --> alignment
-    builder --> topology_io
-    builder --> framework
-    builder --> utils
-    builder --> deconstruct
-    deconstruct --> net
-    deconstruct --> framework
-    deconstruct --> utils
-    framework -. "lazy import" .-> editing
-    editing --> framework
-    editing --> utils
-    alignment --> fragment
-    alignment --> topology
-    alignment --> plane_groups
-    topology --> fragment
-    topology_io --> topology
-    framework --> utils
-    framework -. "optional extra" .-> relax
-    utils --> fragment
-    utils --> data["data  (uff4mof)"]
-```
-
-## Python API tour
-
-### Exploring the libraries
-
-```python
-from autografs import Autografs
-
-mofgen = Autografs()
-
-mofgen.list_topologies()                        # all RCSR symbols
-mofgen.list_topologies(sieve="Benzene_linear")  # nets this SBU fits
-
-# building units compatible with a net, grouped by slot type;
-# slot types with no compatible SBU are absent from the dict
-mofgen.list_building_units(sieve="srs")
-
-# raw access
-sbu = mofgen.sbu["Zn_mof5_octahedral"]          # a Fragment
-topology = mofgen.topologies["tbo"]             # a Topology (lazy library)
-
-print(len(topology))                  # number of slots
-print(topology.cell.abc)              # blueprint cell
-print(topology.spacegroup_number)     # 225
-print(topology.is_2d)                 # False
-for slot_type, indices in topology.mappings.items():
-    print(slot_type, "fills slots", indices)
-```
-
-### Building
-
-`build` takes a topology and a mapping from slot types (or explicit slot
-indices) to SBUs, given as library names or `Fragment` objects:
-
-```python
-mof = mofgen.build(
-    topology,
-    mappings={node_type: "Zn_mof5_octahedral", edge_type: "Benzene_linear"},
-    refine_cell=True,   # optimize cell parameters (default)
-    max_rmsd=0.3,       # reject builds with bad shape matches
-    min_distance=1.0,   # reject builds with overlapping atoms
-)
-```
-
-- **`max_rmsd`** gates the *directional* mismatch between an SBU's connection
-  vectors and its slot's (dimensionless; 0 is a perfect shape match).
-  Incompatible geometry raises `autografs.AlignmentError` instead of returning
-  a distorted structure.
-- **`min_distance`** screens the built structure: if any two non-bonded atoms
-  (all periodic images included) are closer than this many Å,
-  `autografs.OverlapError` is raised instead of returning overlapping or
-  interpenetrating output. The same check is available on any result as
-  `Framework.min_contact()`.
-- **Slot indices** (integers) may be used as mapping keys to place a specific
-  SBU on a specific slot, overriding the slot-type choice:
-
-```python
-mappings = {node_type: "sbu_A", edge_type: "linker_1", 7: "linker_2"}
-```
-
-### Batch enumeration
-
-`build_all` attempts every compatible SBU combination on every (or a subset
-of) topology:
-
-```python
-frameworks = mofgen.build_all(
-    topology_subset=["pcu", "dia", "srs"],
-    sbu_subset=None,          # default: whole SBU library
-    max_rmsd=0.3,
-    min_distance=1.0,
-    max_per_topology=50,      # cap the combinatorial explosion...
-    seed=42,                  # ...with a reproducible random sample
-    n_jobs=4,                 # parallel builds (near-linear speedup)
-)
-```
-
-Failed builds are counted and skipped, not raised. Multinodal nets have
-combinatorially many SBU choices; when the full product exceeds
-`max_per_topology`, a seeded sample of distinct combinations is built instead.
-
-### Working with the result
-
-`build` returns a `Framework`:
-
-```python
-mof.structure          # pymatgen Structure (wrapped; site props: tags, ufftype)
-mof.graph              # networkx bond graph: symbols, coords, UFF4MOF
-                       # atom types, bond orders, tags (source of truth)
-mof.formula            # 'Zn4 H12 C24 O13'
-mof.lattice            # pymatgen Lattice
-mof.bonds              # [(i, j, bond_order), ...]
-mof.mmtypes            # UFF4MOF atom types, node order
-mof.min_contact()      # closest non-bonded contact (all images)
-mof.slots              # {slot index: SBU name} for every placed unit
-
-mof.density                     # g/cm3 (MOF-5: ~0.6)
-mof.void_fraction()             # geometric; probe_radius=1.2 for a He probe
-mof.largest_cavity_diameter()   # LCD, Angstrom (MOF-5: ~15)
-mof.pore_limiting_diameter()    # PLD, Angstrom (MOF-5: ~8) - the channel bottleneck
-
-mof.write_cif("out.cif", symprec=None)   # symprec symmetrizes if set
-atoms = mof.to_ase()                     # periodic ase.Atoms
-mof.view()                               # ASE viewer
-gulp_input = mof.to_gulp()               # UFF4MOF optimization input for GULP
-```
-
-CIF export is for downstream tools; it loses the bond graph and the
-per-atom provenance that post-build editing needs. To keep a framework
-editable across sessions, save it to the versioned JSON format instead:
-
-```python
-mof.save("mof5.json.gz")                 # bond graph, tags, provenance, energy
-mof = Framework.load("mof5.json.gz")     # editable exactly like the original
-defective = mof.supercell(2).defects(fraction=0.1, seed=42)
-```
-
-### UFF4MOF relaxation
-
-`relax` optimizes the geometry and cell with the UFF4MOF force field through
-LAMMPS, in-process, and returns a new `Framework` with the same bond graph:
-
-```bash
-pip install "autografs[relax]"
-```
-
-```python
-relaxed = mof.relax()          # UFF4MOF, alternating cell + FIRE
-relaxed.energy                 # kcal/mol per unit cell
-relaxed.write_cif("relaxed.cif")
-```
-
-Cells smaller than the non-bonded cutoff (12.5 Å by default) are relaxed as an
-internal supercell and folded back transparently. `"UFF"` and `"Dreiding"` are
-also accepted as `force_field`.
-
-### 2D COFs
-
-Layer nets (hcb, sql, kgm, hxl, ...) are stored as 2D plane-group topologies.
-A build on one produces a single flat layer in a padded slab: the in-plane
-cell is optimized while c stays frozen, since the interlayer spacing is
-dispersion-driven chemistry, not topology. The COF-1 prototype:
-
-```python
-mofgen = Autografs()
-hcb = mofgen.topologies["hcb"]
-
-mappings = {}
-for slot_type in hcb.mappings:
-    n_connections = len(slot_type.atoms.indices_from_symbol("X"))
-    mappings[slot_type] = (
-        "Boroxine_triangle" if n_connections == 3 else "Benzene_linear"
-    )
-
-layer = mofgen.build(hcb, mappings=mappings)
-print(layer)   # hexagonal layer, a = b = 14.7, gamma = 120
-
-# turn the layer into a crystal by choosing the stacking
-cof = layer.stack(mode="AA", interlayer=3.35)   # eclipsed
-cof = layer.stack(mode="AB")                    # two-layer cell, offset (1/3, 2/3)
-cof = layer.stack(mode="serrated", offset=(0.5, 0))
-cof.write_cif("cof1.cif")
-```
-
-`stack` returns a new `Framework`: AA keeps one layer per cell with
-`c = interlayer`; AB / serrated / staggered build a two-layer cell with an
-in-plane-offset copy. Layers are van-der-Waals stacked (no inter-layer bonds).
-The default `interlayer=3.35` Å is graphite-like; typical COFs fall in
-3.3–3.6. Stacking a non-layered framework raises
-`autografs.exceptions.StackingError`.
-
-### Editing building blocks
-
-`Fragment` carries pre-build editing methods — modify a copy of a library SBU,
-then build with the modified object:
-
-```python
-linker = mofgen.sbu["Benzene_linear"].copy()
-
-linker.rotate(3.14159 / 2)        # around the dummy-dummy axis (2-connected)
-linker.flip()                     # apply a mirror operation, if one exists
-linker.functionalize(index=3, functional_group="amine")  # H -> NH2 etc.
-# available groups: pymatgen.core.structure.FunctionalGroups
-
-mof = mofgen.build(topology, mappings={edge_type: linker, node_type: "Zn_mof5_octahedral"})
-```
-
-### Post-build editing
-
-A built `Framework` records which placed SBU every atom belongs to
-(`mof.slots` lists them), so a structure can keep being edited after the
-build. All editing methods return a new `Framework` and leave the input
-untouched, so they chain:
-
-```python
-mof = mofgen.build(topology, mappings)
-
-# supercells: bonds crossing the cell boundary are remapped onto the
-# correct periodic image, so the supercell bond graph is exact
-big = mof.supercell(2)                    # 2x2x2
-big = mof.supercell((2, 2, 1))
-
-# statistical defects: remove whole SBUs, cap the dangling connection
-# points with hydrogen (missing-linker / missing-node defects)
-defective = big.defects(fraction=0.1, sbu="Benzene_linear", seed=42)
-defective = big.defects(slots=[5, 13])    # explicit choice instead
-defective = big.defects(fraction=0.1, cap=None)   # open metal sites
-
-# re-orient one placed unit (see mof.slots for the indices):
-# rotate a 2-connected linker around its bond axis, or mirror a unit
-# through a plane that keeps its connection points fixed
-mof = mof.rotate(slot=1, theta=3.14159 / 2)
-mof = mof.flip(slot=1)
-
-# graft functional groups onto the framework itself - site by site,
-# including sites made inequivalent by a supercell or a defect
-sites = mof.functionalizable_sites()               # terminal H atoms
-tagged = mof.functionalize(sites[0], "amine")      # one site
-tagged = mof.functionalize(sites[:4], "methyl")    # several at once
-```
-
-`functionalize` accepts every group in
-`pymatgen.core.structure.FunctionalGroups` or any pymatgen `Molecule`
-with exactly one `X` dummy marking the attachment point. Defect capping
-and group placement both use tabulated covalent bond lengths, and new
-atoms get UFF4MOF types from their local environment — edited
-frameworks stay valid inputs for `relax()`, `min_contact()` and every
-export. Since defects and grafts distort nothing else, a final
-`relax()` is the recommended clean-up for production structures.
-
-### Deconstruction: from a crystal structure back to SBUs + net
-
-The inverse pipeline. `deconstruct` takes an experimental structure (a
-CIF file or a pymatgen `Structure`), detects bonds with the same
-strategy the builder uses, removes free guests, clusters atoms into
-building units, places a dummy at every cut bond, and matches the
-resulting quotient graph against the topology library by
-coordination-sequence signature. Clustering follows the *metal-oxo*
-convention for MOFs (metal clusters keep their inorganic coordination
-sphere and their carboxylate / phosphonate / sulfonate binding groups)
-and a *branch-point* convention for metal-free frameworks (COFs) —
-rigid ring systems and non-ring atoms collapse to super-vertices, and
-a super-vertex's external connection count sets its role (≥3 a node, 2
-a linker, 1 a cap):
-
-```python
-result = mofgen.deconstruct("IRMOF-1.cif")
-
-result.net_candidates       # ['pcu']
-result.fragments            # {'node_C6O13Zn4_6X': ..., 'linker_C6H4_2X': ...}
-result.units                # every placed unit: kind (node/linker/cap),
-                            # atom indices, connection count
-result.guest_formulas       # compositions of removed free solvent
-result.write_xyz("harvested_sbus.xyz")   # library-ready SBU file
-```
-
-The extracted fragments are ordinary `Fragment` objects with `X`
-dummies at the cut-bond midpoints, so they feed straight back into the
-build pipeline — `Autografs(xyzfile="harvested_sbus.xyz")` or passing
-them directly in `build` mappings both work, which makes a full
-deconstruct → rebuild → `verify_net` round trip possible.
-
-Net identification is signature-based (the multiset of per-vertex
-coordination sequences, computed on the quotient graph with capping
-ligands pruned): an almost-unique invariant matched in two tiers,
-first with ditopic linkers counted as vertices (separating a net from
-its edge-decorated derivatives), then against the underlying
-2-coordination-suppressed net. Multiple candidates are returned as a
-list rather than silently picking one.
-
-Interpenetrated (catenated) structures are handled: each periodic
-subframework is a separate connected component, identified on its own,
-so `n_periodic_components` gives the fold and `subframework_nets` the
-per-net results. `net_candidates` is their consensus, and
-`is_catenated` is a convenience flag:
-
-```python
-result = mofgen.deconstruct("IRMOF-9.cif")   # 2-fold interpenetrated pcu
-result.n_periodic_components   # 2
-result.subframework_nets       # [['pcu'], ['pcu']]
-result.net_candidates          # ['pcu']   (consensus)
-result.is_catenated            # True
-```
-
-Both MOFs and COFs are handled; the COF path uses the single-node
-convention, so a node bundled differently in the original SBU library
-(e.g. a triphenylamine core cut at its central atom) may come back more
-finely divided, but the recovered net is the same. Scope: frameworks
-with molecular building units. Rod MOFs and other 1-periodic (chain)
-building units raise `DeconstructionError`.
-
-#### Harvesting a library from many structures
-
-`harvest` runs `deconstruct` over a batch — a directory of CIFs, a
-glob, or an iterable of paths/Structures — and merges the building
-units into one deduplicated, library-ready fragment set. The same
-paddlewheel appearing in fifty MOFs becomes one fragment tagged with
-every source it came from; deconstruction failures are recorded rather
-than aborting the run, so a real success rate falls out:
-
-```python
-result = mofgen.harvest("core_mof_subset/")
-
-result.report()          # 'harvested 34 fragments (...) from 47/50 structures, 3 failed'
-result.building_units    # nodes + linkers (bound-solvent caps excluded)
-result.provenance        # {'node_C4O8Zn2_4X': ['HKUST-1', 'MOF-505', ...], ...}
-result.nets              # {'HKUST-1': ['tbo'], ...}  per-source net candidates
-result.failures          # {'disordered_entry': 'DeconstructionError: ...', ...}
-
-result.write_xyz("harvested_sbus.xyz")          # nodes + linkers by default
-mofgen2 = Autografs(xyzfile="harvested_sbus.xyz")   # build with the harvest
-```
-
-Monotopic organic units (a single connection point — bound solvent,
-modulators, capping residues) are classified `cap` and excluded from
-the default `write_xyz` output and the `building_units` view.
-
-### Error handling
-
-All library exceptions derive from `autografs.AutografsError`:
-
-```python
-from autografs import AlignmentError, OverlapError
-from autografs.exceptions import StackingError, RelaxationError
-
-try:
-    mof = mofgen.build(topology, mappings, max_rmsd=0.3, min_distance=1.0)
-except AlignmentError:   # shape mismatch beyond the gate
-    ...
-except OverlapError:     # non-bonded contact below the gate
-    ...
-```
-
-## Custom building blocks (SBUs)
-
-SBUs are defined in (multi-)XYZ files. Connection points are dummy atoms with
-the symbol `X`; the comment line carries the name:
-
-```text
-5
-name=My_Tetrahedral pbc="F F F"
-Si         0.0000        0.0000        0.0000
-X          1.0000        1.0000        1.0000
-X          1.0000       -1.0000       -1.0000
-X         -1.0000        1.0000       -1.0000
-X         -1.0000       -1.0000        1.0000
-```
-
-```python
-mofgen = Autografs(xyzfile="my_sbus.xyz")    # or: autografs --xyz my_sbus.xyz
-```
-
-Rules of thumb:
-
-- **One dummy per bond to a neighboring SBU.** Place each `X` roughly where
-  the neighboring block's anchor atom will sit, i.e. along the outgoing bond
-  direction from the atom that carries the connection (the *anchor*). During
-  the build, the dummy is removed and a bond is created between the two anchor
-  atoms it paired.
-- **Directions matter, distances don't.** Compatibility and alignment use only
-  the unit vectors from the dummy centroid to each dummy; the cell is sized
-  from covalent radii, not from your dummy distances.
-- Several blocks can live in one file (standard multi-XYZ concatenation); each
-  needs a `name=...` in its comment line.
-- Custom SBUs with the same name as bundled ones override them; otherwise the
-  two libraries merge. The sieve, wizard, and builder treat custom SBUs
-  exactly like bundled ones.
-- A block is usable on any slot with the same number of connections and a
-  matching connection-vector shape — point-group symmetry is diagnostic
-  metadata, not a requirement.
-
-## Custom topologies
-
-The topology library is a **versioned JSON format** (diffable, safe to share —
-unlike pickles, loading it cannot execute code, and it survives pymatgen
-upgrades). The bundled library covers the
-[RCSR](http://rcsr.anu.edu.au/) database; to regenerate it or convert your own
-nets:
-
-```bash
-autografs-topologies --use_rcsr -o topologies.json.gz
-autografs-topologies -i my_nets.cgd -o my_topologies.json.gz
-```
-
-```python
-mofgen = Autografs(topofile="my_topologies.json.gz")
-```
-
-Input is the [CGD format](http://rcsr.anu.edu.au/help/cgd) used by RCSR and
-Systre: a crystal record with a space group (or plane group, for layer nets)
-and the asymmetric unit's vertices and edge centers. The converter expands the
-symmetry, extracts one slot per vertex/edge with dummy atoms marking the
-connections, and groups slots into crystallographic orbits — two slots with
-the same local shape but different orbits remain independently mappable.
-
-Programmatic (de)serialization lives in `autografs.topology_io`:
-
-```python
-from autografs.topology_io import load_topologies, save_topologies
-
-library = load_topologies("topologies.json.gz")   # lazy: entries materialize
-save_topologies(dict(library), "copy.json.gz")    # on first access
-```
-
-Legacy dill pickles (`.pkl`) still load, with a warning — convert them once
-with `save_topologies` and forget about them.
-
-## Library coverage
-
-2593 of the 2686 shipped topologies (**96.5 %**) have at least one compatible
-SBU for every slot type; `scripts/sbu_coverage.py` reproduces the number.
-Compatibility is a deliberately *permissive* geometric sieve — an SBU is
-listed when its connection-vector shape matches the slot's to within a
-directional RMSD of 0.35 (square vs tetrahedral scores ~0.6). The sieve says
-what is worth trying; structure *quality* is enforced where it belongs, at
-build time, by `max_rmsd` and `min_distance`, and distorted-but-valid output
-can be cleaned up with `Framework.relax()`.
-
-<details>
-<summary>The 93 topologies not currently buildable (click to expand)</summary>
-
-- **50 nets whose vertex figure no current SBU matches** (best match above
-  0.35): awd, dnb, dnd, dno, dns, eca, eck, eee, hch, hci, hcz, hcz-a, hxg-d,
-  jak, jmt, ken, mte, ncb, ncd, ncg, nci, ncj, ncl, ncm, nia-d, ntu, sde, sep,
-  skg, srr, swn, ton, tsn, ttr, ttt, utx, uty, vcx, vna, vne, wal, wyt, xay,
-  xbc, xbn, xbp, xbr, xbs, xbz, zim.
-- **43 nets with a vertex connectivity no library covers at all** (mostly
-  augmented `-x` and dual `-d` variants of nets whose parent form *is*
-  covered):
-  - 11-c: ela, elb, elc, eld, ele, elf, lwa, lwa-d, mjt, nin, svi-x
-  - 13-c: amn, nas
-  - 14-c: bcu-x, bem, bet, gpu-x, jkz, kcz, keb, nin, nts-d, reo-d, tcc-x,
-    tcf-x, tcg-x, wzz, zra
-  - 15-c: cal, cla-d, zra
-  - 16-c: amn, dia-x, mgc-x, mgz-x, nas, uro, urq, urs
-  - 17-c: odf-d
-  - 18-c: ast-d, gea, gez, nts-d, she-d, ytw
-  - 20-c: alb-x, ccu
-
-</details>
-
-If you care about one of these, a user-supplied building block with the right
-connectivity makes it available — see
-[Custom building blocks](#custom-building-blocks-sbus).
+Full walkthrough of both commands: [Command line](docs/cli.md).
+
+## Documentation
+
+The README is the overview; the depth lives in `docs/`:
+
+- **[Building frameworks](docs/building.md)** — the Python API: exploring the
+  libraries, `build`, `build_all`, working with the `Framework` result
+  (porosity, save/load, exports), UFF4MOF relaxation, error handling.
+- **[2D COFs and stacking](docs/cofs-and-stacking.md)** — layer nets and
+  turning a layer into a bulk crystal (AA / AB / serrated / staggered).
+- **[Editing](docs/editing.md)** — editing SBUs before a build, and post-build
+  supercells, statistical defects, and functionalization.
+- **[Deconstruction](docs/deconstruction.md)** — CIF → SBUs + net, net
+  identification, interpenetration, COFs, and batch harvesting.
+- **[Command line](docs/cli.md)** — the `autografs` wizard and
+  `autografs-topologies` in full.
+- **[Extending the libraries](docs/extending.md)** — custom SBUs (XYZ) and
+  custom topologies (CGD → JSON).
+- **[How it works & architecture](docs/internals.md)** — the 2014 idea, the
+  build pipeline, and a module map of the codebase.
+- **[Library coverage](docs/coverage.md)** — what fraction of RCSR is buildable
+  today, and the nets that aren't.
+
+## FAQ
+
+**Does it build COFs?** Yes — 2D layer nets are first-class. Build a flat layer
+on a layer net (hcb, sql, ...), then `Framework.stack()` turns it into a bulk
+crystal. See [2D COFs and stacking](docs/cofs-and-stacking.md).
+
+**Do I need LAMMPS?** Only for `Framework.relax()`. Building, export,
+deconstruction, and everything else are pure-Python. Install the relaxation
+backend with `pip install "autografs[relax]"`.
+
+**My SBU is rejected / I get `AlignmentError` — why?** The build gate is
+geometric: the SBU's connection-vector *shape* doesn't match the slot's within
+`max_rmsd`. Raise `max_rmsd`, pick a net whose vertex figure fits, or edit the
+SBU. Point-group symmetry is diagnostic metadata, not the gate.
+
+**Is my net in the library?** 2686 RCSR nets ship; list them with
+`mofgen.list_topologies()`. 96.5 % are buildable out of the box — the rest, and
+how to enable them, are in [library coverage](docs/coverage.md).
+
+**`deconstruct()` raised `DeconstructionError` — why?** It refuses rod /
+1-periodic (chain) building units, disordered structures, and molecular
+crystals (no periodic framework to analyze). Metal-free COFs *are* supported.
+See [Deconstruction](docs/deconstruction.md).
+
+**CIF or JSON — which should I save?** CIF for downstream tools, but it loses
+the bond graph and per-atom provenance that post-build editing needs. Use
+`Framework.save()` / `Framework.load()` (versioned JSON) to keep a framework
+editable across sessions.
+
+**Can I still load my old `.pkl` topology library?** Yes, with a warning.
+Convert it once with `autografs.topology_io.save_topologies` to the JSON format
+and keep that.
 
 ## Development
 
@@ -851,17 +220,16 @@ mypy src/autografs        # type check
 
 Tests live in `tests/`; `scripts/` holds the coverage audit
 (`sbu_coverage.py`), the PORMAKE import (`import_pormake_bbs.py`), and fixture
-generators.
+generators. Architecture and module map: [How it works](docs/internals.md).
 
 ## Roadmap
 
-The 3.x line has reached feature parity with 2.x: post-build
-functionalization, supercells with statistical defects, and
-rotation/flipping of placed SBUs are all available on `Framework` (see
-[Post-build editing](#post-build-editing)). Remaining directions —
-IZA zeolite import, curated high-connectivity SBU packs for the last
-uncovered nets — are tracked in `v3_plan.md` and `progress.md` in the
-repository.
+The 3.x line has reached feature parity with 2.x and added the inverse pipeline
+(deconstruction, net identification, and SBU harvesting for MOFs and COFs).
+Remaining directions — rod-MOF (1-periodic SBU) support, IZA zeolite import,
+and curated high-connectivity SBU packs for the last uncovered nets — are
+tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues) and
+in `v3_plan.md` / `progress.md`.
 
 ## Citing
 

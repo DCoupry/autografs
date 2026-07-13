@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-AuToGraFS generates Metal-Organic Frameworks (MOFs), COFs and other periodic crystalline structures by mapping molecular building blocks (SBUs) onto topological blueprints. Python >= 3.11. Built on pymatgen, ASE, networkx, scipy. README.md is the single documentation source and describes the current API accurately.
+AuToGraFS generates Metal-Organic Frameworks (MOFs), COFs and other periodic crystalline structures by mapping molecular building blocks (SBUs) onto topological blueprints, and runs the pipeline in reverse (deconstruction). Python >= 3.11. Built on pymatgen, ASE, networkx, scipy. Docs: `README.md` is the overview + FAQ; feature guides live in `docs/*.md` (building, cofs-and-stacking, editing, deconstruction, cli, extending, internals, coverage). Keep them accurate to the current API — when changing behaviour, update the relevant `docs/` page (and the README FAQ/Why bullets if the change is user-facing).
 
 ## Commands
 
