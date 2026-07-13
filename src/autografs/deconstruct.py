@@ -27,6 +27,11 @@ the labeled quotient graph of its underlying net:
 {'node_C6O13Zn4_6X': ..., 'linker_C6H4_2X': ...}
 >>> result.write_xyz("harvested_sbus.xyz")   # feed back into Autografs
 
+Interpenetrated (catenated) structures are handled: each periodic
+subframework is a separate connected component, identified on its own,
+with the fold reported as ``n_periodic_components`` and the per-net
+results in ``subframework_nets``.
+
 Scope: frameworks with molecular (0-periodic) building units and at
 least one metal atom. Rod MOFs (1-periodic units) and metal-free
 frameworks (COFs, where cutting requires branch-point analysis
@@ -130,11 +135,19 @@ class Deconstruction:
         (indexed as in ``units``), one voltage-labeled edge per cut
         bond.
     net_candidates : list[str]
-        Library nets matching the quotient graph's coordination
-        sequence signature; empty when identification was skipped or
-        found nothing.
+        Library nets realized by the framework: the consensus (shared
+        candidates) across all interpenetrated subframeworks. Empty
+        when identification was skipped, found nothing, or the
+        subframeworks disagree (their individual results are then in
+        ``subframework_nets``).
     n_periodic_components : int
-        Number of catenated (interpenetrated) subframeworks.
+        Number of catenated (interpenetrated) subframeworks - the fold
+        of the interpenetration (1 for a non-catenated framework).
+    subframework_nets : list[list[str]]
+        Net candidates for each periodic subframework independently,
+        one list per component. For genuine n-fold interpenetration
+        every entry is the same net; differing entries flag distinct
+        interpenetrating nets.
     guest_formulas : list[str]
         Compositions of the removed 0-periodic components.
     """
@@ -145,7 +158,13 @@ class Deconstruction:
     quotient_edges: Counter[Edge]
     net_candidates: list[str] = field(default_factory=list)
     n_periodic_components: int = 1
+    subframework_nets: list[list[str]] = field(default_factory=list)
     guest_formulas: list[str] = field(default_factory=list)
+
+    @property
+    def is_catenated(self) -> bool:
+        """True when the structure has more than one interpenetrated net."""
+        return self.n_periodic_components > 1
 
     def write_xyz(self, path: str | Path) -> Path:
         """Write the fragments as a multi-structure XYZ SBU library.
@@ -163,7 +182,8 @@ class Deconstruction:
             f"{count} {kind}(s)" for kind, count in sorted(kinds.items())
         )
         net = ", ".join(self.net_candidates) if self.net_candidates else "unidentified"
-        return f"Deconstruction({summary}; net: {net})"
+        fold = f"; {self.n_periodic_components}-fold" if self.is_catenated else ""
+        return f"Deconstruction({summary}; net: {net}{fold})"
 
 
 def write_fragments_xyz(fragments: dict[str, Fragment], path: str | Path) -> Path:
@@ -492,12 +512,12 @@ def deconstruct(
         keep = sorted(set(range(len(structure))) - guest_atoms)
         structure = Structure.from_sites([structure[i] for i in keep])
         bonds = _structure_bond_graph(structure)
+    # the remaining connected components are the periodic subframeworks
+    # (all guests are gone); more than one means interpenetration. Each
+    # is identified independently below
+    periodic_components = [set(c) for c in networkx.connected_components(bonds)]
     if n_periodic > 1:
-        logger.warning(
-            f"{n_periodic} interpenetrated subframeworks detected; "
-            "building units are extracted from all of them and net "
-            "identification assumes they realize the same net."
-        )
+        logger.info(f"\t[x] {n_periodic} interpenetrated subframeworks detected.")
 
     node_atoms = _node_atoms(structure, bonds)
     units = _unit_partition(bonds, node_atoms)
@@ -582,11 +602,34 @@ def deconstruct(
         unit_graph.add_edge(u, v)
     quotient_edges = framework_quotient_edges(Framework(unit_graph, name="units"))
 
+    # split the quotient graph per interpenetrated subframework and
+    # identify each independently: a cut joins two bonded units, so
+    # both endpoints share a periodic component and no edge crosses
+    # the split
+    cell = unit_graph.graph["cell"]
+    subframework_nets: list[list[str]] = []
+    for comp in periodic_components:
+        sub = unit_graph.subgraph(comp).copy()
+        sub.graph["cell"] = cell
+        sub_edges = framework_quotient_edges(Framework(sub, name="subframework"))
+        if topologies is not None:
+            subframework_nets.append(identify_net(sub_edges, topologies))
+
     net_candidates: list[str] = []
     if topologies is not None:
-        net_candidates = identify_net(quotient_edges, topologies)
+        # consensus: the candidates common to every subframework
+        common = set(subframework_nets[0])
+        for nets in subframework_nets[1:]:
+            common &= set(nets)
+        net_candidates = sorted(common)
+        if n_periodic > 1 and not net_candidates:
+            logger.warning(
+                f"interpenetrated subframeworks identify different nets "
+                f"({subframework_nets}); no consensus net."
+            )
         logger.info(
-            f"\t[x] net candidates: {', '.join(net_candidates) or 'none found'}."
+            f"\t[x] net candidates: {', '.join(net_candidates) or 'none found'}"
+            f"{f' ({n_periodic}-fold)' if n_periodic > 1 else ''}."
         )
 
     return Deconstruction(
@@ -596,5 +639,6 @@ def deconstruct(
         quotient_edges=quotient_edges,
         net_candidates=net_candidates,
         n_periodic_components=n_periodic,
+        subframework_nets=subframework_nets,
         guest_formulas=sorted(guest_formulas),
     )
