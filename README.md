@@ -660,6 +660,32 @@ metal atom. Rod MOFs (1-periodic units) and metal-free frameworks
 structures are deconstructed with a warning, assuming all
 subframeworks realize the same net.
 
+#### Harvesting a library from many structures
+
+`harvest` runs `deconstruct` over a batch — a directory of CIFs, a
+glob, or an iterable of paths/Structures — and merges the building
+units into one deduplicated, library-ready fragment set. The same
+paddlewheel appearing in fifty MOFs becomes one fragment tagged with
+every source it came from; deconstruction failures are recorded rather
+than aborting the run, so a real success rate falls out:
+
+```python
+result = mofgen.harvest("core_mof_subset/")
+
+result.report()          # 'harvested 34 fragments (...) from 47/50 structures, 3 failed'
+result.building_units    # nodes + linkers (bound-solvent caps excluded)
+result.provenance        # {'node_C4O8Zn2_4X': ['HKUST-1', 'MOF-505', ...], ...}
+result.nets              # {'HKUST-1': ['tbo'], ...}  per-source net candidates
+result.failures          # {'disordered_entry': 'DeconstructionError: ...', ...}
+
+result.write_xyz("harvested_sbus.xyz")          # nodes + linkers by default
+mofgen2 = Autografs(xyzfile="harvested_sbus.xyz")   # build with the harvest
+```
+
+Monotopic organic units (a single connection point — bound solvent,
+modulators, capping residues) are classified `cap` and excluded from
+the default `write_xyz` output and the `building_units` view.
+
 ### Error handling
 
 All library exceptions derive from `autografs.AutografsError`:

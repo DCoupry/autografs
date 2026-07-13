@@ -54,6 +54,7 @@ __all__ = [
     "utils",
     "alignment",
     "deconstruct",
+    "harvest",
     "fragment",
     "framework",
     "framework_io",
@@ -69,6 +70,7 @@ __all__ = [
     "AutografsError",
     "Deconstruction",
     "DeconstructionError",
+    "HarvestResult",
     "Fragment",
     "Framework",
     "NetMismatchError",
@@ -95,6 +97,7 @@ from autografs.exceptions import (
 )
 from autografs.fragment import Fragment
 from autografs.framework import Framework
+from autografs.harvest import HarvestResult
 from autografs.topology import Topology
 
 # Add NullHandler to prevent "No handler found" warnings
