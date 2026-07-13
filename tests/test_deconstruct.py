@@ -222,12 +222,67 @@ class TestCatenation:
         assert "2-fold" in repr(result)
 
 
-class TestErrors:
-    def test_metal_free_framework_rejected(self, mofgen):
-        layer = build(mofgen, "hcb", {3: "Boroxine_triangle", 2: "Benzene_linear"})
-        with pytest.raises(DeconstructionError, match="[Nn]o metal"):
-            deconstruct(layer.structure)
+class TestCOF:
+    """Metal-free frameworks take the branch-point path."""
 
+    def test_2d_boroxine_cof_round_trip(self, mofgen):
+        cof = build(mofgen, "hcb", {3: "Boroxine_triangle", 2: "Benzene_linear"})
+        result = mofgen.deconstruct(cof.structure)
+        assert result.net_candidates == ["hcb"]
+        # boroxine ring is the 3-c node, benzene the 2-c linker
+        assert "node_B3O3_3X" in result.fragments
+        assert "linker_C6H4_2X" in result.fragments
+        assert len(result.fragments["node_B3O3_3X"].atoms.indices_from_symbol("X")) == 3
+        # rebuild from the extracted fragments and confirm the net
+        topology = mofgen.topologies["hcb"]
+        mappings = {
+            key: result.fragments[
+                {3: "node_B3O3_3X", 2: "linker_C6H4_2X"}[
+                    len(key.atoms.indices_from_symbol("X"))
+                ]
+            ]
+            for key in topology.mappings
+        }
+        rebuilt = mofgen.build(topology, mappings=mappings, max_rmsd=0.6)
+        rebuilt.verify_net(topology)
+
+    def test_3d_organic_srs(self, mofgen):
+        cof = build(
+            mofgen,
+            "srs",
+            {3: "Boroxine_triangle", 2: "Benzene_linear"},
+            max_rmsd=0.6,
+        )
+        result = mofgen.deconstruct(cof.structure)
+        assert result.net_candidates == ["srs"]
+        assert all(unit.kind in ("node", "linker") for unit in result.units)
+
+    def test_3d_organic_tetrahedral_dia(self, mofgen):
+        cof = build(
+            mofgen,
+            "dia",
+            {4: "N66_tetrahedral", 2: "Benzene_linear"},
+            max_rmsd=0.7,
+        )
+        result = mofgen.deconstruct(cof.structure)
+        assert result.net_candidates == ["dia"]
+        node = next(unit for unit in result.units if unit.kind == "node")
+        assert node.n_connections == 4
+
+    def test_metal_path_unaffected(self, mofgen):
+        """A metal MOF still uses metal-oxo clustering, not branch points."""
+        mof = build(
+            mofgen,
+            "pcu",
+            {6: "Zn_mof5_octahedral", 2: "Benzene_linear"},
+            refine_cell=True,
+        )
+        result = mofgen.deconstruct(mof.structure)
+        assert result.net_candidates == ["pcu"]
+        assert "node_C6O13Zn4_6X" in result.fragments
+
+
+class TestErrors:
     def test_molecular_crystal_rejected(self):
         structure = Structure(Lattice.cubic(20.0), ["He"], [[0.5, 0.5, 0.5]])
         with pytest.raises(DeconstructionError, match="periodic component"):

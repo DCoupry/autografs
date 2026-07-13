@@ -132,12 +132,24 @@ class TestHarvestRobustness:
         assert result.n_processed == 1
         assert "bad" in result.failures
 
-    def test_metal_free_structure_recorded_as_failure(self, mofgen, tmp_path):
+    def test_metal_free_cof_is_harvested(self, mofgen, tmp_path):
+        """A COF is metal-free but now deconstructs via branch points."""
         cof = build(mofgen, "hcb", {3: "Boroxine_triangle", 2: "Benzene_linear"})
         cof.write_cif(tmp_path / "cof.cif")
         result = mofgen.harvest(tmp_path)
+        assert result.n_processed == 1
+        assert "node_B3O3_3X" in result.building_units
+        assert result.nets["cof"] == ["hcb"]
+
+    def test_molecular_crystal_recorded_as_failure(self, mofgen, tmp_path):
+        from pymatgen.core.lattice import Lattice
+        from pymatgen.core.structure import Structure
+
+        guest = Structure(Lattice.cubic(20.0), ["He"], [[0.5, 0.5, 0.5]])
+        guest.to(filename=str(tmp_path / "guest.cif"))
+        result = mofgen.harvest(tmp_path)
         assert result.n_processed == 0
-        assert "DeconstructionError" in result.failures["cof"]
+        assert "DeconstructionError" in result.failures["guest"]
 
     def test_report_mentions_failures(self, mofgen, tmp_path):
         (tmp_path / "junk.cif").write_text("garbage\n")

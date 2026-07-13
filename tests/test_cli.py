@@ -224,21 +224,16 @@ class TestDeconstructWizard:
         deconstruct_wizard(session)
         assert "No such file" in capsys.readouterr().out
 
-    def test_metal_free_refusal_is_caught(
-        self, monkeypatch, session, mofgen, tmp_path, capsys
-    ):
+    def test_refusal_is_caught(self, monkeypatch, session, tmp_path, capsys):
+        from pymatgen.core.lattice import Lattice
+        from pymatgen.core.structure import Structure
+
         from autografs.cli import deconstruct_wizard
 
-        topology = mofgen.topologies["hcb"]
-        mappings = {
-            key: {3: "Boroxine_triangle", 2: "Benzene_linear"}[
-                len(key.atoms.indices_from_symbol("X"))
-            ]
-            for key in topology.mappings
-        }
-        cof = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
-        path = tmp_path / "cof.cif"
-        cof.write_cif(path)
+        # a molecular crystal has no periodic framework to deconstruct
+        guest = Structure(Lattice.cubic(20.0), ["He"], [[0.5, 0.5, 0.5]])
+        path = tmp_path / "guest.cif"
+        guest.to(filename=str(path))
         _script(monkeypatch, path=[str(path)])
         deconstruct_wizard(session)  # must not raise
         assert "Could not deconstruct" in capsys.readouterr().out

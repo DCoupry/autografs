@@ -7,12 +7,12 @@ the labeled quotient graph of its underlying net:
 
 1. bond detection with the same EconNN strategy the builder uses;
 2. free guests (0-periodic components) removed;
-3. atoms clustered into building units under the *metal-oxo*
-   convention: metal clusters keep their inorganic coordination
-   sphere and oxo-acid binding groups (carboxylate, phosphonate,
-   sulfonate), so bonds are cut at the carboxylate-to-backbone
-   carbon-carbon bond and at metal-to-donor bonds of N/S/O-donor
-   linkers - exactly the granularity of the shipped SBU library;
+3. atoms clustered into building units - the *metal-oxo* convention
+   for MOFs (metal clusters keep their inorganic coordination sphere
+   and oxo-acid binding groups: carboxylate, phosphonate, sulfonate,
+   so bonds are cut at the carboxylate-to-backbone carbon-carbon bond
+   and at metal-to-donor bonds), or *branch-point* analysis for
+   metal-free frameworks (see below);
 4. every cut bond becomes a dummy atom ("X") at the bond midpoint on
    both sides, yielding Fragments the builder can consume directly;
 5. building units collapse to quotient graph vertices, cut bonds to
@@ -27,21 +27,29 @@ the labeled quotient graph of its underlying net:
 {'node_C6O13Zn4_6X': ..., 'linker_C6H4_2X': ...}
 >>> result.write_xyz("harvested_sbus.xyz")   # feed back into Autografs
 
+Metal-free frameworks (COFs) take a branch-point path instead of
+metal-oxo clustering: rigid ring systems and non-ring atoms collapse
+to super-vertices, and a super-vertex's external connection count
+decides its role (>=3 a node, 2 a linker body, 1 a cap). Ring
+perception runs as a bounded zero-voltage cycle search on the periodic
+graph, so it needs no global unwrap. This is the *single-node*
+convention; a node bundled differently in the original SBU library
+(e.g. a triphenylamine core split at its central atom) may come back
+more finely divided, but the recovered net is the same.
+
 Interpenetrated (catenated) structures are handled: each periodic
 subframework is a separate connected component, identified on its own,
 with the fold reported as ``n_periodic_components`` and the per-net
 results in ``subframework_nets``.
 
-Scope: frameworks with molecular (0-periodic) building units and at
-least one metal atom. Rod MOFs (1-periodic units) and metal-free
-frameworks (COFs, where cutting requires branch-point analysis
-instead of metal detection) raise DeconstructionError.
+Scope: frameworks with molecular (0-periodic) building units. Rod MOFs
+and 1-periodic (chain) units raise DeconstructionError.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -401,6 +409,155 @@ def _unit_partition(bonds: networkx.MultiGraph, node_atoms: set[int]) -> list[se
     return units
 
 
+# longest molecular ring the branch-point analysis perceives; 6-rings
+# (benzene, triazine, boroxine) and their fused/bridged relatives all
+# fall well under this, and the bound keeps the per-bond cycle search
+# cheap on the periodic graph
+BOND_RING_MAX = 8
+
+_Voltage = tuple[int, int, int]
+
+
+def _ring_bonds(
+    bonds: networkx.MultiGraph, heavy: set[int], max_ring: int = BOND_RING_MAX
+) -> set[tuple[int, int, _Voltage]]:
+    """Heavy-atom bonds that lie on a molecular (zero-voltage) ring.
+
+    A bond is a ring bond when its endpoints are joined by an
+    alternate path of at most ``max_ring`` - 1 further hops whose
+    voltages sum to the bond's own voltage - i.e. a small cycle that
+    closes within one unit cell rather than wrapping the lattice. The
+    search runs in the periodic graph's infinite unfolding (states are
+    (atom, image) pairs), so it needs no global unwrap and never
+    splits a ring that straddles a cell boundary.
+    """
+    adjacency: dict[int, list[tuple[int, _Voltage]]] = defaultdict(list)
+    edges: list[tuple[int, int, _Voltage]] = []
+    for u, v, data in bonds.edges(data=True):
+        if u not in heavy or v not in heavy:
+            continue
+        offset = _jimage_from(u, v, data["to_jimage"])
+        voltage = (int(offset[0]), int(offset[1]), int(offset[2]))
+        adjacency[u].append((v, voltage))
+        adjacency[v].append((u, (-voltage[0], -voltage[1], -voltage[2])))
+        edges.append((u, v, voltage))
+    ring_bonds: set[tuple[int, int, _Voltage]] = set()
+    for u, v, voltage in edges:
+        back = (-voltage[0], -voltage[1], -voltage[2])
+        target = (v, voltage)
+        seen = {(u, (0, 0, 0))}
+        frontier: deque[tuple[tuple[int, _Voltage], int]] = deque([((u, (0, 0, 0)), 0)])
+        found = False
+        while frontier and not found:
+            (atom, image), depth = frontier.popleft()
+            if depth >= max_ring - 1:
+                continue
+            for neighbor, step in adjacency[atom]:
+                # remove the bond under test (and any parallel copy) so
+                # only a genuine detour can reach the target
+                if (atom == u and neighbor == v and step == voltage) or (
+                    atom == v and neighbor == u and step == back
+                ):
+                    continue
+                new_image = (
+                    image[0] + step[0],
+                    image[1] + step[1],
+                    image[2] + step[2],
+                )
+                state = (neighbor, new_image)
+                if state == target:
+                    found = True
+                    break
+                if state not in seen:
+                    seen.add(state)
+                    frontier.append((state, depth + 1))
+        if found:
+            ring_bonds.add((u, v, voltage))
+    return ring_bonds
+
+
+def _organic_units(
+    structure: Structure, bonds: networkx.MultiGraph
+) -> tuple[list[set[int]], set[int]]:
+    """Branch-point clustering for metal-free frameworks (COFs).
+
+    The single-node convention: rigid ring systems and non-ring atoms
+    are collapsed to super-vertices, and a super-vertex's external
+    connection count decides its role - three or more make it a *node*
+    (a branch point of the underlying net), two make it part of a
+    *linker* strut, one a terminal *cap*. Cuts fall on the bonds
+    leaving a node, so a linker keeps every 2-connected fragment along
+    its length (a biphenyl bridge stays one unit).
+
+    Returns the atom partition and the set of atoms belonging to nodes
+    (kept parallel to the metal-oxo path so the rest of the pipeline is
+    shared).
+    """
+    symbols = [site.specie.symbol for site in structure]
+    heavy = {i for i in bonds.nodes if symbols[i] != "H"}
+    if not heavy:
+        raise DeconstructionError(
+            "The framework has no heavy atoms to cluster into building units."
+        )
+
+    # rigid ring systems become single super-vertices; every other
+    # heavy atom is its own super-vertex
+    ring_graph = networkx.Graph()
+    ring_graph.add_nodes_from(heavy)
+    for u, v, _ in _ring_bonds(bonds, heavy):
+        ring_graph.add_edge(u, v)
+    super_of: dict[int, int] = {}
+    super_atoms: dict[int, set[int]] = {}
+    for super_id, component in enumerate(networkx.connected_components(ring_graph)):
+        super_atoms[super_id] = set(component)
+        for atom in component:
+            super_of[atom] = super_id
+
+    # external connections per super-vertex (bonds crossing super-vertices)
+    super_degree: Counter[int] = Counter()
+    for u, v, _ in bonds.edges(data=True):
+        if u in heavy and v in heavy and super_of[u] != super_of[v]:
+            super_degree[super_of[u]] += 1
+            super_degree[super_of[v]] += 1
+    node_supers = {sid for sid in super_atoms if super_degree[sid] >= 3}
+
+    units: list[set[int]] = []
+    node_unit_indices: set[int] = set()
+    for sid in node_supers:
+        node_unit_indices.add(len(units))
+        units.append(set(super_atoms[sid]))
+    # linkers/caps: connected runs of non-node super-vertices, joined by
+    # the super-edges that do not touch a node
+    linker_graph = networkx.Graph()
+    linker_graph.add_nodes_from(sid for sid in super_atoms if sid not in node_supers)
+    for u, v, _ in bonds.edges(data=True):
+        if u in heavy and v in heavy:
+            su, sv = super_of[u], super_of[v]
+            if su != sv and su not in node_supers and sv not in node_supers:
+                linker_graph.add_edge(su, sv)
+    for component in networkx.connected_components(linker_graph):
+        atoms: set[int] = set()
+        for sid in component:
+            atoms |= super_atoms[sid]
+        units.append(atoms)
+
+    # hydrogens ride with their heavy neighbour's unit
+    atom_unit = {atom: k for k, unit in enumerate(units) for atom in unit}
+    for i in bonds.nodes:
+        if symbols[i] != "H":
+            continue
+        heavy_neighbours = [j for j in bonds.neighbors(i) if j in heavy]
+        if heavy_neighbours:
+            units[atom_unit[heavy_neighbours[0]]].add(i)
+        else:
+            units.append({i})
+
+    node_atoms: set[int] = set()
+    for k in node_unit_indices:
+        node_atoms |= units[k]
+    return units, node_atoms
+
+
 def _unwrap_unit(
     structure: Structure, bonds: networkx.MultiGraph, unit: set[int]
 ) -> dict[int, np.ndarray]:
@@ -519,8 +676,13 @@ def deconstruct(
     if n_periodic > 1:
         logger.info(f"\t[x] {n_periodic} interpenetrated subframeworks detected.")
 
-    node_atoms = _node_atoms(structure, bonds)
-    units = _unit_partition(bonds, node_atoms)
+    # metal-oxo clustering for MOFs; branch-point analysis for
+    # metal-free frameworks (COFs), which have no metal to anchor cuts
+    if any(_is_metal(structure, i) for i in bonds.nodes):
+        node_atoms = _node_atoms(structure, bonds)
+        units = _unit_partition(bonds, node_atoms)
+    else:
+        units, node_atoms = _organic_units(structure, bonds)
     atom_to_unit = {atom: k for k, unit in enumerate(units) for atom in unit}
 
     # cut bonds join two different units by construction
