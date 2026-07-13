@@ -654,11 +654,23 @@ its edge-decorated derivatives), then against the underlying
 2-coordination-suppressed net. Multiple candidates are returned as a
 list rather than silently picking one.
 
+Interpenetrated (catenated) structures are handled: each periodic
+subframework is a separate connected component, identified on its own,
+so `n_periodic_components` gives the fold and `subframework_nets` the
+per-net results. `net_candidates` is their consensus, and
+`is_catenated` is a convenience flag:
+
+```python
+result = mofgen.deconstruct("IRMOF-9.cif")   # 2-fold interpenetrated pcu
+result.n_periodic_components   # 2
+result.subframework_nets       # [['pcu'], ['pcu']]
+result.net_candidates          # ['pcu']   (consensus)
+result.is_catenated            # True
+```
+
 Scope: frameworks with molecular building units and at least one
 metal atom. Rod MOFs (1-periodic units) and metal-free frameworks
-(COFs) raise `DeconstructionError` for now; interpenetrated
-structures are deconstructed with a warning, assuming all
-subframeworks realize the same net.
+(COFs) raise `DeconstructionError` for now.
 
 #### Harvesting a library from many structures
 
