@@ -39,7 +39,8 @@ def build(mofgen, topo_name, choices, **kwargs):
     for key in topology.mappings:
         conn = len(key.atoms.indices_from_symbol("X"))
         mappings[key] = choices[conn]
-    return mofgen.build(topology, mappings=mappings, max_rmsd=0.5, **kwargs)
+    kwargs.setdefault("max_rmsd", 0.5)
+    return mofgen.build(topology, mappings=mappings, **kwargs)
 
 
 @pytest.fixture(scope="module")
@@ -188,6 +189,37 @@ class TestPaddlewheel:
         assert "node_C4O8Zn2_4X" in result.fragments
         node = result.fragments["node_C4O8Zn2_4X"]
         assert len(node.atoms.indices_from_symbol("X")) == 4
+
+
+class TestCatenation:
+    @pytest.fixture(scope="class")
+    def dia(self, mofgen):
+        # a sparse dia (long linker) so a second net fits without clashes
+        return build(
+            mofgen,
+            "dia",
+            {4: "CdGaS_cluster_tetrahedral", 2: "Bis_phenylethynylbenzene_linear"},
+            max_rmsd=0.6,
+        )
+
+    def test_single_framework_is_not_catenated(self, mofgen, dia):
+        result = mofgen.deconstruct(dia.structure)
+        assert result.n_periodic_components == 1
+        assert result.is_catenated is False
+        assert result.subframework_nets == [["dia"]]
+        assert result.net_candidates == ["dia"]
+
+    def test_two_fold_interpenetration_detected(self, mofgen, dia):
+        catenated = dia.interpenetrate(2)
+        result = mofgen.deconstruct(catenated.structure)
+        assert result.n_periodic_components == 2
+        assert result.is_catenated is True
+        # each subframework identified independently...
+        assert result.subframework_nets == [["dia"], ["dia"]]
+        # ...and the consensus is the single realized net
+        assert result.net_candidates == ["dia"]
+        # the fold is surfaced in the repr
+        assert "2-fold" in repr(result)
 
 
 class TestErrors:
