@@ -68,6 +68,8 @@ __all__ = [
     "BuildingUnit",
     "Deconstruction",
     "deconstruct",
+    "merge_fragment",
+    "write_fragments_xyz",
 ]
 
 logger = logging.getLogger(__name__)
@@ -153,20 +155,7 @@ class Deconstruction:
         ``X``) and loads back with Autografs(xyzfile=...) or
         autografs.utils.xyz_to_sbu.
         """
-        lines: list[str] = []
-        for name, fragment in self.fragments.items():
-            atoms = fragment.atoms
-            lines.append(str(len(atoms)))
-            lines.append(f'name={name} pbc="F F F"')
-            for site in atoms:
-                x, y, z = site.coords
-                lines.append(
-                    f"{site.specie.symbol:<2} {x:>15.8f} {y:>15.8f} {z:>15.8f}"
-                )
-        out_path = Path(path)
-        out_path.write_text("\n".join(lines) + "\n")
-        logger.info(f"\t[x] wrote {len(self.fragments)} fragments to {out_path}")
-        return out_path
+        return write_fragments_xyz(self.fragments, path)
 
     def __repr__(self) -> str:
         kinds = Counter(unit.kind for unit in self.units)
@@ -175,6 +164,54 @@ class Deconstruction:
         )
         net = ", ".join(self.net_candidates) if self.net_candidates else "unidentified"
         return f"Deconstruction({summary}; net: {net})"
+
+
+def write_fragments_xyz(fragments: dict[str, Fragment], path: str | Path) -> Path:
+    """Write a fragment library as a multi-structure XYZ file.
+
+    The output follows the shipped library convention (an atom count
+    line, a comment line carrying ``name=``, dummies as ``X``) and
+    loads back with Autografs(xyzfile=...) or autografs.utils.xyz_to_sbu.
+    """
+    lines: list[str] = []
+    for name, fragment in fragments.items():
+        atoms = fragment.atoms
+        lines.append(str(len(atoms)))
+        lines.append(f'name={name} pbc="F F F"')
+        for site in atoms:
+            x, y, z = site.coords
+            lines.append(f"{site.specie.symbol:<2} {x:>15.8f} {y:>15.8f} {z:>15.8f}")
+    out_path = Path(path)
+    out_path.write_text("\n".join(lines) + "\n")
+    logger.info(f"\t[x] wrote {len(fragments)} fragments to {out_path}")
+    return out_path
+
+
+def merge_fragment(
+    library: dict[str, Fragment], instance: Fragment, base_name: str
+) -> str:
+    """Add ``instance`` to ``library`` under a deduplicated name.
+
+    An instance geometrically identical (arm-direction RMSD within
+    DEDUPLICATION_MAX_RMSD) to an existing entry of the same base name
+    reuses that entry's name; a genuinely different shape sharing the
+    base name gets a numeric suffix. The library is mutated in place;
+    the resolved name is returned. Used both within one deconstruction
+    and to merge fragments harvested across many structures.
+    """
+    name = base_name
+    suffix = 1
+    while name in library:
+        if library[name].has_compatible_symmetry(
+            instance, max_rmsd=DEDUPLICATION_MAX_RMSD
+        ):
+            return name
+        suffix += 1
+        name = f"{base_name}_{suffix}"
+    typed = instance.copy()
+    typed.name = name
+    library[name] = typed
+    return name
 
 
 def _hill_formula(symbols: Iterable[str]) -> str:
@@ -518,19 +555,7 @@ def deconstruct(
             kind = "cap"
         real_formula = _hill_formula(structure[i].specie.symbol for i in unit)
         base_name = f"{kind}_{real_formula}_{n_connections}X"
-        name = base_name
-        suffix = 1
-        while name in fragments:
-            if fragments[name].has_compatible_symmetry(
-                instance, max_rmsd=DEDUPLICATION_MAX_RMSD
-            ):
-                break
-            suffix += 1
-            name = f"{base_name}_{suffix}"
-        if name not in fragments:
-            typed = instance.copy()
-            typed.name = name
-            fragments[name] = typed
+        name = merge_fragment(fragments, instance, base_name)
         built_units.append(
             BuildingUnit(
                 name=name,

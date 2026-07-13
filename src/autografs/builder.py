@@ -44,6 +44,7 @@ from tqdm.auto import tqdm
 import autografs.alignment
 import autografs.data
 import autografs.deconstruct
+import autografs.harvest
 import autografs.topology_io
 import autografs.utils
 from autografs.exceptions import AlignmentError, OverlapError
@@ -843,3 +844,35 @@ class Autografs:
         >>> result.write_xyz("harvested_sbus.xyz")
         """
         return autografs.deconstruct.deconstruct(source, topologies=self.topologies)
+
+    def harvest(
+        self,
+        sources: Structure | str | Path | Iterable[Structure | str | Path],
+    ) -> autografs.harvest.HarvestResult:
+        """Harvest a deduplicated SBU library from many structures.
+
+        Runs :meth:`deconstruct` over a batch (a directory of CIFs, a
+        glob, or an iterable of paths/Structures) and merges the
+        building units into one library-ready fragment set, keeping
+        per-fragment provenance and a failure report. See
+        autografs.harvest for details.
+
+        Parameters
+        ----------
+        sources : path, Structure, or iterable of them
+            A directory (its ``.cif`` files are globbed), a glob
+            pattern, a single CIF path or Structure, or an iterable
+            mixing them.
+
+        Returns
+        -------
+        HarvestResult
+            Deduplicated fragments, provenance, per-source nets and
+            failures.
+
+        Examples
+        --------
+        >>> result = mofgen.harvest("core_mof_subset/")
+        >>> result.write_xyz("harvested.xyz")
+        """
+        return autografs.harvest.harvest(sources, topologies=self.topologies)
