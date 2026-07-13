@@ -36,6 +36,12 @@ class NetMismatchError(AutografsError):
     wrong periodic image)."""
 
 
+class DeconstructionError(AutografsError):
+    """Raised when a structure cannot be deconstructed into building
+    units (no metal atoms, disordered input, or rod-like/polymeric
+    units that have no molecular fragment representation)."""
+
+
 class RelaxationError(AutografsError):
     """Raised when the optional LAMMPS relaxation backend is missing
     or a framework cannot be relaxed."""

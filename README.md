@@ -294,6 +294,7 @@ flowchart LR
         LB["list_building_units(sieve=net)"]
         BD["build(topology, mappings, gates)"]
         BA["build_all(subsets, sampling, n_jobs)"]
+        DC["deconstruct(cif) &rarr; SBUs + net"]
     end
     subgraph TP["Topology"]
         TM["mappings: slot type &rarr; slot indices"]
@@ -341,6 +342,10 @@ src/autografs/
 │                    min_contact, stack, relax, post-build editing API
 ├── editing.py       post-build editing: supercells, statistical
 │                    defects, placed-SBU rotation/flip, functionalize
+├── net.py           quotient graphs: net verification + identification
+├── deconstruct.py   inverse pipeline: CIF → SBUs + net candidates
+├── porosity.py      grid-based porosity descriptors
+├── framework_io.py  Framework save/load
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
@@ -365,6 +370,10 @@ flowchart TD
     builder --> topology_io
     builder --> framework
     builder --> utils
+    builder --> deconstruct
+    deconstruct --> net
+    deconstruct --> framework
+    deconstruct --> utils
     framework -. "lazy import" .-> editing
     editing --> framework
     editing --> utils
@@ -607,6 +616,49 @@ atoms get UFF4MOF types from their local environment — edited
 frameworks stay valid inputs for `relax()`, `min_contact()` and every
 export. Since defects and grafts distort nothing else, a final
 `relax()` is the recommended clean-up for production structures.
+
+### Deconstruction: from a crystal structure back to SBUs + net
+
+The inverse pipeline. `deconstruct` takes an experimental structure (a
+CIF file or a pymatgen `Structure`), detects bonds with the same
+strategy the builder uses, removes free guests, clusters atoms into
+building units under the *metal-oxo* convention (metal clusters keep
+their inorganic coordination sphere and their carboxylate /
+phosphonate / sulfonate binding groups — the same granularity as the
+shipped SBU library), places a dummy at every cut bond, and matches
+the resulting quotient graph against the topology library by
+coordination-sequence signature:
+
+```python
+result = mofgen.deconstruct("IRMOF-1.cif")
+
+result.net_candidates       # ['pcu']
+result.fragments            # {'node_C6O13Zn4_6X': ..., 'linker_C6H4_2X': ...}
+result.units                # every placed unit: kind (node/linker/cap),
+                            # atom indices, connection count
+result.guest_formulas       # compositions of removed free solvent
+result.write_xyz("harvested_sbus.xyz")   # library-ready SBU file
+```
+
+The extracted fragments are ordinary `Fragment` objects with `X`
+dummies at the cut-bond midpoints, so they feed straight back into the
+build pipeline — `Autografs(xyzfile="harvested_sbus.xyz")` or passing
+them directly in `build` mappings both work, which makes a full
+deconstruct → rebuild → `verify_net` round trip possible.
+
+Net identification is signature-based (the multiset of per-vertex
+coordination sequences, computed on the quotient graph with capping
+ligands pruned): an almost-unique invariant matched in two tiers,
+first with ditopic linkers counted as vertices (separating a net from
+its edge-decorated derivatives), then against the underlying
+2-coordination-suppressed net. Multiple candidates are returned as a
+list rather than silently picking one.
+
+Scope: frameworks with molecular building units and at least one
+metal atom. Rod MOFs (1-periodic units) and metal-free frameworks
+(COFs) raise `DeconstructionError` for now; interpenetrated
+structures are deconstructed with a warning, assuming all
+subframeworks realize the same net.
 
 ### Error handling
 

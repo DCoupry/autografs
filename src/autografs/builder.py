@@ -37,11 +37,13 @@ from pathlib import Path
 
 import dill
 import numpy as np
+from pymatgen.core.structure import Structure
 from scipy.optimize import minimize
 from tqdm.auto import tqdm
 
 import autografs.alignment
 import autografs.data
+import autografs.deconstruct
 import autografs.topology_io
 import autografs.utils
 from autografs.exceptions import AlignmentError, OverlapError
@@ -809,3 +811,35 @@ class Autografs:
                 if slot_type not in out_dict:
                     logger.info(f"\t[!] {0:>5} SBU available for slot {slot_type}")
         return out_dict
+
+    def deconstruct(
+        self, source: Structure | str | Path
+    ) -> autografs.deconstruct.Deconstruction:
+        """Deconstruct a structure into SBUs and identify its net.
+
+        The inverse pipeline: bonds are detected with the builder's
+        own strategy, atoms are clustered into metal-oxo building
+        units, cut bonds become dummy atoms, and the resulting
+        quotient graph is matched against this instance's topology
+        library. See autografs.deconstruct for details and scope.
+
+        Parameters
+        ----------
+        source : Structure or str or Path
+            A pymatgen Structure, or the path of any structure file
+            pymatgen reads (CIF included).
+
+        Returns
+        -------
+        Deconstruction
+            Library-ready fragments, placed units, quotient graph and
+            net candidates.
+
+        Examples
+        --------
+        >>> result = mofgen.deconstruct("IRMOF-1.cif")
+        >>> result.net_candidates
+        ['pcu']
+        >>> result.write_xyz("harvested_sbus.xyz")
+        """
+        return autografs.deconstruct.deconstruct(source, topologies=self.topologies)

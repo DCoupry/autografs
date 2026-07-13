@@ -43,7 +43,7 @@ import numpy as np
 from pymatgen.analysis.graphs import MoleculeGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_order
-from pymatgen.core.structure import Molecule
+from pymatgen.core.structure import Molecule, Structure
 from pymatgen.io.xyz import XYZ
 
 from autografs.data.uff4mof import UFF4MOF, UFFType
@@ -233,7 +233,7 @@ def _uff_types_for_prefix(prefix: str) -> tuple[UFFType, ...]:
     return tuple(t for t in UFF4MOF if t.symbol.startswith(prefix))
 
 
-def load_uff_lib(mol: Molecule) -> tuple[tuple[UFFType, ...], list[str]]:
+def load_uff_lib(mol: Molecule | Structure) -> tuple[tuple[UFFType, ...], list[str]]:
     """Load UFF force field parameters relevant to a molecule.
 
     Extracts UFF4MOF parameters for elements present in the molecule,
@@ -241,8 +241,8 @@ def load_uff_lib(mol: Molecule) -> tuple[tuple[UFFType, ...], list[str]]:
 
     Parameters
     ----------
-    mol : Molecule
-        A pymatgen Molecule object.
+    mol : Molecule or Structure
+        A pymatgen Molecule (or Structure, for deconstruction).
 
     Returns
     -------
