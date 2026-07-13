@@ -53,6 +53,7 @@ __status__ = "production"
 __all__ = [
     "utils",
     "alignment",
+    "deconstruct",
     "fragment",
     "framework",
     "framework_io",
@@ -66,6 +67,8 @@ __all__ = [
     "Autografs",
     "AlignmentError",
     "AutografsError",
+    "Deconstruction",
+    "DeconstructionError",
     "Fragment",
     "Framework",
     "NetMismatchError",
@@ -81,9 +84,11 @@ import logging
 # so importing the module itself is cheap and always safe
 from autografs import framework_io, net, porosity, relax
 from autografs.builder import Autografs
+from autografs.deconstruct import Deconstruction
 from autografs.exceptions import (
     AlignmentError,
     AutografsError,
+    DeconstructionError,
     NetMismatchError,
     OverlapError,
     RelaxationError,

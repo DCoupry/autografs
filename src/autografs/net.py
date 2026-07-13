@@ -1,11 +1,12 @@
 """
-Net verification: does a built framework realize its blueprint?
+Net verification and identification on labeled quotient graphs.
 
-The build gates check geometry (``max_rmsd``) and overlap
-(``min_distance``), but neither verifies that the output actually
-realizes the requested topology - mis-paired tags or a bond through
-the wrong periodic image would pass both while building a different
-net. This module closes that gap by comparing labeled quotient graphs.
+Verification: does a built framework realize its blueprint? The build
+gates check geometry (``max_rmsd``) and overlap (``min_distance``),
+but neither verifies that the output actually realizes the requested
+topology - mis-paired tags or a bond through the wrong periodic image
+would pass both while building a different net. Comparing labeled
+quotient graphs closes that gap.
 
 Both a Topology and a built Framework reduce to the same object: one
 node per slot, and one edge per inter-slot bond carrying an integer
@@ -17,12 +18,31 @@ comparison of canonicalized edges - no graph isomorphism search.
 
 >>> mof = mofgen.build(topology, mappings, verify_net=True)   # gated
 >>> mof.verify_net(topology)                                  # explicit
+
+Identification: which library net does an *unlabeled* quotient graph
+realize? Deconstruction (autografs.deconstruct) produces a quotient
+graph with arbitrary node ids, so the multiset comparison above does
+not apply. Instead each net is reduced to a cell-choice-invariant
+signature - the multiset of per-vertex coordination sequences of the
+underlying periodic graph, with 1-coordinated vertices (caps) pruned
+and 2-coordinated vertices (edge centers, ditopic linkers) contracted
+first - and matched against signatures computed the same way from the
+topology library. This is the CrystalNets/ToposPro approach:
+coordination sequences are not a proof of isomorphism, but they are an
+almost-unique invariant across known net archives, and matching is
+against a fixed library, so collisions surface as multiple candidates
+rather than silent errors.
+
+>>> identify_net(framework_quotient_edges(mof), mofgen.topologies)
+['pcu']
 """
 
 from __future__ import annotations
 
+import functools
 import logging
-from collections import Counter
+import math
+from collections import Counter, defaultdict
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -30,6 +50,8 @@ import numpy as np
 from autografs.exceptions import NetMismatchError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from autografs.framework import Framework
     from autografs.topology import Topology
 
@@ -37,6 +59,9 @@ __all__ = [
     "topology_quotient_edges",
     "framework_quotient_edges",
     "verify_net",
+    "coordination_sequences",
+    "net_signature",
+    "identify_net",
 ]
 
 logger = logging.getLogger(__name__)
@@ -232,4 +257,283 @@ def verify_net(framework: Framework, topology: Topology) -> None:
         f"Framework {framework.name!r} does not realize topology "
         f"{topology.name!r} ({'; '.join(details)}). Edges are "
         "(slot_a, slot_b, periodic image voltage)."
+    )
+
+
+# ---------------------------------------------------------------------
+# net identification
+# ---------------------------------------------------------------------
+
+# shells of the coordination sequence used in net signatures. Ten is
+# the CrystalNets/ToposPro convention: empirically enough to separate
+# every net in the known archives
+SIGNATURE_SHELLS = 10
+
+Voltage = tuple[int, int, int]
+# node -> outgoing (neighbor, voltage) half-edges, one per edge end,
+# so len(adjacency[n]) is n's degree in the periodic graph
+_Adjacency = dict[int, list[tuple[int, Voltage]]]
+
+
+def _negate(voltage: Voltage) -> Voltage:
+    return (-voltage[0], -voltage[1], -voltage[2])
+
+
+def _add(a: Voltage, b: Voltage) -> Voltage:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _adjacency(edges: Counter[Edge]) -> _Adjacency:
+    """Directed half-edge adjacency of a quotient edge multiset.
+
+    Every quotient edge contributes one half-edge at each end (a
+    self-edge contributes two at its node, one per voltage sign), so
+    vertex degrees in the periodic graph fall out as list lengths.
+    """
+    adjacency: _Adjacency = defaultdict(list)
+    for (node_a, node_b, voltage), multiplicity in edges.items():
+        for _ in range(multiplicity):
+            adjacency[node_a].append((node_b, voltage))
+            adjacency[node_b].append((node_a, _negate(voltage)))
+    return dict(adjacency)
+
+
+def _prune_and_contract(adjacency: _Adjacency, contract: bool = True) -> _Adjacency:
+    """Reduce a quotient graph to its topology-bearing vertices.
+
+    Iteratively removes 1-coordinated vertices (capping ligands and
+    other dead ends carry no net information) and, when ``contract``
+    is set, contracts 2-coordinated vertices into a single edge
+    joining their neighbors (edge centers in blueprints and ditopic
+    linkers in deconstructed frameworks are the same edge of the
+    underlying net). A vertex whose two half-edges form a self-loop
+    cannot be contracted and is left in place, so a pure-cycle
+    component terminates the loop.
+    """
+    adjacency = {node: list(halves) for node, halves in adjacency.items()}
+    changed = True
+    while changed:
+        changed = False
+        for node in list(adjacency):
+            halves = adjacency.get(node)
+            if halves is None or node in {n for n, _ in halves}:
+                continue
+            if len(halves) == 1:
+                ((neighbor, voltage),) = halves
+                adjacency[neighbor].remove((node, _negate(voltage)))
+                del adjacency[node]
+                changed = True
+            elif len(halves) == 2 and contract:
+                (nb_a, v_a), (nb_b, v_b) = halves
+                # the contracted edge runs nb_a -> node -> nb_b, so its
+                # voltage chains the two hops
+                adjacency[nb_a].remove((node, _negate(v_a)))
+                adjacency[nb_b].remove((node, _negate(v_b)))
+                adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
+                adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
+                del adjacency[node]
+                changed = True
+    return adjacency
+
+
+def coordination_sequences(
+    edges: Counter[Edge], shells: int = SIGNATURE_SHELLS
+) -> dict[int, tuple[int, ...]]:
+    """Coordination sequence of every quotient vertex.
+
+    The coordination sequence of a vertex counts the vertices of the
+    *periodic* graph (the infinite unfolding of the quotient graph) at
+    each graph distance 1..shells - the classic per-vertex topology
+    invariant of crystal chemistry. Computed by breadth-first search
+    over (vertex, periodic image) states.
+
+    Parameters
+    ----------
+    edges : Counter[Edge]
+        Labeled quotient graph as produced by topology_quotient_edges
+        or framework_quotient_edges.
+    shells : int, optional
+        Number of coordination shells to expand.
+
+    Returns
+    -------
+    dict[int, tuple[int, ...]]
+        Vertex id to its coordination sequence, one count per shell.
+    """
+    adjacency = _adjacency(edges)
+    sequences: dict[int, tuple[int, ...]] = {}
+    for source in adjacency:
+        origin = (source, (0, 0, 0))
+        visited: set[tuple[int, Voltage]] = {origin}
+        frontier = [origin]
+        counts = []
+        for _ in range(shells):
+            new_frontier = []
+            for node, image in frontier:
+                for neighbor, voltage in adjacency[node]:
+                    state = (neighbor, _add(image, voltage))
+                    if state not in visited:
+                        visited.add(state)
+                        new_frontier.append(state)
+            counts.append(len(new_frontier))
+            frontier = new_frontier
+        sequences[source] = tuple(counts)
+    return sequences
+
+
+Signature = tuple[tuple[tuple[int, ...], int], ...]
+
+
+def net_signature(
+    edges: Counter[Edge], shells: int = SIGNATURE_SHELLS, contract: bool = True
+) -> Signature:
+    """Cell-choice-invariant signature of a quotient graph.
+
+    1-coordinated vertices are pruned and (by default) 2-coordinated
+    vertices contracted first (see _prune_and_contract), then the
+    multiset of coordination sequences is collected with its counts
+    reduced by their gcd: a supercell of the same net multiplies every
+    count by the same integer, so reduced counts compare equal across
+    cell choices. Not a proof of isomorphism - distinct nets sharing
+    all coordination sequences would collide - but an almost-unique
+    invariant across the known net archives (the CrystalNets result).
+
+    Parameters
+    ----------
+    edges : Counter[Edge]
+        Labeled quotient graph.
+    shells : int, optional
+        Coordination sequence depth.
+    contract : bool, optional
+        With contraction (default) the signature identifies the
+        underlying net regardless of how its edges are subdivided.
+        Without it, 2-coordinated vertices (blueprint edge centers,
+        ditopic linkers) count as vertices of their own, which
+        separates a net from its edge-decorated derivatives - the
+        finer of the two matching tiers in identify_net.
+
+    Returns
+    -------
+    Signature
+        Sorted tuple of (coordination sequence, reduced count) pairs;
+        empty when nothing remains after pruning.
+    """
+    reduced = _prune_and_contract(_adjacency(edges), contract=contract)
+    quotient: Counter[Edge] = Counter()
+    for node, halves in reduced.items():
+        for neighbor, voltage in halves:
+            key = _canonical(node, neighbor, np.asarray(voltage))
+            quotient[key] += 1
+    # every non-loop edge was seen from both ends, every self-loop
+    # from both voltage signs (canonicalized to one key)
+    quotient = Counter({edge: mult // 2 for edge, mult in quotient.items()})
+    counts = Counter(coordination_sequences(quotient, shells=shells).values())
+    if not counts:
+        return ()
+    divisor = math.gcd(*counts.values())
+    return tuple(sorted((seq, mult // divisor) for seq, mult in counts.items()))
+
+
+@functools.lru_cache(maxsize=8192)
+def _topology_signature_cached(
+    topology: Topology, shells: int, contract: bool
+) -> Signature:
+    """Signature of a library topology, cached per Topology object.
+
+    Topology neither defines __eq__ nor __hash__, so the cache is
+    keyed by object identity - correct because LazyTopologyLibrary
+    caches materialized topologies for the session.
+    """
+    return net_signature(
+        topology_quotient_edges(topology), shells=shells, contract=contract
+    )
+
+
+def _degree_profile(degrees: list[int]) -> tuple[tuple[int, int], ...]:
+    """Reduced multiset of topology-bearing vertex degrees.
+
+    Degrees 1 and 2 are dropped (pruned/contracted away by the
+    signature) and the remaining counts divided by their gcd, giving a
+    supercell-invariant prefilter that is much cheaper than a
+    signature: it needs only per-vertex connectivities, which the
+    topology library exposes without materializing Topology objects.
+    """
+    counts = Counter(d for d in degrees if d > 2)
+    if not counts:
+        return ()
+    divisor = math.gcd(*counts.values())
+    return tuple(sorted((degree, mult // divisor) for degree, mult in counts.items()))
+
+
+def identify_net(
+    edges: Counter[Edge],
+    topologies: Mapping[str, Topology],
+    shells: int = SIGNATURE_SHELLS,
+) -> list[str]:
+    """Names of the library nets matching a quotient graph's signature.
+
+    Candidates are prefiltered on the reduced degree multiset of their
+    topology-bearing vertices (read from the library's raw payload
+    when available, so the full RCSR library is scanned without
+    materializing it), then matched in two tiers: first on the exact
+    uncontracted signature (2-coordinated vertices counted, so a net
+    and its edge-decorated derivatives stay distinct), and only if
+    nothing matches exactly, on the contracted signature (the
+    underlying net, however its edges are subdivided).
+
+    Parameters
+    ----------
+    edges : Counter[Edge]
+        Labeled quotient graph of the structure to identify.
+    topologies : Mapping[str, Topology]
+        Topology library to match against (e.g. Autografs.topologies).
+    shells : int, optional
+        Coordination sequence depth; both sides use the same value.
+
+    Returns
+    -------
+    list[str]
+        Sorted names of the matching nets - usually one, empty when
+        nothing in the library matches, several only if the library
+        holds nets that share all coordination sequences.
+    """
+    contracted = net_signature(edges, shells=shells, contract=True)
+    if not contracted:
+        return []
+    # the first coordination shell of a vertex is its degree; the
+    # profile is contraction-invariant, so it prefilters both tiers
+    target_profile = _degree_profile(
+        [seq[0] for seq, mult in contracted for _ in range(mult)]
+    )
+    raw_items = getattr(topologies, "raw_items", None)
+    if raw_items is not None:
+        candidates = [
+            name
+            for name, payload in raw_items()
+            if _degree_profile(
+                [slot["species"].count("X") for slot in payload.get("slots", [])]
+            )
+            == target_profile
+        ]
+    else:
+        candidates = [
+            name
+            for name, topology in topologies.items()
+            if _degree_profile(
+                [len(slot.atoms.indices_from_symbol("X")) for slot in topology.slots]
+            )
+            == target_profile
+        ]
+    exact = net_signature(edges, shells=shells, contract=False)
+    exact_matches = sorted(
+        name
+        for name in candidates
+        if _topology_signature_cached(topologies[name], shells, False) == exact
+    )
+    if exact_matches:
+        return exact_matches
+    return sorted(
+        name
+        for name in candidates
+        if _topology_signature_cached(topologies[name], shells, True) == contracted
     )
