@@ -169,8 +169,8 @@ A guided session covers the whole workflow without writing a script:
 - **Deconstruct a structure** — read a CIF (or anything pymatgen parses),
   recover its building units and net, and either write the harvested SBUs to an
   XYZ file or add them straight into the session library so they are selectable
-  in the next build. Expected refusals (metal-free, rod, disordered) are
-  reported, not crashes.
+  in the next build. Expected refusals (rod, disordered, non-framework)
+  are reported, not crashes.
 - **Browse topologies** — summary table per net plus every compatible SBU per
   slot type.
 - **Browse building units** — composition, connectivity, dummy point group,
@@ -627,12 +627,15 @@ export. Since defects and grafts distort nothing else, a final
 The inverse pipeline. `deconstruct` takes an experimental structure (a
 CIF file or a pymatgen `Structure`), detects bonds with the same
 strategy the builder uses, removes free guests, clusters atoms into
-building units under the *metal-oxo* convention (metal clusters keep
-their inorganic coordination sphere and their carboxylate /
-phosphonate / sulfonate binding groups — the same granularity as the
-shipped SBU library), places a dummy at every cut bond, and matches
-the resulting quotient graph against the topology library by
-coordination-sequence signature:
+building units, places a dummy at every cut bond, and matches the
+resulting quotient graph against the topology library by
+coordination-sequence signature. Clustering follows the *metal-oxo*
+convention for MOFs (metal clusters keep their inorganic coordination
+sphere and their carboxylate / phosphonate / sulfonate binding groups)
+and a *branch-point* convention for metal-free frameworks (COFs) —
+rigid ring systems and non-ring atoms collapse to super-vertices, and
+a super-vertex's external connection count sets its role (≥3 a node, 2
+a linker, 1 a cap):
 
 ```python
 result = mofgen.deconstruct("IRMOF-1.cif")
@@ -673,9 +676,12 @@ result.net_candidates          # ['pcu']   (consensus)
 result.is_catenated            # True
 ```
 
-Scope: frameworks with molecular building units and at least one
-metal atom. Rod MOFs (1-periodic units) and metal-free frameworks
-(COFs) raise `DeconstructionError` for now.
+Both MOFs and COFs are handled; the COF path uses the single-node
+convention, so a node bundled differently in the original SBU library
+(e.g. a triphenylamine core cut at its central atom) may come back more
+finely divided, but the recovered net is the same. Scope: frameworks
+with molecular building units. Rod MOFs and other 1-periodic (chain)
+building units raise `DeconstructionError`.
 
 #### Harvesting a library from many structures
 
