@@ -222,6 +222,39 @@ class TestCatenation:
         assert "2-fold" in repr(result)
 
 
+class TestParallelBridges:
+    """A one-atom linker bridging a node to that node's own periodic
+    image cuts the same atom pair twice, through different images. Both
+    cuts must survive into the quotient graph: a simple unit graph
+    would collapse them, prune the linkers as caps, and identify
+    nothing (regression test for #102)."""
+
+    @pytest.fixture(scope="class")
+    def carbide(self, mofgen):
+        # cubic ZnC3: each face-edge C sits between a Zn and its image,
+        # 2.2 A away on both sides - pcu with one-atom edge centers
+        structure = Structure(
+            Lattice.cubic(4.4),
+            ["Zn", "C", "C", "C"],
+            [[0, 0, 0], [0.5, 0, 0], [0, 0.5, 0], [0, 0, 0.5]],
+        )
+        return deconstruct(structure, topologies=mofgen.topologies)
+
+    def test_units(self, carbide):
+        kinds = Counter(unit.kind for unit in carbide.units)
+        assert kinds == Counter({"node": 1, "linker": 3})
+        assert all(
+            unit.n_connections == 2 for unit in carbide.units if unit.kind == "linker"
+        )
+
+    def test_every_cut_bond_is_a_quotient_edge(self, carbide):
+        # 3 linkers x 2 cut bonds each; parallel cuts kept distinct
+        assert sum(carbide.quotient_edges.values()) == 6
+
+    def test_net_identified(self, carbide):
+        assert carbide.net_candidates == ["pcu"]
+
+
 class TestCOF:
     """Metal-free frameworks take the branch-point path."""
 
