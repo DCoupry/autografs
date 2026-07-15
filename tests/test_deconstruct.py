@@ -115,7 +115,49 @@ class TestIdentifyNet:
                 (1, 2, (-1, 0, 1)): 1,
             }
         )
-        assert identify_net(nbo_like, mofgen.topologies) == []
+        matches = identify_net(nbo_like, mofgen.topologies)
+        assert matches == []
+        assert matches.tier is None
+
+    def test_exact_tier_surfaced(self, mofgen):
+        """A blueprint quotient matches its own net on the exact tier."""
+        edges = topology_quotient_edges(mofgen.topologies["pcu"])
+        matches = identify_net(edges, mofgen.topologies)
+        assert matches == ["pcu"]
+        assert matches.tier == "exact"
+
+    def test_contracted_tier_surfaced(self, mofgen):
+        """The bare pcu quotient (no edge centers) misses the exact
+        tier - the blueprint counts its 2-coordinated edge centers as
+        vertices - and falls back to the contraction-blind match."""
+        bare: Counter = Counter(
+            {
+                (0, 0, (1, 0, 0)): 1,
+                (0, 0, (0, 1, 0)): 1,
+                (0, 0, (0, 0, 1)): 1,
+            }
+        )
+        matches = identify_net(bare, mofgen.topologies)
+        assert matches == ["pcu"]
+        assert matches.tier == "contracted"
+
+    def test_signature_cache_releases_topologies(self, mofgen):
+        """The per-topology signature cache must not pin dead libraries."""
+        import copy
+        import gc
+
+        from autografs.net import _SIGNATURE_CACHE
+
+        topology = copy.deepcopy(mofgen.topologies["pcu"])
+        before = len(_SIGNATURE_CACHE)
+        matches = identify_net(
+            topology_quotient_edges(topology), {"pcu_copy": topology}
+        )
+        assert matches == ["pcu_copy"]
+        assert len(_SIGNATURE_CACHE) == before + 1
+        del topology
+        gc.collect()
+        assert len(_SIGNATURE_CACHE) == before
 
 
 class TestDeconstructMOF5:

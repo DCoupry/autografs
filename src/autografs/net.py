@@ -39,18 +39,18 @@ rather than silent errors.
 
 from __future__ import annotations
 
-import functools
 import logging
 import math
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
+from weakref import WeakKeyDictionary
 
 import numpy as np
 
 from autografs.exceptions import NetMismatchError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from autografs.framework import Framework
     from autografs.topology import Topology
@@ -62,6 +62,7 @@ __all__ = [
     "coordination_sequences",
     "net_signature",
     "identify_net",
+    "NetMatches",
 ]
 
 logger = logging.getLogger(__name__)
@@ -434,19 +435,27 @@ def net_signature(
     return tuple(sorted((seq, mult // divisor) for seq, mult in counts.items()))
 
 
-@functools.lru_cache(maxsize=8192)
+# Topology neither defines __eq__ nor __hash__, so the cache is keyed
+# by object identity - correct because LazyTopologyLibrary caches
+# materialized topologies for the session. Weak keys let entries die
+# with their Topology, so a long session cycling custom libraries does
+# not pin every library it ever identified against.
+_SIGNATURE_CACHE: WeakKeyDictionary[Topology, dict[tuple[int, bool], Signature]] = (
+    WeakKeyDictionary()
+)
+
+
 def _topology_signature_cached(
     topology: Topology, shells: int, contract: bool
 ) -> Signature:
-    """Signature of a library topology, cached per Topology object.
-
-    Topology neither defines __eq__ nor __hash__, so the cache is
-    keyed by object identity - correct because LazyTopologyLibrary
-    caches materialized topologies for the session.
-    """
-    return net_signature(
-        topology_quotient_edges(topology), shells=shells, contract=contract
-    )
+    """Signature of a library topology, cached per Topology object."""
+    cached = _SIGNATURE_CACHE.setdefault(topology, {})
+    key = (shells, contract)
+    if key not in cached:
+        cached[key] = net_signature(
+            topology_quotient_edges(topology), shells=shells, contract=contract
+        )
+    return cached[key]
 
 
 def _degree_profile(degrees: list[int]) -> tuple[tuple[int, int], ...]:
@@ -465,11 +474,35 @@ def _degree_profile(degrees: list[int]) -> tuple[tuple[int, int], ...]:
     return tuple(sorted((degree, mult // divisor) for degree, mult in counts.items()))
 
 
+class NetMatches(list):
+    """Sorted matching net names, with the matching tier attached.
+
+    Behaves as a plain ``list[str]`` (existing callers are unaffected);
+    ``tier`` records how identify_net matched: "exact" when the
+    uncontracted signatures agreed (the net itself, distinct from its
+    edge-decorated derivatives), "contracted" when only the
+    contraction-blind fallback matched (the underlying net, however
+    its edges are subdivided), None when nothing matched. List
+    operations (slicing, concatenation) return plain lists and drop
+    the attribute.
+    """
+
+    tier: Literal["exact", "contracted"] | None
+
+    def __init__(
+        self,
+        names: Iterable[str] = (),
+        tier: Literal["exact", "contracted"] | None = None,
+    ) -> None:
+        super().__init__(names)
+        self.tier = tier
+
+
 def identify_net(
     edges: Counter[Edge],
     topologies: Mapping[str, Topology],
     shells: int = SIGNATURE_SHELLS,
-) -> list[str]:
+) -> NetMatches:
     """Names of the library nets matching a quotient graph's signature.
 
     Candidates are prefiltered on the reduced degree multiset of their
@@ -492,14 +525,18 @@ def identify_net(
 
     Returns
     -------
-    list[str]
+    NetMatches
         Sorted names of the matching nets - usually one, empty when
         nothing in the library matches, several only if the library
-        holds nets that share all coordination sequences.
+        holds nets that share all coordination sequences. The result
+        is a plain list of names carrying a ``tier`` attribute
+        ("exact", "contracted", or None) that records which tier
+        matched - worth checking before trusting a deconstruction:
+        a contracted-tier answer is blind to edge decoration.
     """
     contracted = net_signature(edges, shells=shells, contract=True)
     if not contracted:
-        return []
+        return NetMatches()
     # the first coordination shell of a vertex is its degree; the
     # profile is contraction-invariant, so it prefilters both tiers
     target_profile = _degree_profile(
@@ -531,9 +568,12 @@ def identify_net(
         if _topology_signature_cached(topologies[name], shells, False) == exact
     )
     if exact_matches:
-        return exact_matches
-    return sorted(
+        logger.debug(f"identify_net: exact-tier match: {exact_matches}")
+        return NetMatches(exact_matches, tier="exact")
+    fallback = sorted(
         name
         for name in candidates
         if _topology_signature_cached(topologies[name], shells, True) == contracted
     )
+    logger.debug(f"identify_net: contracted-tier match: {fallback or 'none'}")
+    return NetMatches(fallback, tier="contracted" if fallback else None)
