@@ -42,6 +42,18 @@ jobs:
       - name: Check package
         run: twine check dist/*
 
+      # guard against tagging the wrong commit: a vX.Y.Z release must
+      # ship exactly the version pyproject.toml declares
+      - name: Verify the release tag matches the package version
+        if: github.event_name == 'release'
+        run: |
+          version=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+          tag="${{ github.event.release.tag_name }}"
+          if [ "v${version}" != "${tag}" ]; then
+            echo "Release tag ${tag} does not match package version v${version}."
+            exit 1
+          fi
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -69,6 +81,30 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+
+  # attach the wheel and sdist to the GitHub release itself: workflow
+  # artifacts expire and need a login, release assets are permanent
+  # and public
+  github-release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'release'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Attach wheel and sdist to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release upload "${{ github.event.release.tag_name }}"
+          dist/* --clobber --repo "${{ github.repository }}"
 
   publish-pypi:
     runs-on: ubuntu-latest
