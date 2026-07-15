@@ -228,8 +228,7 @@ The 3.x line has reached feature parity with 2.x and added the inverse pipeline
 (deconstruction, net identification, and SBU harvesting for MOFs and COFs).
 Remaining directions — rod-MOF (1-periodic SBU) support, IZA zeolite import,
 and curated high-connectivity SBU packs for the last uncovered nets — are
-tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues) and
-in `v3_plan.md` / `progress.md`.
+tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues).
 
 ## Citing
 

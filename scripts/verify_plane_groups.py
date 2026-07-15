@@ -7,8 +7,8 @@ image of some NODE under the entry's plane group: the second endpoint
 is usually a symmetry image outside the asymmetric unit, so a wrong
 operator table makes endpoints miss the node orbit immediately. This
 checks each of the plane groups actually used by RCSR against every
-net that uses it - the "verify each group against a known net"
-checklist item of cof_plan.md, automated.
+net that uses it - the "verify each group against a known net" check,
+automated.
 
 Run from the repository root:
 
