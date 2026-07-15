@@ -130,6 +130,14 @@ class TestEditingHelpers:
     def test_parse_indices(self):
         assert parse_indices("3, 1 2, 3") == [1, 2, 3]
 
+    def test_rotation_angle_accepts_negative(self):
+        """Rotation angles are signed; the prompt must accept -90."""
+        from autografs.cli import _validate_float
+
+        assert _validate_float("-90") is True
+        assert _validate_float("90") is True
+        assert _validate_float("spin") != True  # noqa: E712 - questionary contract
+
     def test_rotatable_slots_are_the_linkers(self, mofgen):
         topology = mofgen.topologies["pcu"]
         mappings = {}

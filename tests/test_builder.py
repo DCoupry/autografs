@@ -6,6 +6,7 @@ and building functionality. Some tests require the full data files
 and are marked accordingly.
 """
 
+import logging
 import os
 import tempfile
 
@@ -425,6 +426,53 @@ class TestListBuildingUnits:
             for name in names:
                 sbu = mofgen.sbu[name]
                 assert len(sbu.atoms.indices_from_symbol("X")) == conn
+
+    def test_unknown_subset_raises(self, synthetic_mofgen):
+        """Unknown SBU names in subset fail loudly, like list_topologies."""
+        with pytest.raises(ValueError, match="no_such_sbu"):
+            synthetic_mofgen.list_building_units(subset=["no_such_sbu"])
+
+
+class TestBuildOneDiagnostics:
+    """_build_one keeps sweeps alive but must not hide real bugs."""
+
+    def test_expected_gate_failures_are_silent(self, caplog, monkeypatch):
+        import autografs.builder as builder_module
+        from autografs.exceptions import AlignmentError
+
+        def raise_gate(*args, **kwargs):
+            raise AlignmentError("shape mismatch")
+
+        monkeypatch.setattr(builder_module, "build_framework", raise_gate)
+        with caplog.at_level(logging.DEBUG, logger="autografs.builder"):
+            result = builder_module._build_one(
+                topology=type("T", (), {"name": "fake"})(),
+                mappings={},
+                refine_cell=False,
+                max_rmsd=None,
+                min_distance=None,
+            )
+        assert result is None
+        assert caplog.records == []
+
+    def test_unexpected_failures_leave_a_trace(self, caplog, monkeypatch):
+        import autografs.builder as builder_module
+
+        def raise_bug(*args, **kwargs):
+            raise ValueError("a genuine pipeline bug")
+
+        monkeypatch.setattr(builder_module, "build_framework", raise_bug)
+        with caplog.at_level(logging.DEBUG, logger="autografs.builder"):
+            result = builder_module._build_one(
+                topology=type("T", (), {"name": "fake"})(),
+                mappings={},
+                refine_cell=False,
+                max_rmsd=None,
+                min_distance=None,
+            )
+        assert result is None
+        assert any("fake" in record.message for record in caplog.records)
+        assert any(record.exc_info for record in caplog.records)
 
 
 # =============================================================================

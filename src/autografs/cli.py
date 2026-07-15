@@ -173,6 +173,14 @@ def topology_summary_table(topology: Topology) -> Table:
 # ----------------------------------------------------------------------
 
 
+def _validate_float(text: str) -> bool | str:
+    try:
+        float(text)
+    except ValueError:
+        return "Enter a number"
+    return True
+
+
 def _validate_positive_float(text: str) -> bool | str:
     try:
         value = float(text)
@@ -581,7 +589,7 @@ def _edit_rotate(framework: Framework) -> Framework | None:
     if pick is None:
         return None
     angle_text = questionary.text(
-        "Angle in degrees:", default="90", validate=_validate_positive_float
+        "Angle in degrees:", default="90", validate=_validate_float
     ).ask()
     if angle_text is None:
         return None
