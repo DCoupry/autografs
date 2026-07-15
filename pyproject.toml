@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AuToGraFS"
-version = "3.0.0"
+version = "3.1.0"
 description = "Automatic Topological Generator for Framework Structures"
 readme = "README.md"
 license = {text = "MIT"}
@@ -24,12 +24,14 @@ keywords = [
     "computational chemistry"
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Chemistry",
     "Topic :: Scientific/Engineering :: Physics",
 ]
