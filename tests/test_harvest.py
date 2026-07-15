@@ -124,6 +124,35 @@ class TestHarvestInputs:
         assert "node_C6O13Zn4_6X" in result.fragments
 
 
+class TestIterSources:
+    """_iter_sources is pure path plumbing; no deconstruction runs."""
+
+    @pytest.fixture()
+    def cif_files(self, tmp_path):
+        for stem in ("alpha", "beta"):
+            (tmp_path / f"{stem}.cif").write_text("placeholder\n")
+        (tmp_path / "notes.txt").write_text("ignored\n")
+        return tmp_path
+
+    def test_absolute_glob_pattern(self, cif_files):
+        from autografs.harvest import _iter_sources
+
+        pairs = _iter_sources(str(cif_files / "*.cif"))
+        assert [label for label, _ in pairs] == ["alpha", "beta"]
+
+    def test_relative_glob_pattern(self, cif_files, monkeypatch):
+        from autografs.harvest import _iter_sources
+
+        monkeypatch.chdir(cif_files)
+        pairs = _iter_sources("*.cif")
+        assert [label for label, _ in pairs] == ["alpha", "beta"]
+
+    def test_glob_matching_nothing_is_empty(self, cif_files):
+        from autografs.harvest import _iter_sources
+
+        assert _iter_sources(str(cif_files / "*.xyz")) == []
+
+
 class TestHarvestRobustness:
     def test_unreadable_file_recorded_not_raised(self, mofgen, mof5, tmp_path):
         mof5.write_cif(tmp_path / "good.cif")

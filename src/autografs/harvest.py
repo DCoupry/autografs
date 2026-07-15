@@ -27,6 +27,7 @@ linkers are what feeds the builder.
 
 from __future__ import annotations
 
+import glob
 import logging
 import re
 from dataclasses import dataclass, field
@@ -169,7 +170,9 @@ def _iter_sources(sources: Source | Iterable[Source]) -> list[tuple[str, Source]
             files = sorted(p for p in path.iterdir() if p.suffix.lower() == ".cif")
             return [(p.stem, p) for p in files]
         if any(ch in str(sources) for ch in "*?[") and not path.exists():
-            matches = sorted(Path().glob(str(sources)))
+            # glob.glob, not Path().glob: pathlib refuses absolute
+            # patterns ("Non-relative patterns are unsupported")
+            matches = sorted(Path(match) for match in glob.glob(str(sources)))
             return [(p.stem, p) for p in matches]
         return [(path.stem, path)]
     # an iterable of sources
