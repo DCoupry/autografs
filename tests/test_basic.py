@@ -15,18 +15,21 @@ class TestPackageImports:
 
         assert hasattr(autografs, "__version__")
 
-    def test_version_defined(self):
-        """Test that version is defined and valid."""
+    def test_version_matches_installed_metadata(self):
+        """__version__ is read from the installed distribution, so it
+        can never drift from pyproject.toml."""
+        from importlib.metadata import version
+
         from autografs import __version__
 
-        assert __version__ == "3.0.0"
         assert isinstance(__version__, str)
+        assert __version__ == version("AuToGraFS")
 
     def test_version_format(self):
         """Test version follows semantic versioning format."""
         from autografs import __version__
 
-        parts = __version__.split(".")
+        parts = __version__.split(".")[:3]
         assert len(parts) == 3
         assert all(part.isdigit() for part in parts)
 
