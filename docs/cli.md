@@ -29,7 +29,8 @@ A guided session covers the whole workflow without writing a script:
 - **Browse building units** — composition, connectivity, dummy point group,
   and how many nets the SBU fits.
 - **Batch build** — a front-end for `build_all`: pick a topology subset, cap
-  the combinations per topology, and write every resulting CIF to a directory.
+  the combinations per topology (-1 disables the cap), and write every
+  resulting CIF to a directory.
 - 2D layer builds offer **COF stacking** (AA / AB / serrated / staggered,
   chosen interlayer spacing) before export.
 - The final menu is an **edit/export loop**: make a supercell, add statistical

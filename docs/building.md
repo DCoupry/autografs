@@ -82,6 +82,10 @@ frameworks = mofgen.build_all(
 Failed builds are counted and skipped, not raised. Multinodal nets have
 combinatorially many SBU choices; when the full product exceeds
 `max_per_topology`, a seeded sample of distinct combinations is built instead.
+Passing `max_per_topology=-1` (or `None`, the default) disables the cap and
+enumerates exhaustively. Either way the total combination count over all
+buildable topologies is logged before the first build starts, so an
+exhaustive run can be cost-estimated — and aborted — while still cheap.
 
 ## Working with the result
 

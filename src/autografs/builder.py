@@ -374,7 +374,10 @@ class Autografs:
             Cap on the SBU combinations attempted per topology. The
             full product over slot types explodes combinatorially on
             multinodal nets; when it exceeds the cap, a seeded random
-            sample of distinct combinations is built instead.
+            sample of distinct combinations is built instead. -1 (or
+            None, the default) disables the cap and enumerates
+            exhaustively; the total combination count is logged before
+            building starts so the cost is visible up front.
         seed : int or None, optional
             Seed for the sampling generator; a fixed seed makes the
             sampled enumeration reproducible.
@@ -398,31 +401,61 @@ class Autografs:
         list[Framework]
             the frameworks produced by the building method
         """
+        if max_per_topology is not None and max_per_topology < 1:
+            if max_per_topology != -1:
+                raise ValueError(
+                    "max_per_topology must be a positive integer, or -1/None "
+                    f"for no cap, got {max_per_topology}"
+                )
+            max_per_topology = None
         logger.info("Building All Available Structures! This will take some time.")
         logger.info("============================================================")
         rng = np.random.default_rng(seed)
         frameworks: list[Framework] = []
         attempted = 0
+        # sieve pass first, so the full enumeration size is known (and
+        # logged) before the first build starts: exhaustive runs can be
+        # cost-estimated and aborted while still cheap
+        plans: list[tuple[str, list[Fragment | int], list[list[str]]]] = []
+        total = 0
+        sampled = 0
+        sieve_pbar = tqdm(self.list_topologies(subset=topology_subset))
+        for topology_name in sieve_pbar:
+            sieve_pbar.set_description(f"Sieving topology {topology_name:<5}")
+            topology = self.topologies[topology_name]
+            sbu_dict = self.list_building_units(
+                sieve=topology_name, verbose=False, subset=sbu_subset
+            )
+            # slot types with no compatible SBU are absent from the
+            # dict entirely, so completeness needs an explicit check
+            if len(sbu_dict) != len(topology.mappings):
+                continue
+            if not all(sbu_dict.values()):
+                continue
+            slot_types = list(sbu_dict.keys())
+            options = [sbu_dict[slot_type] for slot_type in slot_types]
+            count = math.prod(len(choices) for choices in options)
+            total += count
+            if max_per_topology is not None and count > max_per_topology:
+                sampled += 1
+            plans.append((topology_name, slot_types, options))
+        logger.info(
+            f"\t[x] {total} SBU combinations over {len(plans)} buildable topologies."
+        )
+        if sampled:
+            logger.info(
+                f"\t[x] Sampling {sampled} topologies down to "
+                f"{max_per_topology} combinations each."
+            )
         executor = ProcessPoolExecutor(max_workers=n_jobs) if n_jobs > 1 else None
         # cap on submitted-but-unfinished chunks: bounds the validated
         # mappings (deep-copied fragments) alive at any moment
         max_pending = 2 * n_jobs
         try:
-            topology_pbar = tqdm(self.list_topologies(subset=topology_subset))
-            for topology_name in topology_pbar:
+            topology_pbar = tqdm(plans)
+            for topology_name, slot_types, options in topology_pbar:
                 topology_pbar.set_description(f"Processing topology {topology_name:<5}")
                 topology = self.topologies[topology_name]
-                sbu_dict = self.list_building_units(
-                    sieve=topology_name, verbose=False, subset=sbu_subset
-                )
-                # slot types with no compatible SBU are absent from the
-                # dict entirely, so completeness needs an explicit check
-                if len(sbu_dict) != len(topology.mappings):
-                    continue
-                if not all(sbu_dict.values()):
-                    continue
-                slot_types = list(sbu_dict.keys())
-                options = [sbu_dict[slot_type] for slot_type in slot_types]
                 # combination name-tuples are cheap to hold; the heavy
                 # deep-copied fragment mappings are produced lazily
                 choices = list(_iter_combinations(options, max_per_topology, rng))
