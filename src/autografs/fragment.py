@@ -260,6 +260,10 @@ class Fragment:
         dummies = np.asarray(self.atoms.cart_coords)[dummy_idx]
         arms = dummies - dummies.mean(axis=0)
         norms = np.linalg.norm(arms, axis=1, keepdims=True)
+        # a monotopic fragment's single arm is exactly zero (the dummy
+        # IS the centroid): clamp instead of raising so caps stay
+        # representable. Genuinely degenerate multi-arm fragments are
+        # rejected at build time by alignment._unit, which does raise.
         norms[norms < 1e-12] = 1.0
         return np.asarray(arms / norms)
 

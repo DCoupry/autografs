@@ -226,6 +226,13 @@ def merge_fragment(
     base name gets a numeric suffix. The library is mutated in place;
     the resolved name is returned. Used both within one deconstruction
     and to merge fragments harvested across many structures.
+
+    Identity here is composition + connection count + arm directions,
+    which is what buildability depends on - it is NOT full chemical
+    identity: positional isomers with the same formula and
+    near-identical arm geometry merge into one entry. Provenance of a
+    merged fragment therefore reads "same building block for the
+    builder", not "same molecule".
     """
     name = base_name
     suffix = 1

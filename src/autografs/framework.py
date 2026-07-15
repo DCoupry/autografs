@@ -72,6 +72,17 @@ class Framework:
     energy : float or None
         Force-field energy per unit cell in kcal/mol; set by
         ``relax()``, None for as-built frameworks.
+
+    Notes
+    -----
+    The graph is the source of truth, but the crystallographic views
+    derived from it cache: ``structure`` (and everything built on it -
+    ``formula``, ``min_contact``, exports, porosity descriptors) is
+    computed once on first access. Mutating the graph of a Framework
+    whose views have already been read leaves those views stale. The
+    editing methods (``supercell``, ``defects``, ``functionalize``,
+    ...) sidestep this by always returning a new Framework; direct
+    graph surgery should construct a new ``Framework(graph)`` too.
     """
 
     def __init__(self, graph: networkx.Graph, name: str = "framework") -> None:
@@ -308,6 +319,10 @@ class Framework:
         Site order matches graph node order; ``tags`` and ``ufftype``
         are carried as site properties. Bonds are not part of a
         Structure - use .graph for connectivity.
+
+        Cached on first access: mutating ``graph`` afterwards leaves
+        this view (and everything derived from it) stale - build a new
+        Framework instead (see the class Notes).
         """
         lattice = self.lattice
         frac = self.cart_coords @ np.linalg.inv(self.cell) % 1.0

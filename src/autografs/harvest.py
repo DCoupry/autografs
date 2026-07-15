@@ -79,7 +79,11 @@ class HarvestResult:
         Fragment name to its kind ("node", "linker" or "cap").
     provenance : dict[str, list[str]]
         Fragment name to the sorted labels of the sources it appeared
-        in.
+        in. Deduplication keys on composition + connection count + arm
+        directions (see :func:`autografs.deconstruct.merge_fragment`),
+        so positional isomers that the builder cannot tell apart share
+        one entry; provenance means "same building block", not "same
+        molecule".
     nets : dict[str, list[str]]
         Source label to the net candidates identified for it (empty
         when identification was skipped or found nothing).
