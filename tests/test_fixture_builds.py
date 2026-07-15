@@ -8,6 +8,7 @@ compatibility, alignment, cell optimization - without the full
 topology database.
 """
 
+import logging
 import os
 
 import numpy as np
@@ -196,6 +197,25 @@ class TestGoldenBuilds:
         # a different seed picks a different sample (pcu has 58 combos)
         third = mofgen.build_all(**{**kwargs, "seed": 7})
         assert len(third) <= 3
+
+    def test_build_all_exhaustive_no_cap(self, mofgen, caplog):
+        """max_per_topology=-1 disables sampling and logs the total count."""
+        kwargs = dict(
+            topology_subset=["pcu"],
+            sbu_subset=["Zn_mof5_octahedral", "Benzene_linear"],
+            refine_cell=False,
+        )
+        with caplog.at_level(logging.INFO, logger="autografs.builder"):
+            uncapped = mofgen.build_all(max_per_topology=-1, **kwargs)
+        default = mofgen.build_all(max_per_topology=None, **kwargs)
+        assert [fw.formula for fw in uncapped] == [fw.formula for fw in default]
+        assert any("SBU combinations" in r.message for r in caplog.records)
+
+    def test_build_all_rejects_invalid_cap(self, mofgen):
+        """0 and negative caps other than -1 are errors, not silent no-ops."""
+        for bad in (0, -2):
+            with pytest.raises(ValueError, match="max_per_topology"):
+                mofgen.build_all(topology_subset=["pcu"], max_per_topology=bad)
 
     @pytest.mark.slow
     def test_build_all_parallel_matches_serial(self, mofgen):

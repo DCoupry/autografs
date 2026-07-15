@@ -197,6 +197,14 @@ def _validate_positive_int(text: str) -> bool | str:
     return value > 0 or "Enter a positive integer"
 
 
+def _validate_combination_cap(text: str) -> bool | str:
+    try:
+        value = int(text)
+    except ValueError:
+        return "Enter an integer"
+    return value > 0 or value == -1 or "Enter a positive integer, or -1 for no cap"
+
+
 def _pick_name(message: str, names: list[str]) -> str | None:
     """Type-to-search prompt over a list of names; None on cancel."""
     answer: str | None = questionary.autocomplete(
@@ -778,9 +786,9 @@ def batch_build(session: Session) -> None:
             console.print(f"[red]Unknown topologies:[/red] {', '.join(unknown)}")
             return
     per_topology = questionary.text(
-        "Max SBU combinations per topology:",
+        "Max SBU combinations per topology (-1 = no cap):",
         default="5",
-        validate=_validate_positive_int,
+        validate=_validate_combination_cap,
     ).ask()
     if per_topology is None:
         return
