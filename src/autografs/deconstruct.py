@@ -63,8 +63,11 @@ from pymatgen.core.structure import Molecule, Structure
 
 from autografs.exceptions import DeconstructionError
 from autografs.fragment import Fragment
-from autografs.framework import Framework
-from autografs.net import Edge, framework_quotient_edges, identify_net
+
+# _canonical and _split_image are net's gauge conventions; the unit
+# quotient graph below must share them exactly, so it uses the same
+# helpers rather than re-deriving them
+from autografs.net import Edge, _canonical, _split_image, identify_net
 from autografs.utils import (
     BOND_CUTOFF,
     BOND_TOLERANCE,
@@ -628,51 +631,54 @@ def deconstruct(
             "The structure contains dummy atoms ('X'); deconstruction "
             "expects a real crystal structure."
         )
-    # EconNN crashes on an atom with no neighbor in reach, and such
-    # atoms are 0-periodic guests by definition: strip them first
+    # Guest removal, iterated to a guest-free bond graph. EconNN adapts
+    # bond detection to each atom's environment, so removing guests can
+    # change the bonds detected among the remaining atoms; looping until
+    # no 0-periodic component is left guarantees the interpenetration
+    # fold and the per-subframework split both come from the one final
+    # graph. Isolated atoms are stripped before each bond pass because
+    # EconNN crashes on an atom with no neighbor in reach (and such
+    # atoms are 0-periodic guests by definition).
     guest_formulas: list[str] = []
-    isolated = [
-        i for i, nn in enumerate(structure.get_all_neighbors(BOND_CUTOFF)) if not nn
-    ]
-    if len(isolated) == len(structure):
-        raise DeconstructionError(
-            "No periodic component found: the structure is a molecular "
-            "crystal, not a framework."
-        )
-    if isolated:
-        guest_formulas += [structure[i].specie.symbol for i in isolated]
-        structure.remove_sites(isolated)
-    bonds = _structure_bond_graph(structure)
-
-    # free guests: 0-periodic connected components
-    guest_atoms: set[int] = set()
-    n_periodic = 0
-    for component in networkx.connected_components(bonds):
-        rank, _ = _component_periodicity(bonds, set(component))
-        if rank == 0:
-            guest_atoms |= set(component)
-            guest_formulas.append(
-                _hill_formula(structure[i].specie.symbol for i in component)
+    while True:
+        isolated = [
+            i for i, nn in enumerate(structure.get_all_neighbors(BOND_CUTOFF)) if not nn
+        ]
+        if len(isolated) == len(structure):
+            raise DeconstructionError(
+                "No periodic component found: the structure is a molecular "
+                "crystal, not a framework."
             )
-        else:
-            n_periodic += 1
-    if n_periodic == 0:
-        raise DeconstructionError(
-            "No periodic component found: the structure is a molecular "
-            "crystal, not a framework."
-        )
-    if guest_atoms:
+        if isolated:
+            guest_formulas += [structure[i].specie.symbol for i in isolated]
+            structure.remove_sites(isolated)
+        bonds = _structure_bond_graph(structure)
+        components = [set(c) for c in networkx.connected_components(bonds)]
+        guest_components = [
+            c for c in components if _component_periodicity(bonds, c)[0] == 0
+        ]
+        if not guest_components:
+            break
+        guest_atoms = set().union(*guest_components)
+        if len(guest_atoms) == len(structure):
+            raise DeconstructionError(
+                "No periodic component found: the structure is a molecular "
+                "crystal, not a framework."
+            )
+        guest_formulas += [
+            _hill_formula(structure[i].specie.symbol for i in c)
+            for c in guest_components
+        ]
         logger.info(
             f"\t[x] removed {len(guest_atoms)} guest atoms "
             f"({', '.join(sorted(set(guest_formulas)))})."
         )
         keep = sorted(set(range(len(structure))) - guest_atoms)
         structure = Structure.from_sites([structure[i] for i in keep])
-        bonds = _structure_bond_graph(structure)
-    # the remaining connected components are the periodic subframeworks
-    # (all guests are gone); more than one means interpenetration. Each
-    # is identified independently below
-    periodic_components = [set(c) for c in networkx.connected_components(bonds)]
+    # every remaining component is a periodic subframework; more than
+    # one means interpenetration, each identified independently below
+    periodic_components = components
+    n_periodic = len(periodic_components)
     if n_periodic > 1:
         logger.info(f"\t[x] {n_periodic} interpenetrated subframeworks detected.")
 
@@ -747,35 +753,45 @@ def deconstruct(
             )
         )
 
-    # unit-level quotient graph, reusing the framework machinery: a
-    # graph whose "atoms" carry unit ids as slot provenance and
-    # unit-unwrapped cartesian coordinates reduces to exactly the
-    # quotient graph of the deconstructed net
-    unit_graph = networkx.Graph(cell=np.asarray(lattice.matrix, dtype=float))
+    # unit-level labeled quotient graph, built directly from the cut
+    # list: one vertex per unit, one voltage-labeled edge per cut bond.
+    # Building it as a simple unit graph would collapse parallel cuts
+    # joining the same atom pair through different periodic images (a
+    # one-atom bridge between a unit and its partner's own image),
+    # silently dropping quotient edges. The gauge matches
+    # autografs.net: a unit's home-cell image is the integer split of
+    # its unwrapped centroid, and the cut's voltage follows exactly
+    # from its image offset and the two endpoint unwraps.
+    unit_images: dict[int, np.ndarray] = {}
     for k, unit in enumerate(units):
-        for i in sorted(unit):
-            unit_graph.add_node(
-                i,
-                slot=k,
-                coord=lattice.get_cartesian_coords(frac[i] + unwraps[k][i]),
-                symbol=structure[i].specie.symbol,
-            )
-    for u, v, _ in cuts:
-        unit_graph.add_edge(u, v)
-    quotient_edges = framework_quotient_edges(Framework(unit_graph, name="units"))
+        centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
+        unit_images[k], _ = _split_image(centroid)
 
-    # split the quotient graph per interpenetrated subframework and
-    # identify each independently: a cut joins two bonded units, so
-    # both endpoints share a periodic component and no edge crosses
-    # the split
-    cell = unit_graph.graph["cell"]
+    def unit_quotient(atoms: set[int] | None = None) -> Counter[Edge]:
+        edges: Counter[Edge] = Counter()
+        for u, v, jimage in cuts:
+            # a cut joins two bonded units, so both endpoints share a
+            # periodic component: one endpoint decides the restriction
+            if atoms is not None and u not in atoms:
+                continue
+            unit_u = atom_to_unit[u]
+            unit_v = atom_to_unit[v]
+            shift = np.asarray(jimage, dtype=int) + (
+                unwraps[unit_u][u] - unwraps[unit_v][v]
+            )
+            voltage = unit_images[unit_v] + shift - unit_images[unit_u]
+            edges[_canonical(unit_u, unit_v, voltage)] += 1
+        return edges
+
+    quotient_edges = unit_quotient()
+
+    # identify each interpenetrated subframework independently
     subframework_nets: list[list[str]] = []
-    for comp in periodic_components:
-        sub = unit_graph.subgraph(comp).copy()
-        sub.graph["cell"] = cell
-        sub_edges = framework_quotient_edges(Framework(sub, name="subframework"))
-        if topologies is not None:
-            subframework_nets.append(identify_net(sub_edges, topologies))
+    if topologies is not None:
+        subframework_nets = [
+            identify_net(unit_quotient(component), topologies)
+            for component in periodic_components
+        ]
 
     net_candidates: list[str] = []
     if topologies is not None:
