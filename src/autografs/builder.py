@@ -187,7 +187,15 @@ def _build_one(
             max_rmsd=max_rmsd,
             min_distance=min_distance,
         )
-    except (AssertionError, AlignmentError, OverlapError, ValueError):
+    except (AlignmentError, OverlapError):
+        # the quality gates rejecting a combination is the expected
+        # outcome of an enumeration sweep; nothing to report
+        return None
+    except (AssertionError, ValueError):
+        # unexpected failure types: still skip the combination (a sweep
+        # must not abort), but leave a diagnosable trace instead of
+        # only inflating the error-rate statistic
+        logger.debug(f"Unexpected failure building on {topology.name!r}", exc_info=True)
         return None
 
 
@@ -774,6 +782,9 @@ class Autografs:
         >>> print(sorted(by_connectivity))  # [1, 2, 3, 4, ...]
         """
         if subset is not None:
+            unknown = set(subset) - self.sbu.keys()
+            if unknown:
+                raise ValueError(f"Unknown SBUs in subset: {sorted(unknown)}")
             sbus = [self.sbu[k] for k in subset]
         else:
             sbus = list(self.sbu.values())
