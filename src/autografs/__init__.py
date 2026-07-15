@@ -44,11 +44,18 @@ References
 
 from __future__ import annotations
 
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _dist_version
+
 __author__ = "Damien Coupry"
 __credits__ = ["Prof. Matthew Addicoat"]
 __license__ = "MIT"
 __maintainer__ = "Damien Coupry"
-__version__ = "3.0.0"
+try:
+    # single source of truth: the version in pyproject.toml
+    __version__ = _dist_version("AuToGraFS")
+except PackageNotFoundError:  # a source tree that was never installed
+    __version__ = "0.0.0+uninstalled"
 __status__ = "production"
 __all__ = [
     "utils",
