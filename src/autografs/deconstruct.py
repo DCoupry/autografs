@@ -67,7 +67,7 @@ from autografs.fragment import Fragment
 # _canonical and _split_image are net's gauge conventions; the unit
 # quotient graph below must share them exactly, so it uses the same
 # helpers rather than re-deriving them
-from autografs.net import Edge, _canonical, _split_image, identify_net
+from autografs.net import Edge, NetMatches, _canonical, _split_image, identify_net
 from autografs.utils import (
     BOND_CUTOFF,
     BOND_TOLERANCE,
@@ -154,11 +154,15 @@ class Deconstruction:
     n_periodic_components : int
         Number of catenated (interpenetrated) subframeworks - the fold
         of the interpenetration (1 for a non-catenated framework).
-    subframework_nets : list[list[str]]
+    subframework_nets : list[NetMatches]
         Net candidates for each periodic subframework independently,
         one list per component. For genuine n-fold interpenetration
         every entry is the same net; differing entries flag distinct
-        interpenetrating nets.
+        interpenetrating nets. Each entry is an
+        autografs.net.NetMatches whose ``tier`` attribute records
+        whether the match was exact or contraction-blind
+        ("contracted": correct underlying net, but blind to how its
+        edges are subdivided).
     guest_formulas : list[str]
         Compositions of the removed 0-periodic components.
     """
@@ -169,7 +173,7 @@ class Deconstruction:
     quotient_edges: Counter[Edge]
     net_candidates: list[str] = field(default_factory=list)
     n_periodic_components: int = 1
-    subframework_nets: list[list[str]] = field(default_factory=list)
+    subframework_nets: list[NetMatches] = field(default_factory=list)
     guest_formulas: list[str] = field(default_factory=list)
 
     @property
@@ -793,7 +797,7 @@ def deconstruct(
     quotient_edges = unit_quotient()
 
     # identify each interpenetrated subframework independently
-    subframework_nets: list[list[str]] = []
+    subframework_nets: list[NetMatches] = []
     if topologies is not None:
         subframework_nets = [
             identify_net(unit_quotient(component), topologies)
