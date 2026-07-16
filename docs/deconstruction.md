@@ -37,7 +37,11 @@ coordination sequences, computed on the quotient graph with capping
 ligands pruned): an almost-unique invariant matched in two tiers,
 first with ditopic linkers counted as vertices (separating a net from
 its edge-decorated derivatives), then against the underlying
-2-coordination-suppressed net. Multiple candidates are returned as a
+2-coordination-suppressed net. The returned list carries the tier on
+its `.tier` attribute (`"exact"`, `"contracted"`, or `None`) — worth
+checking before trusting a result, since a contracted-tier match is
+blind to edge decoration; the per-subframework entries in
+`subframework_nets` carry it too. Multiple candidates are returned as a
 list rather than silently picking one.
 
 Interpenetrated (catenated) structures are handled: each periodic

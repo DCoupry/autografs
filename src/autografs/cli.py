@@ -845,6 +845,9 @@ def deconstruct_wizard(session: Session) -> None:
         return
 
     net = ", ".join(result.net_candidates) if result.net_candidates else "unidentified"
+    tiers = {nets.tier for nets in result.subframework_nets if nets}
+    if result.net_candidates and "contracted" in tiers:
+        net += "  (contracted-tier match)"
     if result.n_periodic_components > 1:
         net += f"  ({result.n_periodic_components}-fold interpenetrated)"
     console.print(f"\n[bold]Net:[/bold] {net}")
