@@ -846,36 +846,19 @@ class Framework:
                 f"interlayer spacing is {interlayer:.2f} A; stacked layers "
                 "will interpenetrate. Check the result with min_contact()."
             )
+        from autografs.editing import replicated_graph
+
         count = len(offsets)
         new_cell = cell.copy()
         new_cell[2] = [0.0, 0.0, count * interlayer]
-        stacked = networkx.Graph(cell=new_cell)
-        n_atoms = len(self.graph)
-        # duplicated tags and slot ids stay unique per layer so tag-pair
-        # semantics and placed-SBU identity survive
-        tag_base = max(
-            (data["tag"] for _, data in self.graph.nodes(data=True)), default=0
-        )
-        slot_base = (
-            max(
-                (data.get("slot", 0) for _, data in self.graph.nodes(data=True)),
-                default=0,
-            )
-            + 1
-        )
+        # per-layer tag and slot uniqueness is replicated_graph's
+        # invariant, shared with supercells and interpenetration
+        shifts = []
         for k, (fx, fy) in enumerate(offsets):
             shift = fx * cell[0] + fy * cell[1]
             shift[2] += k * interlayer
-            for node, data in self.graph.nodes(data=True):
-                copied = dict(data)
-                copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
-                if copied["tag"] > 0:
-                    copied["tag"] += k * tag_base
-                if "slot" in copied:
-                    copied["slot"] += k * slot_base
-                stacked.add_node(node + k * n_atoms, **copied)
-            for i, j, data in self.graph.edges(data=True):
-                stacked.add_edge(i + k * n_atoms, j + k * n_atoms, **data)
+            shifts.append(shift)
+        stacked = replicated_graph(self, shifts, cell=new_cell)
         label = mode if sequence is None else f"stack{count}"
         return Framework(stacked, name=f"{self.name}_{label}")
 
