@@ -143,6 +143,48 @@ class TestFormatVersion:
             topology_io.load_topologies(path)
 
 
+class TestAliases:
+    def test_aliases_resolve_but_never_enumerate(self, binodal_topology, tmp_path):
+        path = tmp_path / "topos.json"
+        topology_io.save_topologies({"test_net": binodal_topology}, path)
+        library = topology_io.load_topologies(path)
+        attached = library.attach_aliases(
+            {
+                "TEST": "test_net",  # valid
+                "GHOST": "missing",  # target absent: dropped
+                "test_net": "test_net",  # shadows a real entry: dropped
+            }
+        )
+        assert attached == 1
+        assert library.aliases == {"TEST": "test_net"}
+        assert "TEST" in library
+        assert "GHOST" not in library
+        # same cached object either way
+        assert library["TEST"] is library["test_net"]
+        # lookup-only: enumeration-based consumers never see it
+        assert list(library) == ["test_net"]
+        assert len(library) == 1
+
+    def test_shipped_iza_codes_resolve_to_zeolite_nets(self):
+        """The default library accepts IZA framework codes, and the
+        aliased net is the real framework: SOD must carry sodalite's
+        textbook coordination sequence."""
+        import json
+        from pathlib import Path
+
+        import autografs.data
+        from autografs.net import net_signature, topology_quotient_edges
+
+        data_dir = Path(autografs.data.__path__[0])
+        library = topology_io.load_topologies(data_dir / "topologies.json.gz")
+        aliases = json.loads((data_dir / "iza_aliases.json").read_text())
+        assert library.attach_aliases(aliases) == len(aliases)
+        for code in ("FAU", "LTA", "CHA", "SOD", "RHO"):
+            assert code in library
+        sodalite = net_signature(topology_quotient_edges(library["SOD"]))
+        assert sodalite == (((4, 10, 20, 34, 52, 74, 100, 130, 164, 202), 1),)
+
+
 class TestBuilderIntegration:
     def test_autografs_loads_json_library(self, binodal_topology, tmp_path):
         """Autografs accepts a JSON topology library via topofile."""
@@ -153,3 +195,15 @@ class TestBuilderIntegration:
         mofgen = Autografs(topofile=str(path))
         assert "test_net" in mofgen.topologies
         assert len(mofgen.topologies["test_net"].slots) == 3
+
+    def test_iza_aliases_attach_only_when_targets_exist(
+        self, binodal_topology, tmp_path
+    ):
+        """A custom library without zeolite nets gets no aliases."""
+        from autografs import Autografs
+
+        path = tmp_path / "topos.json.gz"
+        topology_io.save_topologies({"test_net": binodal_topology}, path)
+        mofgen = Autografs(topofile=str(path))
+        assert mofgen.topologies.aliases == {}
+        assert "FAU" not in mofgen.topologies

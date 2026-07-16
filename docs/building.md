@@ -22,6 +22,7 @@ mofgen.list_building_units(sieve="srs")
 # raw access
 sbu = mofgen.sbu["Zn_mof5_octahedral"]          # a Fragment
 topology = mofgen.topologies["tbo"]             # a Topology (lazy library)
+zeolite = mofgen.topologies["FAU"]              # IZA framework codes work too
 
 print(len(topology))                  # number of slots
 print(topology.cell.abc)              # blueprint cell
@@ -30,6 +31,13 @@ print(topology.is_2d)                 # False
 for slot_type, indices in topology.mappings.items():
     print(slot_type, "fills slots", indices)
 ```
+
+55 IZA zeolite framework type codes (FAU, LTA, CHA, SOD, RHO, ...) resolve
+as lookup-only aliases onto the RCSR nets that carry them in lowercase —
+`mofgen.topologies["FAU"]` and `mofgen.topologies["fau"]` are the same
+entry, and enumeration (`build_all`, coverage counts) never sees a net
+twice. The mapping ships in `data/iza_aliases.json` (regenerate with
+`scripts/make_iza_aliases.py`); `mofgen.topologies.aliases` lists it.
 
 ## Building
 

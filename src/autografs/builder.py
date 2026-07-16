@@ -839,6 +839,19 @@ class Autografs:
         logger.info(
             f"\t[x] loaded {len(topologies)} topologies in {time.time() - t0:.0f} seconds."
         )
+        if isinstance(topologies, autografs.topology_io.LazyTopologyLibrary):
+            # IZA framework codes alias onto the RCSR nets that carry
+            # them in lowercase (FAU -> fau); lookup-only, so nothing
+            # is enumerated twice. attach_aliases drops entries whose
+            # target is absent, so custom libraries are safe.
+            alias_path = Path(autografs.data.__path__[0]) / "iza_aliases.json"
+            if alias_path.exists():
+                aliases = json.loads(alias_path.read_text(encoding="utf-8"))
+                attached = topologies.attach_aliases(aliases)
+                if attached:
+                    logger.info(
+                        f"\t[x] {attached} IZA framework codes alias onto library nets."
+                    )
         # assignment, not dict.update(): the JSON loader returns a lazy
         # mapping, and update() would materialize every topology
         self.topologies = topologies

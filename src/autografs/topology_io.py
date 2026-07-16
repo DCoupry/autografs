@@ -56,14 +56,45 @@ class LazyTopologyLibrary(Mapping):
     def __init__(self, payload: dict[str, dict]) -> None:
         self._raw = payload
         self._cache: dict[str, Topology] = {}
+        self._aliases: dict[str, str] = {}
+
+    def attach_aliases(self, aliases: Mapping[str, str]) -> int:
+        """Register lookup-only alternative names (e.g. IZA codes).
+
+        Aliases resolve in ``[]``, ``in`` and ``get`` but never appear
+        in iteration or ``len`` - they are alternative spellings of
+        existing entries, not entries, so enumeration-based consumers
+        (build_all, identify_net's candidate scan, coverage counts)
+        never see a net twice. Entries whose target is absent from
+        this library, or whose name shadows a real entry, are dropped;
+        the number actually attached is returned.
+        """
+        accepted = {
+            alias: target
+            for alias, target in aliases.items()
+            if target in self._raw and alias not in self._raw
+        }
+        self._aliases.update(accepted)
+        return len(accepted)
+
+    @property
+    def aliases(self) -> dict[str, str]:
+        """Attached alternative names, alias -> canonical entry."""
+        return dict(self._aliases)
+
+    def _resolve(self, name: str) -> str:
+        return self._aliases.get(name, name)
 
     def __getitem__(self, name: str) -> Topology:
+        name = self._resolve(name)
         if name not in self._cache:
             self._cache[name] = topology_from_dict(name, self._raw[name])
         return self._cache[name]
 
     def __contains__(self, name: object) -> bool:
         # the Mapping default would materialize via __getitem__
+        if isinstance(name, str):
+            name = self._resolve(name)
         return name in self._raw
 
     def __iter__(self) -> Iterator[str]:
