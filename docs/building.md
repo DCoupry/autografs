@@ -87,6 +87,13 @@ enumerates exhaustively. Either way the total combination count over all
 buildable topologies is logged before the first build starts, so an
 exhaustive run can be cost-estimated — and aborted — while still cheap.
 
+Long runs can checkpoint: with `checkpoint_dir="ckpt/"` every finished
+combination is recorded on disk atomically (built frameworks as `.json.gz`,
+gate rejections as `.failed` markers), and rerunning with the same arguments
+and the same directory skips them, reloading their outcomes instead of
+rebuilding — an interrupted enumeration resumes where it stopped. The ledger
+records outcomes, not settings, so rerun with the same gates and seed.
+
 ## Working with the result
 
 `build` returns a `Framework`:

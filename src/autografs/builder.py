@@ -26,7 +26,9 @@ Examples
 
 from __future__ import annotations
 
+import hashlib
 import itertools
+import json
 import logging
 import math
 import time
@@ -273,6 +275,61 @@ def _iter_combinations(
         yield tuple(options[i][j] for i, j in enumerate(pick))
 
 
+class _Checkpoint:
+    """On-disk ledger of finished build_all combinations.
+
+    One entry per (topology, SBU-choice) combination, keyed by a
+    digest of the names: ``<digest>.json.gz`` holds the built
+    framework, ``<digest>.failed`` marks a gate rejection. Writes go
+    through a temp file and an atomic replace, so a killed run never
+    leaves a truncated entry; a rerun pointed at the same directory
+    skips finished combinations and reloads their outcomes. The ledger
+    records outcomes only, not build settings - reruns must use the
+    same gates and seed for the restored results to mean anything.
+    """
+
+    def __init__(self, directory: str | Path) -> None:
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=True)
+        self._entries: dict[str, Path] = {}
+        for path in self.directory.iterdir():
+            # a .tmp piece is a write that never committed: ignore it,
+            # the combination will simply be rebuilt
+            if ".tmp" in path.suffixes:
+                continue
+            if path.name.endswith((".json.gz", ".failed")):
+                self._entries[path.name.split(".", 1)[0]] = path
+
+    @staticmethod
+    def key(topology_name: str, choice: tuple[str, ...]) -> str:
+        """Deterministic filename-safe digest of one combination."""
+        payload = json.dumps([topology_name, *choice])
+        return hashlib.sha256(payload.encode()).hexdigest()
+
+    def completed(self, key: str) -> bool:
+        return key in self._entries
+
+    def load(self, key: str) -> Framework | None:
+        """Recorded outcome: the framework, or None for a rejection."""
+        path = self._entries[key]
+        if path.name.endswith(".failed"):
+            return None
+        return Framework.load(path)
+
+    def record(self, key: str, framework: Framework | None) -> None:
+        name = f"{key}.json.gz" if framework is not None else f"{key}.failed"
+        final = self.directory / name
+        # the temp name keeps the real extension last so Framework.save
+        # still picks gzip, while '.tmp' marks it uncommitted
+        tmp = self.directory / f"{key}.tmp.{name.split('.', 1)[1]}"
+        if framework is None:
+            tmp.touch()
+        else:
+            framework.save(tmp)
+        tmp.replace(final)
+        self._entries[key] = final
+
+
 class Autografs:
     """Framework maker class to generate periodic structures from topologies.
 
@@ -351,6 +408,7 @@ class Autografs:
         seed: int | None = None,
         n_jobs: int = 1,
         deduplicate: bool = False,
+        checkpoint_dir: str | Path | None = None,
     ) -> list[Framework]:
         """
         Builds all available structures based on the SBU and Topologies libraries
@@ -395,6 +453,15 @@ class Autografs:
             the first representative of each equivalence class, and is
             off by default: it is quadratic per composition group, and
             the raw enumeration is sometimes the point.
+        checkpoint_dir : str, Path or None, optional
+            Directory for on-disk checkpointing. Every finished
+            combination is recorded there atomically (built frameworks
+            as .json.gz, gate rejections as .failed markers); a rerun
+            pointed at the same directory skips finished combinations
+            and reloads their outcomes instead of rebuilding, so an
+            interrupted enumeration resumes where it stopped. The
+            ledger records outcomes, not settings - rerun with the
+            same gates and seed. None (default) disables checkpointing.
 
         Returns
         -------
@@ -408,11 +475,13 @@ class Autografs:
                     f"for no cap, got {max_per_topology}"
                 )
             max_per_topology = None
+        checkpoint = _Checkpoint(checkpoint_dir) if checkpoint_dir is not None else None
         logger.info("Building All Available Structures! This will take some time.")
         logger.info("============================================================")
         rng = np.random.default_rng(seed)
         frameworks: list[Framework] = []
         attempted = 0
+        restored = 0
         # sieve pass first, so the full enumeration size is known (and
         # logged) before the first build starts: exhaustive runs can be
         # cost-estimated and aborted while still cheap
@@ -451,6 +520,26 @@ class Autografs:
         # cap on submitted-but-unfinished chunks: bounds the validated
         # mappings (deep-copied fragments) alive at any moment
         max_pending = 2 * n_jobs
+
+        def finish(
+            keys: list[str],
+            results: list[Framework | None],
+            i: int,
+            framework: Framework | None,
+        ) -> None:
+            if checkpoint is not None:
+                checkpoint.record(keys[i], framework)
+            results[i] = framework
+
+        def drain(
+            pending: deque[tuple[list[int], Future[list[Framework | None]]]],
+            keys: list[str],
+            results: list[Framework | None],
+        ) -> None:
+            indices, future = pending.popleft()
+            for i, framework in zip(indices, future.result(), strict=True):
+                finish(keys, results, i, framework)
+
         try:
             topology_pbar = tqdm(plans)
             for topology_name, slot_types, options in topology_pbar:
@@ -460,43 +549,76 @@ class Autografs:
                 # deep-copied fragment mappings are produced lazily
                 choices = list(_iter_combinations(options, max_per_topology, rng))
                 attempted += len(choices)
+                # per-topology results are indexed by choice so restored
+                # and freshly built outcomes interleave in stable order
+                results: list[Framework | None] = [None] * len(choices)
+                keys: list[str] = []
+                pending_idx = list(range(len(choices)))
+                if checkpoint is not None:
+                    keys = [checkpoint.key(topology_name, choice) for choice in choices]
+                    pending_idx = []
+                    for i, key in enumerate(keys):
+                        if checkpoint.completed(key):
+                            results[i] = checkpoint.load(key)
+                            restored += 1
+                        else:
+                            pending_idx.append(i)
                 validated_iter = (
-                    self._validate_mappings(
-                        topology=topology,
-                        mappings=dict(zip(slot_types, choice, strict=True)),
+                    (
+                        i,
+                        self._validate_mappings(
+                            topology=topology,
+                            mappings=dict(zip(slot_types, choices[i], strict=True)),
+                        ),
                     )
-                    for choice in choices
+                    for i in pending_idx
                 )
+
                 if executor is None:
-                    for mappings in validated_iter:
+                    for i, mappings in validated_iter:
                         framework = _build_one(
                             topology, mappings, refine_cell, max_rmsd, min_distance
                         )
-                        if framework is not None:
-                            frameworks.append(framework)
-                    continue
-                # chunked, windowed submission: the topology is pickled
-                # once per chunk (not per combination), and the FIFO
-                # window keeps ordering deterministic and memory flat
-                pending: deque[Future[list[Framework | None]]] = deque()
-                for chunk in _batched(validated_iter, BUILD_CHUNK_SIZE):
-                    pending.append(
-                        executor.submit(
-                            _build_chunk,
-                            (topology, chunk, refine_cell, max_rmsd, min_distance),
-                        )
+                        finish(keys, results, i, framework)
+                else:
+                    # chunked, windowed submission: the topology is
+                    # pickled once per chunk (not per combination), and
+                    # the FIFO window keeps ordering deterministic and
+                    # memory flat
+                    pending: deque[tuple[list[int], Future[list[Framework | None]]]] = (
+                        deque()
                     )
-                    if len(pending) >= max_pending:
-                        frameworks.extend(
-                            fw for fw in pending.popleft().result() if fw is not None
+                    for batch in _batched(validated_iter, BUILD_CHUNK_SIZE):
+                        indices = [i for i, _ in batch]
+                        chunk = [mappings for _, mappings in batch]
+                        pending.append(
+                            (
+                                indices,
+                                executor.submit(
+                                    _build_chunk,
+                                    (
+                                        topology,
+                                        chunk,
+                                        refine_cell,
+                                        max_rmsd,
+                                        min_distance,
+                                    ),
+                                ),
+                            )
                         )
-                while pending:
-                    frameworks.extend(
-                        fw for fw in pending.popleft().result() if fw is not None
-                    )
+                        if len(pending) >= max_pending:
+                            drain(pending, keys, results)
+                    while pending:
+                        drain(pending, keys, results)
+                frameworks.extend(fw for fw in results if fw is not None)
         finally:
             if executor is not None:
                 executor.shutdown()
+        if checkpoint is not None and restored:
+            logger.info(
+                f"\t[x] Restored {restored} finished combinations from "
+                f"{checkpoint.directory}."
+            )
         logger.info(f"\t[x] Generated a total of {len(frameworks):^6} frameworks.")
         if attempted:
             logger.info(

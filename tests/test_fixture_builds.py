@@ -217,6 +217,44 @@ class TestGoldenBuilds:
             with pytest.raises(ValueError, match="max_per_topology"):
                 mofgen.build_all(topology_subset=["pcu"], max_per_topology=bad)
 
+    def test_build_all_checkpoint_restart(self, mofgen, tmp_path, monkeypatch):
+        """A rerun on the same checkpoint dir rebuilds nothing."""
+        kwargs = dict(
+            topology_subset=["pcu"],
+            sbu_subset=["Zn_mof5_octahedral", "Benzene_linear"],
+            refine_cell=False,
+            checkpoint_dir=tmp_path / "ckpt",
+        )
+        first = mofgen.build_all(**kwargs)
+        assert len(first) == 1
+        assert len(list((tmp_path / "ckpt").glob("*.json.gz"))) == 1
+
+        def explode(*args, **kwargs):
+            raise AssertionError("checkpointed combination was rebuilt")
+
+        monkeypatch.setattr("autografs.builder._build_one", explode)
+        second = mofgen.build_all(**kwargs)
+        assert [fw.formula for fw in second] == [fw.formula for fw in first]
+
+    def test_build_all_checkpoint_records_failures(self, mofgen, tmp_path, monkeypatch):
+        """Gate rejections checkpoint too: a rerun does not retry them."""
+        kwargs = dict(
+            topology_subset=["pcu"],
+            sbu_subset=["Zn_mof5_octahedral", "Benzene_linear"],
+            refine_cell=False,
+            # no crystal packs atoms 100 A apart: OverlapError, always
+            min_distance=100.0,
+            checkpoint_dir=tmp_path / "ckpt",
+        )
+        assert mofgen.build_all(**kwargs) == []
+        assert len(list((tmp_path / "ckpt").glob("*.failed"))) == 1
+
+        def explode(*args, **kwargs):
+            raise AssertionError("failed combination was retried")
+
+        monkeypatch.setattr("autografs.builder._build_one", explode)
+        assert mofgen.build_all(**kwargs) == []
+
     @pytest.mark.slow
     def test_build_all_parallel_matches_serial(self, mofgen):
         """n_jobs > 1 produces the same frameworks as serial."""
