@@ -90,3 +90,31 @@ mofgen2 = Autografs(xyzfile="harvested_sbus.xyz")   # build with the harvest
 Monotopic organic units (a single connection point — bound solvent,
 modulators, capping residues) are classified `cap` and excluded from
 the default `write_xyz` output and the `building_units` view.
+
+## Assembly fingerprints: is this combination realized?
+
+`autografs.fingerprint` labels an assembly as the hashable triple
+(nets, building-block multiset, interpenetration fold), with block
+identity expressed in one shared vocabulary — a harvest's deduplicated
+fragment library. A framework *built from* that library fingerprints
+equal to the experimental structure it came from, so screening an
+enumeration against a corpus is a set lookup:
+
+```python
+from autografs import fingerprint
+
+harvest = mofgen.harvest("corpus/")
+realized = {
+    fingerprint.from_deconstruction(mofgen.deconstruct(cif),
+                                    library=harvest.fragments)
+    for cif in corpus_cifs
+}
+for framework in mofgen.build_all(...):        # built from the harvest
+    if fingerprint.from_framework(framework) not in realized:
+        ...                                     # an unrealized combination
+```
+
+Block counts are gcd-reduced (supercells fingerprint identically), caps
+are excluded (same convention as harvesting), and blocks with no match
+in the vocabulary carry an `unmatched:` marker that never collides with
+a buildable combination.
