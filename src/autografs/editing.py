@@ -318,20 +318,47 @@ def interpenetrate(
     return catenated
 
 
-def _displaced_copies(
-    framework: Framework, n: int, offset: tuple[float, float, float]
-) -> Framework:
-    """n copies of the framework, copy k displaced by k * offset."""
-    cell = framework.cell
+def replicated_graph(
+    framework: Framework,
+    shifts: Iterable[np.ndarray],
+    cell: np.ndarray | None = None,
+    copy_edges: bool = True,
+) -> networkx.Graph:
+    """Disjoint displaced copies of a framework's bond graph.
+
+    Copy k is displaced by ``shifts[k]`` (cartesian) and its node ids
+    offset by ``k * n_atoms``. The tag-uniqueness and slot-provenance
+    invariants live here, and only here: positive anchor tags shift by
+    ``k * tag_base`` and slot ids by ``k * slot_base``, so tag-pair
+    semantics and placed-SBU identity survive replication the same way
+    for supercells, interpenetration, and layer stacking.
+
+    Parameters
+    ----------
+    framework : Framework
+        Source framework; unchanged.
+    shifts : iterable of np.ndarray
+        One cartesian displacement per copy.
+    cell : np.ndarray or None, optional
+        Cell matrix of the combined graph; the source cell when None.
+    copy_edges : bool, optional
+        Copy each bond within its own copy (default). Callers that
+        rewire bonds across copies (supercells) pass False and add
+        the edges themselves.
+
+    Returns
+    -------
+    networkx.Graph
+        The combined graph, ready to wrap in a Framework.
+    """
     graph = framework.graph
     n_atoms = len(graph)
-    combined = networkx.Graph(cell=cell.copy())
+    combined = networkx.Graph(cell=framework.cell.copy() if cell is None else cell)
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
     slot_base = (
         max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1
     )
-    for k in range(n):
-        shift = (k * np.asarray(offset, dtype=float)) @ cell
+    for k, shift in enumerate(shifts):
         for node, data in graph.nodes(data=True):
             copied = dict(data)
             copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
@@ -340,8 +367,19 @@ def _displaced_copies(
             if "slot" in copied:
                 copied["slot"] += k * slot_base
             combined.add_node(node + k * n_atoms, **copied)
-        for i, j, data in graph.edges(data=True):
-            combined.add_edge(i + k * n_atoms, j + k * n_atoms, **dict(data))
+        if copy_edges:
+            for i, j, data in graph.edges(data=True):
+                combined.add_edge(i + k * n_atoms, j + k * n_atoms, **dict(data))
+    return combined
+
+
+def _displaced_copies(
+    framework: Framework, n: int, offset: tuple[float, float, float]
+) -> Framework:
+    """n copies of the framework, copy k displaced by k * offset."""
+    cell = framework.cell
+    shifts = [(k * np.asarray(offset, dtype=float)) @ cell for k in range(n)]
+    combined = replicated_graph(framework, shifts)
     return Framework(combined, name=f"{framework.name}_cat{n}")
 
 
@@ -370,21 +408,13 @@ def make_supercell(
     images = list(itertools.product(*(range(m) for m in multipliers)))
     image_index = {image: k for k, image in enumerate(images)}
     new_cell = np.asarray(multipliers, dtype=float)[:, None] * cell
-    supercell = networkx.Graph(cell=new_cell)
 
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
-    slot_base = max(d["slot"] for _, d in graph.nodes(data=True)) + 1
 
-    # nodes: one copy per image; tags are reassigned pairwise below
-    for k, image in enumerate(images):
-        shift = np.asarray(image, dtype=float) @ cell
-        for node, data in graph.nodes(data=True):
-            copied = dict(data)
-            copied["coord"] = np.asarray(data["coord"], dtype=float) + shift
-            copied["slot"] = data["slot"] + k * slot_base
-            if copied["tag"] > 0:
-                copied["tag"] = 0
-            supercell.add_node(node + k * n_atoms, **copied)
+    # nodes: one copy per image (edges are rewired across copies below,
+    # and every replicated tag is reassigned pairwise below)
+    shifts = [np.asarray(image, dtype=float) @ cell for image in images]
+    supercell = replicated_graph(framework, shifts, cell=new_cell, copy_edges=False)
 
     # edges: a bond from u to v's image at shift s maps, for u placed in
     # image m, onto v placed in image (m + s) mod multipliers - bonds

@@ -593,40 +593,8 @@ def _unwrap_unit(
     return images
 
 
-def deconstruct(
-    source: Structure | str | Path,
-    topologies: Mapping[str, Topology] | None = None,
-) -> Deconstruction:
-    """Deconstruct a periodic structure into SBUs and its net.
-
-    Parameters
-    ----------
-    source : Structure or str or Path
-        A pymatgen Structure, or the path of any structure file
-        pymatgen reads (CIF included).
-    topologies : Mapping[str, Topology] or None, optional
-        Topology library to identify the net against (e.g.
-        Autografs.topologies). When None, net identification is
-        skipped and ``net_candidates`` stays empty.
-
-    Returns
-    -------
-    Deconstruction
-        Building blocks, placed units, quotient graph and net
-        candidates. See the class documentation.
-
-    Raises
-    ------
-    DeconstructionError
-        For disordered input, structures without metals, structures
-        with no periodic component, or rod-like building units.
-
-    Examples
-    --------
-    >>> result = deconstruct("IRMOF-1.cif", topologies=mofgen.topologies)
-    >>> result.net_candidates
-    ['pcu']
-    """
+def _load_structure(source: Structure | str | Path) -> Structure:
+    """Parse and sanity-check the input structure."""
     if isinstance(source, (str, Path)):
         structure = Structure.from_file(str(source))
     else:
@@ -642,14 +610,29 @@ def deconstruct(
             "The structure contains dummy atoms ('X'); deconstruction "
             "expects a real crystal structure."
         )
-    # Guest removal, iterated to a guest-free bond graph. EconNN adapts
-    # bond detection to each atom's environment, so removing guests can
-    # change the bonds detected among the remaining atoms; looping until
-    # no 0-periodic component is left guarantees the interpenetration
-    # fold and the per-subframework split both come from the one final
-    # graph. Isolated atoms are stripped before each bond pass because
-    # EconNN crashes on an atom with no neighbor in reach (and such
-    # atoms are 0-periodic guests by definition).
+    return structure
+
+
+def _remove_guests(
+    structure: Structure,
+) -> tuple[Structure, networkx.MultiGraph, list[set[int]], list[str]]:
+    """Strip 0-periodic components, iterated to a guest-free bond graph.
+
+    EconNN adapts bond detection to each atom's environment, so
+    removing guests can change the bonds detected among the remaining
+    atoms; looping until no 0-periodic component is left guarantees
+    the interpenetration fold and the per-subframework split both come
+    from the one final graph. Isolated atoms are stripped before each
+    bond pass because EconNN crashes on an atom with no neighbor in
+    reach (and such atoms are 0-periodic guests by definition).
+
+    Returns
+    -------
+    tuple
+        The guest-free structure, its bond graph, that graph's
+        (periodic) connected components, and the removed guest
+        formulas.
+    """
     guest_formulas: list[str] = []
     while True:
         isolated = [
@@ -669,7 +652,7 @@ def deconstruct(
             c for c in components if _component_periodicity(bonds, c)[0] == 0
         ]
         if not guest_components:
-            break
+            return structure, bonds, components, guest_formulas
         guest_atoms = set().union(*guest_components)
         if len(guest_atoms) == len(structure):
             raise DeconstructionError(
@@ -686,33 +669,36 @@ def deconstruct(
         )
         keep = sorted(set(range(len(structure))) - guest_atoms)
         structure = Structure.from_sites([structure[i] for i in keep])
-    # every remaining component is a periodic subframework; more than
-    # one means interpenetration, each identified independently below
-    periodic_components = components
-    n_periodic = len(periodic_components)
-    if n_periodic > 1:
-        logger.info(f"\t[x] {n_periodic} interpenetrated subframeworks detected.")
 
-    # metal-oxo clustering for MOFs; branch-point analysis for
-    # metal-free frameworks (COFs), which have no metal to anchor cuts
-    if any(_is_metal(structure, i) for i in bonds.nodes):
-        node_atoms = _node_atoms(structure, bonds)
-        units = _unit_partition(bonds, node_atoms)
-    else:
-        units, node_atoms = _organic_units(structure, bonds)
-    atom_to_unit = {atom: k for k, unit in enumerate(units) for atom in unit}
 
-    # cut bonds join two different units by construction
+def _cut_bonds(
+    bonds: networkx.MultiGraph, atom_to_unit: dict[int, int]
+) -> list[tuple[int, int, tuple[int, int, int]]]:
+    """Bonds joining two different units, with their image offsets."""
     cuts: list[tuple[int, int, tuple[int, int, int]]] = []
     for u, v, data in bonds.edges(data=True):
         if atom_to_unit[u] != atom_to_unit[v]:
             offset = _jimage_from(u, v, data["to_jimage"])
             cuts.append((u, v, (int(offset[0]), int(offset[1]), int(offset[2]))))
+    return cuts
 
+
+def _extract_fragments(
+    structure: Structure,
+    units: list[set[int]],
+    node_atoms: set[int],
+    cuts: list[tuple[int, int, tuple[int, int, int]]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+) -> tuple[dict[str, Fragment], list[BuildingUnit]]:
+    """Dummy-capped fragments and their placed instances.
+
+    Every cut bond becomes an X dummy at the bond midpoint on both
+    sides, expressed in each unit's own unwrap frame; the per-unit
+    instances are then deduplicated into named fragment types.
+    """
     frac = structure.frac_coords
     lattice = structure.lattice
-    unwraps = [_unwrap_unit(structure, bonds, unit) for unit in units]
-
     # dummy positions per unit: midpoint of every cut bond, expressed
     # in the unit's own unwrap frame
     unit_dummies: dict[int, list[np.ndarray]] = defaultdict(list)
@@ -763,62 +749,157 @@ def deconstruct(
                 n_connections=n_connections,
             )
         )
+    return fragments, built_units
 
-    # unit-level labeled quotient graph, built directly from the cut
-    # list: one vertex per unit, one voltage-labeled edge per cut bond.
-    # Building it as a simple unit graph would collapse parallel cuts
-    # joining the same atom pair through different periodic images (a
-    # one-atom bridge between a unit and its partner's own image),
-    # silently dropping quotient edges. The gauge matches
-    # autografs.net: a unit's home-cell image is the integer split of
-    # its unwrapped centroid, and the cut's voltage follows exactly
-    # from its image offset and the two endpoint unwraps.
-    unit_images: dict[int, np.ndarray] = {}
+
+def _unit_images(
+    frac: np.ndarray, units: list[set[int]], unwraps: list[dict[int, np.ndarray]]
+) -> dict[int, np.ndarray]:
+    """Home-cell image of every unit's unwrapped centroid.
+
+    This is the gauge shared with autografs.net: a unit's image is the
+    integer split of its unwrapped centroid.
+    """
+    images: dict[int, np.ndarray] = {}
     for k, unit in enumerate(units):
         centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
-        unit_images[k], _ = _split_image(centroid)
+        images[k], _ = _split_image(centroid)
+    return images
 
-    def unit_quotient(atoms: set[int] | None = None) -> Counter[Edge]:
-        edges: Counter[Edge] = Counter()
-        for u, v, jimage in cuts:
-            # a cut joins two bonded units, so both endpoints share a
-            # periodic component: one endpoint decides the restriction
-            if atoms is not None and u not in atoms:
-                continue
-            unit_u = atom_to_unit[u]
-            unit_v = atom_to_unit[v]
-            shift = np.asarray(jimage, dtype=int) + (
-                unwraps[unit_u][u] - unwraps[unit_v][v]
-            )
-            voltage = unit_images[unit_v] + shift - unit_images[unit_u]
-            edges[_canonical(unit_u, unit_v, voltage)] += 1
-        return edges
 
-    quotient_edges = unit_quotient()
+def _unit_quotient(
+    cuts: list[tuple[int, int, tuple[int, int, int]]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+    unit_images: dict[int, np.ndarray],
+    atoms: set[int] | None = None,
+) -> Counter[Edge]:
+    """Unit-level labeled quotient graph, built directly from the cut
+    list: one vertex per unit, one voltage-labeled edge per cut bond.
 
-    # identify each interpenetrated subframework independently
+    Building it as a simple unit graph would collapse parallel cuts
+    joining the same atom pair through different periodic images (a
+    one-atom bridge between a unit and its partner's own image),
+    silently dropping quotient edges. The gauge matches autografs.net
+    (see _unit_images), and the cut's voltage follows exactly from its
+    image offset and the two endpoint unwraps. With ``atoms`` given,
+    only cuts inside that periodic component contribute.
+    """
+    edges: Counter[Edge] = Counter()
+    for u, v, jimage in cuts:
+        # a cut joins two bonded units, so both endpoints share a
+        # periodic component: one endpoint decides the restriction
+        if atoms is not None and u not in atoms:
+            continue
+        unit_u = atom_to_unit[u]
+        unit_v = atom_to_unit[v]
+        shift = np.asarray(jimage, dtype=int) + (
+            unwraps[unit_u][u] - unwraps[unit_v][v]
+        )
+        voltage = unit_images[unit_v] + shift - unit_images[unit_u]
+        edges[_canonical(unit_u, unit_v, voltage)] += 1
+    return edges
+
+
+def _identify_subframeworks(
+    subframework_edges: list[Counter[Edge]],
+    topologies: Mapping[str, Topology],
+) -> tuple[list[NetMatches], list[str]]:
+    """Per-subframework net candidates and their consensus.
+
+    The consensus is the candidates common to every interpenetrated
+    subframework; empty (with a warning) when they disagree.
+    """
+    subframework_nets = [
+        identify_net(edges, topologies) for edges in subframework_edges
+    ]
+    common = set(subframework_nets[0])
+    for nets in subframework_nets[1:]:
+        common &= set(nets)
+    net_candidates = sorted(common)
+    n_periodic = len(subframework_nets)
+    if n_periodic > 1 and not net_candidates:
+        logger.warning(
+            f"interpenetrated subframeworks identify different nets "
+            f"({subframework_nets}); no consensus net."
+        )
+    logger.info(
+        f"\t[x] net candidates: {', '.join(net_candidates) or 'none found'}"
+        f"{f' ({n_periodic}-fold)' if n_periodic > 1 else ''}."
+    )
+    return subframework_nets, net_candidates
+
+
+def deconstruct(
+    source: Structure | str | Path,
+    topologies: Mapping[str, Topology] | None = None,
+) -> Deconstruction:
+    """Deconstruct a periodic structure into SBUs and its net.
+
+    Parameters
+    ----------
+    source : Structure or str or Path
+        A pymatgen Structure, or the path of any structure file
+        pymatgen reads (CIF included).
+    topologies : Mapping[str, Topology] or None, optional
+        Topology library to identify the net against (e.g.
+        Autografs.topologies). When None, net identification is
+        skipped and ``net_candidates`` stays empty.
+
+    Returns
+    -------
+    Deconstruction
+        Building blocks, placed units, quotient graph and net
+        candidates. See the class documentation.
+
+    Raises
+    ------
+    DeconstructionError
+        For disordered input, structures without metals, structures
+        with no periodic component, or rod-like building units.
+
+    Examples
+    --------
+    >>> result = deconstruct("IRMOF-1.cif", topologies=mofgen.topologies)
+    >>> result.net_candidates
+    ['pcu']
+    """
+    structure = _load_structure(source)
+    structure, bonds, periodic_components, guest_formulas = _remove_guests(structure)
+    # every remaining component is a periodic subframework; more than
+    # one means interpenetration, each identified independently below
+    n_periodic = len(periodic_components)
+    if n_periodic > 1:
+        logger.info(f"\t[x] {n_periodic} interpenetrated subframeworks detected.")
+
+    # metal-oxo clustering for MOFs; branch-point analysis for
+    # metal-free frameworks (COFs), which have no metal to anchor cuts
+    if any(_is_metal(structure, i) for i in bonds.nodes):
+        node_atoms = _node_atoms(structure, bonds)
+        units = _unit_partition(bonds, node_atoms)
+    else:
+        units, node_atoms = _organic_units(structure, bonds)
+    atom_to_unit = {atom: k for k, unit in enumerate(units) for atom in unit}
+
+    # cut bonds join two different units by construction
+    cuts = _cut_bonds(bonds, atom_to_unit)
+    unwraps = [_unwrap_unit(structure, bonds, unit) for unit in units]
+    fragments, built_units = _extract_fragments(
+        structure, units, node_atoms, cuts, atom_to_unit, unwraps
+    )
+
+    unit_images = _unit_images(structure.frac_coords, units, unwraps)
+    quotient_edges = _unit_quotient(cuts, atom_to_unit, unwraps, unit_images)
+
     subframework_nets: list[NetMatches] = []
-    if topologies is not None:
-        subframework_nets = [
-            identify_net(unit_quotient(component), topologies)
-            for component in periodic_components
-        ]
-
     net_candidates: list[str] = []
     if topologies is not None:
-        # consensus: the candidates common to every subframework
-        common = set(subframework_nets[0])
-        for nets in subframework_nets[1:]:
-            common &= set(nets)
-        net_candidates = sorted(common)
-        if n_periodic > 1 and not net_candidates:
-            logger.warning(
-                f"interpenetrated subframeworks identify different nets "
-                f"({subframework_nets}); no consensus net."
-            )
-        logger.info(
-            f"\t[x] net candidates: {', '.join(net_candidates) or 'none found'}"
-            f"{f' ({n_periodic}-fold)' if n_periodic > 1 else ''}."
+        subframework_nets, net_candidates = _identify_subframeworks(
+            [
+                _unit_quotient(cuts, atom_to_unit, unwraps, unit_images, component)
+                for component in periodic_components
+            ],
+            topologies,
         )
 
     return Deconstruction(
