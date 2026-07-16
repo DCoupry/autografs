@@ -357,6 +357,81 @@ class TestCOF:
         assert "node_C6O13Zn4_6X" in result.fragments
 
 
+def _rod_pillar_structure():
+    """Tetragonal -Zn-O- chain along c, pyrazine linkers along a and b.
+
+    A minimal rod MOF: the chain is a 1-periodic metal-oxo unit whose
+    single point of extension per repeat (the Zn) carries four Zn-N
+    cuts. The PoE quotient is one vertex with a c self-loop plus two
+    ditopic linkers - the bare pcu net after contraction. Rings are
+    tilted 45 degrees out of the ab plane so neighboring linkers and
+    c-images stay comfortably apart.
+    """
+    import numpy as np
+
+    a, c = 6.9, 3.9
+    lattice = Lattice.tetragonal(a, c)
+    species = ["Zn", "O"]
+    coords = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.95]]
+    tilt = np.sqrt(0.5)
+    ring = [
+        ("N", -1.395, 0.0),
+        ("N", 1.395, 0.0),
+        ("C", -0.6975, 1.208),
+        ("C", 0.6975, 1.208),
+        ("C", -0.6975, -1.208),
+        ("C", 0.6975, -1.208),
+        ("H", -1.237, 2.143),
+        ("H", 1.237, 2.143),
+        ("H", -1.237, -2.143),
+        ("H", 1.237, -2.143),
+    ]
+    for center, plane in (
+        (np.array([a / 2, 0.0, 0.0]), "x"),
+        (np.array([0.0, a / 2, 0.0]), "y"),
+    ):
+        for symbol, along, out in ring:
+            if plane == "x":
+                pos = center + np.array([along, out * tilt, out * tilt])
+            else:
+                pos = center + np.array([out * tilt, along, -out * tilt])
+            species.append(symbol)
+            coords.append(pos.tolist())
+    return Structure(lattice, species, coords, coords_are_cartesian=True)
+
+
+class TestRodMOF:
+    @pytest.fixture(scope="class")
+    def rod_result(self, mofgen):
+        return mofgen.deconstruct(_rod_pillar_structure())
+
+    def test_rod_detected_and_characterized(self, rod_result):
+        assert len(rod_result.rod_units) == 1
+        rod = rod_result.rod_units[0]
+        assert rod.atom_indices == [0, 1]  # the Zn-O chain
+        assert abs(float(rod.axis[2])) == pytest.approx(1.0)  # along c
+        assert rod.repeat_length == pytest.approx(3.9)
+        assert rod.generator in {(0, 0, 1), (0, 0, -1)}
+        assert rod.poe_indices == [0]  # the Zn carries every cut
+        assert rod.n_connections == 4
+        assert "rod" in repr(rod_result)
+
+    def test_rod_has_no_fragment_but_linkers_do(self, rod_result):
+        assert set(rod_result.fragments) == {"linker_C4H4N2_2X"}
+        kinds = Counter(unit.kind for unit in rod_result.units)
+        assert kinds == {"linker": 2}
+
+    def test_poe_net_identified(self, rod_result):
+        """PoE convention: chain self-loop + two ditopic linkers = pcu.
+
+        The PoE expansion carries no blueprint edge centers, so the
+        match lands on the contracted tier by construction.
+        """
+        assert rod_result.net_candidates == ["pcu"]
+        assert rod_result.subframework_nets[0].tier == "contracted"
+        assert rod_result.n_periodic_components == 1
+
+
 class TestErrors:
     def test_molecular_crystal_rejected(self):
         structure = Structure(Lattice.cubic(20.0), ["He"], [[0.5, 0.5, 0.5]])

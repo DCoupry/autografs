@@ -61,9 +61,19 @@ result.is_catenated            # True
 Both MOFs and COFs are handled; the COF path uses the single-node
 convention, so a node bundled differently in the original SBU library
 (e.g. a triphenylamine core cut at its central atom) may come back more
-finely divided, but the recovered net is the same. Scope: frameworks
-with molecular building units. Rod MOFs and other 1-periodic (chain)
-building units raise `DeconstructionError`.
+finely divided, but the recovered net is the same.
+
+Rod MOFs (1-periodic building units, e.g. the MOF-74 family) are
+detected and reported rather than rejected: a rod has no finite
+fragment, so it appears in `rod_units` (axis, crystallographic repeat,
+points of extension, cut count) instead of `fragments`, and in the
+quotient graph the rod is replaced by its points of extension joined
+along the axis — the O'Keeffe PoE convention — before net
+identification. Because that expansion carries no blueprint edge
+centers, rod nets typically match on the contracted tier (check
+`subframework_nets[i].tier`). A bare 1-periodic polymer with no
+framework connections still raises `DeconstructionError`, as do
+2-periodic (layer) building units.
 
 ## Harvesting a library from many structures
 
