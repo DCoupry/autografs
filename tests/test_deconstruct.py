@@ -357,22 +357,28 @@ class TestCOF:
         assert "node_C6O13Zn4_6X" in result.fragments
 
 
-def _rod_pillar_structure():
+def _rod_pillar_structure(n_repeats: int = 1):
     """Tetragonal -Zn-O- chain along c, pyrazine linkers along a and b.
 
     A minimal rod MOF: the chain is a 1-periodic metal-oxo unit whose
-    single point of extension per repeat (the Zn) carries four Zn-N
-    cuts. The PoE quotient is one vertex with a c self-loop plus two
-    ditopic linkers - the bare pcu net after contraction. Rings are
-    tilted 45 degrees out of the ab plane so neighboring linkers and
-    c-images stay comfortably apart.
+    points of extension (the Zn atoms, one per chemical repeat) each
+    carry four Zn-N cuts. The PoE quotient contracts to the bare pcu
+    net. Rings are tilted 45 degrees out of the ab plane so
+    neighboring linkers and c-images stay comfortably apart. With
+    ``n_repeats`` > 1 the cell holds several chemical repeats - the
+    crystallographic repeat grows and the rod gets multiple PoE, but
+    the net is unchanged (a supercell of the same framework). Chain
+    atoms come first (Zn at even indices, O at odd), rings after.
     """
     import numpy as np
 
-    a, c = 6.9, 3.9
-    lattice = Lattice.tetragonal(a, c)
-    species = ["Zn", "O"]
-    coords = [[0.0, 0.0, 0.0], [0.0, 0.0, 1.95]]
+    a, c0 = 6.9, 3.9
+    lattice = Lattice.tetragonal(a, c0 * n_repeats)
+    species = []
+    coords = []
+    for r in range(n_repeats):
+        species += ["Zn", "O"]
+        coords += [[0.0, 0.0, r * c0], [0.0, 0.0, r * c0 + 1.95]]
     tilt = np.sqrt(0.5)
     ring = [
         ("N", -1.395, 0.0),
@@ -386,17 +392,18 @@ def _rod_pillar_structure():
         ("H", -1.237, -2.143),
         ("H", 1.237, -2.143),
     ]
-    for center, plane in (
-        (np.array([a / 2, 0.0, 0.0]), "x"),
-        (np.array([0.0, a / 2, 0.0]), "y"),
-    ):
-        for symbol, along, out in ring:
-            if plane == "x":
-                pos = center + np.array([along, out * tilt, out * tilt])
-            else:
-                pos = center + np.array([out * tilt, along, -out * tilt])
-            species.append(symbol)
-            coords.append(pos.tolist())
+    for r in range(n_repeats):
+        for center, plane in (
+            (np.array([a / 2, 0.0, r * c0]), "x"),
+            (np.array([0.0, a / 2, r * c0]), "y"),
+        ):
+            for symbol, along, out in ring:
+                if plane == "x":
+                    pos = center + np.array([along, out * tilt, out * tilt])
+                else:
+                    pos = center + np.array([out * tilt, along, -out * tilt])
+                species.append(symbol)
+                coords.append(pos.tolist())
     return Structure(lattice, species, coords, coords_are_cartesian=True)
 
 
@@ -430,6 +437,20 @@ class TestRodMOF:
         assert rod_result.net_candidates == ["pcu"]
         assert rod_result.subframework_nets[0].tier == "contracted"
         assert rod_result.n_periodic_components == 1
+
+    def test_multi_poe_chain_orders_along_axis(self, mofgen):
+        """Two chemical repeats per cell: several PoE per rod must
+        chain in axial order (consecutive links + one wrap-around),
+        and the identified net is unchanged - it is a supercell of
+        the same framework."""
+        result = mofgen.deconstruct(_rod_pillar_structure(n_repeats=2))
+        assert len(result.rod_units) == 1
+        rod = result.rod_units[0]
+        assert sorted(rod.poe_indices) == [0, 2]  # the two Zn, by z
+        assert rod.repeat_length == pytest.approx(7.8)
+        assert rod.n_connections == 8
+        assert result.net_candidates == ["pcu"]
+        assert result.subframework_nets[0].tier == "contracted"
 
 
 class TestErrors:
