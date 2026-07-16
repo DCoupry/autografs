@@ -42,13 +42,19 @@ subframework is a separate connected component, identified on its own,
 with the fold reported as ``n_periodic_components`` and the per-net
 results in ``subframework_nets``.
 
-Scope: frameworks with molecular (0-periodic) building units. Rod MOFs
-and 1-periodic (chain) units raise DeconstructionError.
+Rod MOFs (1-periodic building units, e.g. the MOF-74 family) are
+detected and reported as ``rod_units``: a rod has no finite fragment,
+so in the quotient graph it is replaced by its points of extension
+(the atoms carrying cut bonds) joined along the rod axis - the
+O'Keeffe PoE convention - and net identification proceeds on that
+graph (typically matching on the contracted tier). 2-periodic (layer)
+building units raise DeconstructionError.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter, defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -83,6 +89,7 @@ if TYPE_CHECKING:
 __all__ = [
     "BuildingUnit",
     "Deconstruction",
+    "RodUnit",
     "deconstruct",
     "match_fragment",
     "merge_fragment",
@@ -131,6 +138,46 @@ class BuildingUnit:
 
 
 @dataclass
+class RodUnit:
+    """One 1-periodic (rod) building unit of a deconstructed structure.
+
+    A rod has no finite molecular fragment - it is bonded to its own
+    periodic image along one lattice direction - so it is reported
+    structurally instead of joining ``Deconstruction.fragments``. In
+    the quotient graph the rod is replaced by its points of extension
+    (the atoms carrying cut bonds), joined in the order they occur
+    along the rod axis - the O'Keeffe PoE convention, under which
+    MOF-74 identifies as etb. Because the PoE expansion carries no
+    blueprint edge centers, rod nets typically match on the
+    contracted tier (see autografs.net.NetMatches.tier).
+
+    Attributes
+    ----------
+    atom_indices : list[int]
+        Site indices into Deconstruction.structure.
+    axis : np.ndarray
+        Unit vector (cartesian) along the rod.
+    repeat_length : float
+        Crystallographic repeat along the axis, in Angstrom.
+    generator : tuple[int, int, int]
+        The lattice translation realizing the repeat.
+    poe_indices : list[int]
+        Points of extension (atoms with cut bonds), sorted by their
+        position along the axis; one crystallographic repeat's worth.
+    n_connections : int
+        Cut bonds per crystallographic repeat (a single PoE atom can
+        carry several).
+    """
+
+    atom_indices: list[int]
+    axis: np.ndarray
+    repeat_length: float
+    generator: tuple[int, int, int]
+    poe_indices: list[int]
+    n_connections: int
+
+
+@dataclass
 class Deconstruction:
     """Result of deconstructing a periodic structure.
 
@@ -145,7 +192,8 @@ class Deconstruction:
     quotient_edges : Counter[Edge]
         Labeled quotient graph of the framework: one vertex per unit
         (indexed as in ``units``), one voltage-labeled edge per cut
-        bond.
+        bond. Rod units are replaced by their points of extension
+        (vertex ids continue past the unit count; see RodUnit).
     net_candidates : list[str]
         Library nets realized by the framework: the consensus (shared
         candidates) across all interpenetrated subframeworks. Empty
@@ -166,6 +214,11 @@ class Deconstruction:
         edges are subdivided).
     guest_formulas : list[str]
         Compositions of the removed 0-periodic components.
+    rod_units : list[RodUnit]
+        1-periodic building units (rod MOFs). Rods have no finite
+        fragment, so they appear here instead of ``fragments`` /
+        ``units``; in ``quotient_edges`` each rod is replaced by its
+        points of extension (see RodUnit).
     """
 
     structure: Structure
@@ -176,6 +229,7 @@ class Deconstruction:
     n_periodic_components: int = 1
     subframework_nets: list[NetMatches] = field(default_factory=list)
     guest_formulas: list[str] = field(default_factory=list)
+    rod_units: list[RodUnit] = field(default_factory=list)
 
     @property
     def is_catenated(self) -> bool:
@@ -194,6 +248,8 @@ class Deconstruction:
 
     def __repr__(self) -> str:
         kinds = Counter(unit.kind for unit in self.units)
+        if self.rod_units:
+            kinds["rod"] = len(self.rod_units)
         summary = ", ".join(
             f"{count} {kind}(s)" for kind, count in sorted(kinds.items())
         )
@@ -334,7 +390,7 @@ def _jimage_from(u: int, v: int, jimage: tuple[int, int, int]) -> np.ndarray:
 
 def _component_periodicity(
     bonds: networkx.MultiGraph, component: set[int]
-) -> tuple[int, dict[int, np.ndarray]]:
+) -> tuple[int, dict[int, np.ndarray], list[np.ndarray]]:
     """Periodic rank of a connected component, plus unwrap images.
 
     A spanning breadth-first search assigns every atom the periodic
@@ -342,7 +398,10 @@ def _component_periodicity(
     image mismatches over the remaining edges is the component's
     dimensionality (0 = molecular guest, 3 = full framework). The
     image assignment doubles as the unwrap used to build molecular
-    fragments from wrapped coordinates.
+    fragments from wrapped coordinates - for periodic components it is
+    the BFS-tree gauge, still consistent for voltage bookkeeping. The
+    raw mismatch vectors are returned too: they generate the
+    component's translation lattice (a rod's axis falls out of them).
     """
     start = min(component)
     images: dict[int, np.ndarray] = {start: np.zeros(3, dtype=int)}
@@ -369,7 +428,7 @@ def _component_periodicity(
     rank = 0
     if mismatches:
         rank = int(np.linalg.matrix_rank(np.array(mismatches)))
-    return rank, images
+    return rank, images, mismatches
 
 
 def _is_metal(structure: Structure, index: int) -> bool:
@@ -596,25 +655,26 @@ def _organic_units(
     return units, node_atoms
 
 
-def _unwrap_unit(
-    structure: Structure, bonds: networkx.MultiGraph, unit: set[int]
-) -> dict[int, np.ndarray]:
-    """Periodic images making a unit a connected molecular cluster.
+def _rod_generator(mismatches: list[np.ndarray]) -> np.ndarray:
+    """Primitive generator of a rank-1 image-mismatch lattice.
 
-    Raises
-    ------
-    DeconstructionError
-        If the unit is bonded to its own periodic image (a rod or
-        layer, which has no molecular fragment representation).
+    A rod's non-tree bond mismatches are all integer multiples of one
+    lattice translation; the generator of the subgroup they span is
+    that translation times the gcd of the multiples.
     """
-    rank, images = _component_periodicity(bonds.subgraph(unit), unit)
-    if rank > 0:
-        symbols = Counter(structure[i].specie.symbol for i in sorted(unit)[:50])
-        raise DeconstructionError(
-            f"Building unit {dict(symbols)} is {rank}-periodic (a rod or "
-            "layer). Rod-MOF deconstruction is not supported yet."
-        )
-    return images
+    first = next(m for m in mismatches if m.any())
+    direction = first // math.gcd(*(int(abs(x)) for x in first if x))
+    pivot = next(i for i in range(3) if direction[i])
+    factors = []
+    for mismatch in mismatches:
+        factor = int(mismatch[pivot]) // int(direction[pivot])
+        if not np.array_equal(mismatch, factor * direction):
+            raise DeconstructionError(
+                "Inconsistent rod translation lattice; the bond graph "
+                "does not describe a clean 1-periodic unit."
+            )
+        factors.append(abs(factor))
+    return math.gcd(*factors) * direction
 
 
 def _load_structure(source: Structure | str | Path) -> Structure:
@@ -673,7 +733,9 @@ def _remove_guests(
         bonds = _structure_bond_graph(structure)
         components = [set(c) for c in networkx.connected_components(bonds)]
         guest_components = [
-            c for c in components if _component_periodicity(bonds, c)[0] == 0
+            c
+            for c in components
+            if _component_periodicity(bonds, c)[0] == 0  # rank
         ]
         if not guest_components:
             return structure, bonds, components, guest_formulas
@@ -714,12 +776,15 @@ def _extract_fragments(
     cuts: list[tuple[int, int, tuple[int, int, int]]],
     atom_to_unit: dict[int, int],
     unwraps: list[dict[int, np.ndarray]],
+    rod_indices: frozenset[int] | set[int] = frozenset(),
 ) -> tuple[dict[str, Fragment], list[BuildingUnit]]:
     """Dummy-capped fragments and their placed instances.
 
     Every cut bond becomes an X dummy at the bond midpoint on both
     sides, expressed in each unit's own unwrap frame; the per-unit
-    instances are then deduplicated into named fragment types.
+    instances are then deduplicated into named fragment types. Rod
+    units (``rod_indices``) have no finite fragment and are skipped -
+    they are reported through Deconstruction.rod_units instead.
     """
     frac = structure.frac_coords
     lattice = structure.lattice
@@ -730,6 +795,8 @@ def _extract_fragments(
         shift = np.asarray(jimage, dtype=int)
         for atom, partner, partner_shift in ((u, v, shift), (v, u, -shift)):
             unit_index = atom_to_unit[atom]
+            if unit_index in rod_indices:
+                continue
             atom_frac = frac[atom] + unwraps[unit_index][atom]
             # the partner sits one bond away from this atom's unwrapped
             # position: its cell coordinate shifted by the bond's image
@@ -738,9 +805,11 @@ def _extract_fragments(
             midpoint = lattice.get_cartesian_coords((atom_frac + partner_frac) / 2.0)
             unit_dummies[unit_index].append(midpoint)
 
-    # molecular fragments, one per unit instance
-    instances: list[Fragment] = []
+    # molecular fragments, one per finite unit instance
+    instances: dict[int, Fragment] = {}
     for k, unit in enumerate(units):
+        if k in rod_indices:
+            continue
         ordered = sorted(unit)
         species = [structure[i].specie.symbol for i in ordered]
         coords = [
@@ -748,12 +817,13 @@ def _extract_fragments(
         ]
         species += ["X"] * len(unit_dummies[k])
         coords += list(unit_dummies[k])
-        instances.append(Fragment(atoms=Molecule(species, coords), name=f"unit_{k}"))
+        instances[k] = Fragment(atoms=Molecule(species, coords), name=f"unit_{k}")
 
     # deduplicate instances into named fragment types
     fragments: dict[str, Fragment] = {}
     built_units: list[BuildingUnit] = []
-    for k, (unit, instance) in enumerate(zip(units, instances, strict=True)):
+    for k, instance in sorted(instances.items()):
+        unit = units[k]
         n_connections = len(unit_dummies[k])
         # units are entirely node atoms or entirely organic by construction
         if unit <= node_atoms:
@@ -777,15 +847,22 @@ def _extract_fragments(
 
 
 def _unit_images(
-    frac: np.ndarray, units: list[set[int]], unwraps: list[dict[int, np.ndarray]]
+    frac: np.ndarray,
+    units: list[set[int]],
+    unwraps: list[dict[int, np.ndarray]],
+    rod_indices: frozenset[int] | set[int] = frozenset(),
 ) -> dict[int, np.ndarray]:
-    """Home-cell image of every unit's unwrapped centroid.
+    """Home-cell image of every finite unit's unwrapped centroid.
 
     This is the gauge shared with autografs.net: a unit's image is the
-    integer split of its unwrapped centroid.
+    integer split of its unwrapped centroid. Rods are skipped - an
+    infinite unit has no centroid; their points of extension carry
+    per-atom images instead (see deconstruct()).
     """
     images: dict[int, np.ndarray] = {}
     for k, unit in enumerate(units):
+        if k in rod_indices:
+            continue
         centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
         images[k], _ = _split_image(centroid)
     return images
@@ -796,6 +873,9 @@ def _unit_quotient(
     atom_to_unit: dict[int, int],
     unwraps: list[dict[int, np.ndarray]],
     unit_images: dict[int, np.ndarray],
+    poe_vertex: dict[int, int] | None = None,
+    poe_images: dict[int, np.ndarray] | None = None,
+    rod_links: list[tuple[int, int, np.ndarray]] | None = None,
     atoms: set[int] | None = None,
 ) -> Counter[Edge]:
     """Unit-level labeled quotient graph, built directly from the cut
@@ -808,20 +888,41 @@ def _unit_quotient(
     (see _unit_images), and the cut's voltage follows exactly from its
     image offset and the two endpoint unwraps. With ``atoms`` given,
     only cuts inside that periodic component contribute.
+
+    Rod units do not appear as vertices: a cut endpoint listed in
+    ``poe_vertex`` maps to its point-of-extension vertex with its own
+    per-atom home image (``poe_images``), and ``rod_links`` adds the
+    rod-internal PoE-to-PoE edges (consecutive along the axis; the
+    wrap-around link carries the rod's lattice generator as an extra
+    shift) - the O'Keeffe points-of-extension convention.
     """
+    poe_vertex = poe_vertex or {}
+    poe_images = poe_images or {}
+
+    def endpoint(atom: int) -> tuple[int, np.ndarray]:
+        if atom in poe_vertex:
+            return poe_vertex[atom], poe_images[atom]
+        unit = atom_to_unit[atom]
+        return unit, unit_images[unit]
+
     edges: Counter[Edge] = Counter()
     for u, v, jimage in cuts:
         # a cut joins two bonded units, so both endpoints share a
         # periodic component: one endpoint decides the restriction
         if atoms is not None and u not in atoms:
             continue
-        unit_u = atom_to_unit[u]
-        unit_v = atom_to_unit[v]
+        vertex_u, image_u = endpoint(u)
+        vertex_v, image_v = endpoint(v)
         shift = np.asarray(jimage, dtype=int) + (
-            unwraps[unit_u][u] - unwraps[unit_v][v]
+            unwraps[atom_to_unit[u]][u] - unwraps[atom_to_unit[v]][v]
         )
-        voltage = unit_images[unit_v] + shift - unit_images[unit_u]
-        edges[_canonical(unit_u, unit_v, voltage)] += 1
+        voltage = image_v + shift - image_u
+        edges[_canonical(vertex_u, vertex_v, voltage)] += 1
+    for a, b, extra in rod_links or ():
+        if atoms is not None and a not in atoms:
+            continue
+        voltage = poe_images[b] + extra - poe_images[a]
+        edges[_canonical(poe_vertex[a], poe_vertex[b], voltage)] += 1
     return edges
 
 
@@ -879,8 +980,9 @@ def deconstruct(
     Raises
     ------
     DeconstructionError
-        For disordered input, structures without metals, structures
-        with no periodic component, or rod-like building units.
+        For disordered input, structures with no periodic component,
+        2-periodic (layer) building units, or a bare rod with no
+        framework connections.
 
     Examples
     --------
@@ -907,20 +1009,115 @@ def deconstruct(
 
     # cut bonds join two different units by construction
     cuts = _cut_bonds(bonds, atom_to_unit)
-    unwraps = [_unwrap_unit(structure, bonds, unit) for unit in units]
+
+    # per-unit periodicity: finite units unwrap to molecules; a
+    # 1-periodic unit takes the rod path (its BFS-tree gauge still
+    # serves the voltage bookkeeping); layers have no support
+    unwraps: list[dict[int, np.ndarray]] = []
+    rod_indices: set[int] = set()
+    generators: dict[int, np.ndarray] = {}
+    for k, unit in enumerate(units):
+        rank, images, mismatches = _component_periodicity(bonds.subgraph(unit), unit)
+        unwraps.append(images)
+        if rank == 1:
+            rod_indices.add(k)
+            generators[k] = _rod_generator(mismatches)
+        elif rank >= 2:
+            symbols = Counter(structure[i].specie.symbol for i in sorted(unit)[:50])
+            raise DeconstructionError(
+                f"Building unit {dict(symbols)} is {rank}-periodic (a "
+                "layer); only molecular and rod (1-periodic) building "
+                "units are supported."
+            )
+
     fragments, built_units = _extract_fragments(
-        structure, units, node_atoms, cuts, atom_to_unit, unwraps
+        structure, units, node_atoms, cuts, atom_to_unit, unwraps, rod_indices
     )
 
-    unit_images = _unit_images(structure.frac_coords, units, unwraps)
-    quotient_edges = _unit_quotient(cuts, atom_to_unit, unwraps, unit_images)
+    # rods enter the quotient through their points of extension: each
+    # cut endpoint on a rod becomes its own vertex with a per-atom home
+    # image, and consecutive PoE along the axis are linked (the last
+    # wraps to the first, one lattice generator over)
+    frac = structure.frac_coords
+    rods: list[RodUnit] = []
+    poe_vertex: dict[int, int] = {}
+    poe_images: dict[int, np.ndarray] = {}
+    rod_links: list[tuple[int, int, np.ndarray]] = []
+    next_vertex = len(units)
+    rod_poe: dict[int, list[int]] = defaultdict(list)
+    rod_cuts: Counter[int] = Counter()
+    for u, v, _ in cuts:
+        for atom in (u, v):
+            unit_index = atom_to_unit[atom]
+            if unit_index in rod_indices:
+                rod_cuts[unit_index] += 1
+                if atom not in rod_poe[unit_index]:
+                    rod_poe[unit_index].append(atom)
+    for k in sorted(rod_indices):
+        generator = generators[k]
+        axis = generator @ structure.lattice.matrix
+        repeat = float(np.linalg.norm(axis))
+        axis_hat = axis / repeat
+        along_axis = sorted(
+            (
+                float(
+                    ((frac[atom] + unwraps[k][atom]) @ structure.lattice.matrix)
+                    @ axis_hat
+                ),
+                atom,
+            )
+            for atom in rod_poe[k]
+        )
+        poe = [atom for _, atom in along_axis]
+        if not poe:
+            symbols = Counter(structure[i].specie.symbol for i in sorted(units[k])[:50])
+            raise DeconstructionError(
+                f"Building unit {dict(symbols)} is a rod with no framework "
+                "connections: a bare 1-periodic polymer, not a framework."
+            )
+        for atom in poe:
+            poe_vertex[atom] = next_vertex
+            next_vertex += 1
+            poe_images[atom], _ = _split_image(frac[atom] + unwraps[k][atom])
+        for a, b in zip(poe, poe[1:], strict=False):
+            rod_links.append((a, b, np.zeros(3, dtype=int)))
+        rod_links.append((poe[-1], poe[0], generator))
+        rods.append(
+            RodUnit(
+                atom_indices=sorted(units[k]),
+                axis=axis_hat,
+                repeat_length=repeat,
+                generator=(int(generator[0]), int(generator[1]), int(generator[2])),
+                poe_indices=poe,
+                n_connections=rod_cuts[k],
+            )
+        )
+    if rods:
+        logger.info(
+            f"\t[x] {len(rods)} rod unit(s) detected; quotient uses "
+            "points of extension."
+        )
+
+    unit_images = _unit_images(frac, units, unwraps, rod_indices)
+    quotient_edges = _unit_quotient(
+        cuts, atom_to_unit, unwraps, unit_images, poe_vertex, poe_images, rod_links
+    )
 
     subframework_nets: list[NetMatches] = []
     net_candidates: list[str] = []
     if topologies is not None:
         subframework_nets, net_candidates = _identify_subframeworks(
             [
-                _unit_quotient(cuts, atom_to_unit, unwraps, unit_images, component)
+                _unit_quotient(
+                    cuts,
+                    atom_to_unit,
+                    unwraps,
+                    unit_images,
+                    poe_vertex,
+                    poe_images,
+                    rod_links,
+                    atoms=component,
+                )
                 for component in periodic_components
             ],
             topologies,
@@ -932,6 +1129,7 @@ def deconstruct(
         units=built_units,
         quotient_edges=quotient_edges,
         net_candidates=net_candidates,
+        rod_units=rods,
         n_periodic_components=n_periodic,
         subframework_nets=subframework_nets,
         guest_formulas=sorted(guest_formulas),
