@@ -91,6 +91,7 @@ __all__ = [
     "Deconstruction",
     "RodUnit",
     "deconstruct",
+    "match_fragment",
     "merge_fragment",
     "write_fragments_xyz",
 ]
@@ -310,6 +311,29 @@ def merge_fragment(
     typed.name = name
     library[name] = typed
     return name
+
+
+def match_fragment(
+    library: Mapping[str, Fragment], instance: Fragment, base_name: str
+) -> str | None:
+    """Name of the library entry ``instance`` would merge into, or None.
+
+    The read-only counterpart of merge_fragment: the same walk over the
+    base name and its numeric suffixes, the same identity test, no
+    mutation. Lets a fragment extracted from one structure be
+    re-expressed in another harvest's vocabulary - the operation
+    assembly fingerprints (autografs.fingerprint) are built on.
+    """
+    name = base_name
+    suffix = 1
+    while name in library:
+        if library[name].has_compatible_symmetry(
+            instance, max_rmsd=DEDUPLICATION_MAX_RMSD
+        ):
+            return name
+        suffix += 1
+        name = f"{base_name}_{suffix}"
+    return None
 
 
 def _hill_formula(symbols: Iterable[str]) -> str:
