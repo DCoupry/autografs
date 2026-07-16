@@ -45,6 +45,7 @@ Modules in `src/autografs/`, in pipeline order:
 - **`relax.py`** — LAMMPS relaxation backend behind `Framework.relax`.
 - **`plane_groups.py`** — the 17 plane groups, used for 2D layer nets.
 - **`cgd.py`** — CGD parser and `autografs-topologies` CLI (RCSR download, spacegroup expansion, orbit extraction).
+- **`extract_topology.py`** — `topology_from_tetrahedral(structure, name)`: idealized zeolite crystal (T atoms + bridging O, e.g. IZA CIFs) → buildable Topology. Emits the exact CGD conventions (Z-encodes coordination on centers, X dummies at T–O midpoints = quarter points) and reuses `cgd.analyze`/`orbit_equivalence_classes`, so extracted zeolites are indistinguishable from CGD-imported nets down to the exact identification tier. Rejects interrupted/non-tetrahedral input (`TopologyExtractionError`). The `--use_iza` importer (#128 phase 2) builds on this.
 - **`cli.py`** — `autografs` interactive wizard (questionary + rich). Deliberately has no non-interactive build flags; scripted use is the Python API.
 - **`utils.py`** — XYZ parsing, UFF4MOF atom typing (constants in `data/uff4mof.py`), Fragment→graph conversions, GULP export.
 - **`exceptions.py`** — `AutografsError` hierarchy: `AlignmentError`, `OverlapError`, `StackingError`, `RelaxationError`, `TopologyExtractionError`, `NetMismatchError`, `DeconstructionError`.
