@@ -159,6 +159,33 @@ Cells smaller than the non-bonded cutoff (12.5 Å by default) are relaxed as an
 internal supercell and folded back transparently. `"UFF"` and `"Dreiding"` are
 also accepted as `force_field`.
 
+## Elastic constants
+
+`elastic_properties` computes the 6×6 stiffness tensor at the same force-field
+level (same optional install), by central finite differences of the LAMMPS
+stress under the six Voigt strains after a full relaxation — the protocol of
+the LAMMPS `ELASTIC` example, run in-process:
+
+```python
+props = mof.elastic_properties()   # relaxes first; UFF4MOF by default
+props.stiffness                    # 6x6 Voigt matrix, GPa, symmetrized
+props.bulk_hill, props.shear_hill  # Voigt/Reuss/Hill averages
+props.young_hill, props.poisson_hill
+props.young_min, props.young_max   # directional extrema (anisotropy)
+props.young_modulus([1, 1, 0])     # along a specific direction
+props.is_stable                    # Born stability (positive definite)
+```
+
+The tensor is projected onto the framework's crystal system (averaged over its
+point-group rotations), so a cubic framework reports the exact 3-constant
+cubic pattern. Note that the detected symmetry is that of the *built model*,
+which can be lower than the net's: MOF-5 built on **pcu** keeps each benzene
+ring in a fixed plane and comes out orthorhombic (real MOF-5 is cubic only
+through ring disorder). Treat the numbers as screening-level: UFF4MOF
+stiffnesses carry force-field error; rankings across candidates are the
+reliable output. For 2D layer frameworks only the in-plane components are
+physical — the padded c axis is not.
+
 ## Error handling
 
 All library exceptions derive from `autografs.AutografsError`:

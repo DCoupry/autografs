@@ -199,6 +199,67 @@ def _match_displacements(
     return displacements
 
 
+def _write_lammps_inputs(
+    framework: Framework,
+    force_field: str,
+    cutoff: float,
+    workdir: Path,
+    quiet: contextlib.AbstractContextManager,
+) -> tuple[str, np.ndarray]:
+    """Stage lammps-interface data/input files for a framework.
+
+    Writes the framework as a CIF into ``workdir`` and runs the
+    lammps-interface pipeline on it, leaving ``in.{name}`` and
+    ``data.{name}`` behind. The input file performs the full
+    alternating box-relax / FIRE minimization when run.
+
+    Returns
+    -------
+    tuple[str, np.ndarray]
+        The sanitized basename all files derive from, and the (3,)
+        integer supercell replication lammps-interface chose.
+    """
+    _, options_cls, simulation_cls, from_cif = _import_backends()
+    # lammps-interface derives every file name from the cif basename
+    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", framework.name) or "framework"
+    cif_path = workdir / f"{safe_name}.cif"
+    framework.write_cif(cif_path)
+    options = _make_options(options_cls, str(cif_path), force_field, cutoff)
+    try:
+        with quiet:
+            sim = simulation_cls(options)
+            cell, graph = from_cif(str(cif_path))
+            sim.set_cell(cell)
+            sim.set_graph(graph)
+            sim.split_graph()
+            sim.assign_force_fields()
+            sim.compute_simulation_size()
+            sim.merge_graphs()
+            sim.write_lammps_files(wd=str(workdir))
+    except EOFError as exc:
+        # compute_simulation_size prompts interactively when it
+        # detects free molecules; there is no API to answer it
+        raise RelaxationError(
+            f"lammps-interface found free molecules in "
+            f"{framework.name!r}; relax() only handles connected "
+            "frameworks."
+        ) from exc
+    return safe_name, np.array(sim.supercell, dtype=int)
+
+
+def _launch_lammps():
+    """Create an in-process LAMMPS session with a helpful error."""
+    lammps, *_ = _import_backends()
+    try:
+        return lammps.lammps(cmdargs=["-log", "none", "-screen", "none"])
+    except OSError as exc:
+        raise RelaxationError(
+            "The LAMMPS runtime failed to load. On Windows, the "
+            "LAMMPS wheel needs the Microsoft MPI runtime "
+            "(winget install Microsoft.MSMPI)."
+        ) from exc
+
+
 def relax_framework(
     framework: Framework,
     force_field: str = "UFF4MOF",
@@ -236,48 +297,18 @@ def relax_framework(
         free molecules lammps-interface cannot handle unattended, or
         the relaxed atoms cannot be mapped back onto the graph.
     """
-    lammps, options_cls, simulation_cls, from_cif = _import_backends()
-    # lammps-interface derives every file name from the cif basename
-    safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", framework.name) or "framework"
     sink = io.StringIO()
     quiet: contextlib.AbstractContextManager = (
         contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
     )
     with tempfile.TemporaryDirectory(prefix="autografs_relax_") as tmp:
         workdir = Path(tmp)
-        cif_path = workdir / f"{safe_name}.cif"
-        framework.write_cif(cif_path)
-        options = _make_options(options_cls, str(cif_path), force_field, cutoff)
-        try:
-            with quiet:
-                sim = simulation_cls(options)
-                cell, graph = from_cif(str(cif_path))
-                sim.set_cell(cell)
-                sim.set_graph(graph)
-                sim.split_graph()
-                sim.assign_force_fields()
-                sim.compute_simulation_size()
-                sim.merge_graphs()
-                sim.write_lammps_files(wd=str(workdir))
-        except EOFError as exc:
-            # compute_simulation_size prompts interactively when it
-            # detects free molecules; there is no API to answer it
-            raise RelaxationError(
-                f"lammps-interface found free molecules in "
-                f"{framework.name!r}; relax() only handles connected "
-                "frameworks."
-            ) from exc
-        supercell = np.array(sim.supercell, dtype=int)
+        safe_name, supercell = _write_lammps_inputs(
+            framework, force_field, cutoff, workdir, quiet
+        )
         type_elements = _parse_type_elements(workdir / f"data.{safe_name}")
 
-        try:
-            lmp = lammps.lammps(cmdargs=["-log", "none", "-screen", "none"])
-        except OSError as exc:
-            raise RelaxationError(
-                "The LAMMPS runtime failed to load. On Windows, the "
-                "LAMMPS wheel needs the Microsoft MPI runtime "
-                "(winget install Microsoft.MSMPI)."
-            ) from exc
+        lmp = _launch_lammps()
         try:
             with quiet, contextlib.chdir(workdir):
                 lmp.file(f"in.{safe_name}")
