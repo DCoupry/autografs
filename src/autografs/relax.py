@@ -31,6 +31,7 @@ from __future__ import annotations
 import contextlib
 import io
 import logging
+import os
 import re
 import sys
 import tempfile
@@ -52,13 +53,35 @@ logger = logging.getLogger(__name__)
 _ELEMENT_OF_TYPE = re.compile(r"^([A-Z][a-z]?)")
 
 
+@contextlib.contextmanager
+def _muted_stderr_fd():
+    """Silence the OS-level stderr file descriptor.
+
+    Python-level redirect_stderr only reroutes sys.stderr;
+    lammps_interface shells out to ``git rev-list HEAD`` inside
+    site-packages at import time to stamp its version, and the child
+    process writes 'fatal: not a git repository' straight to fd 2.
+    The failure itself is caught and harmless - only the noise leaks.
+    """
+    saved = os.dup(2)
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    try:
+        os.dup2(devnull, 2)
+        yield
+    finally:
+        os.dup2(saved, 2)
+        os.close(saved)
+        os.close(devnull)
+
+
 def _import_backends():
     """Import the optional LAMMPS backends with a helpful error."""
     try:
-        import lammps
-        from lammps_interface.InputHandler import Options
-        from lammps_interface.lammps_main import LammpsSimulation
-        from lammps_interface.structure_data import from_CIF
+        with _muted_stderr_fd():
+            import lammps
+            from lammps_interface.InputHandler import Options
+            from lammps_interface.lammps_main import LammpsSimulation
+            from lammps_interface.structure_data import from_CIF
     except ImportError as exc:
         raise RelaxationError(
             "UFF4MOF relaxation needs the optional LAMMPS backend: "
