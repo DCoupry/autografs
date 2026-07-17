@@ -84,15 +84,13 @@ def make_calculator(name: str, **kwargs: Any) -> Calculator:
                 "GFN-FF needs the xtb python bindings: "
                 "conda install -c conda-forge xtb-python"
             ) from exc
-        return XTB(method="GFNFF", **kwargs)
+        return XTB(method="GFNFF", **kwargs)  # type: ignore[no-any-return]
     if key in ("gfn1", "gfn1-xtb"):
         try:
             from tblite.ase import TBLite
         except ImportError as exc:
-            raise RelaxationError(
-                "GFN1-xTB needs tblite: pip install tblite"
-            ) from exc
-        return TBLite(method="GFN1-xTB", **kwargs)
+            raise RelaxationError("GFN1-xTB needs tblite: pip install tblite") from exc
+        return TBLite(method="GFN1-xTB", **kwargs)  # type: ignore[no-any-return]
     if key in ("gfn2", "gfn2-xtb"):
         raise RelaxationError(
             "GFN2-xTB has no periodic implementation; use 'gfn1' or "
