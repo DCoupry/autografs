@@ -443,34 +443,56 @@ class Framework:
         force_field: str = "UFF4MOF",
         cutoff: float = 12.5,
         verbose: bool = False,
+        *,
+        calculator: object | None = None,
+        relax_cell: bool = True,
+        fmax: float = 0.05,
+        steps: int = 500,
     ) -> Framework:
-        """Relax geometry and cell with LAMMPS (UFF4MOF by default).
+        """Relax geometry and cell (LAMMPS/UFF4MOF or any ASE backend).
 
-        Requires the optional backends: ``pip install "autografs[relax]"``
-        (on Windows the LAMMPS wheel also needs the Microsoft MPI
-        runtime). Runs the lammps-interface minimization protocol
-        (alternating cell box-relax and FIRE) in-process and maps the
-        relaxed geometry back onto this framework's bond graph.
+        With no ``calculator`` (the default) this is the in-process
+        LAMMPS path: ``pip install "autografs[relax]"`` (on Windows the
+        LAMMPS wheel also needs the Microsoft MPI runtime), running the
+        lammps-interface minimization protocol (alternating cell
+        box-relax and FIRE).
+
+        Passing ``calculator`` switches to the ASE bridge — the higher
+        rungs of the multi-fidelity funnel. It accepts any ASE
+        calculator instance, or a name: "gfn-ff" (periodic GFN-FF via
+        xtb-python), "gfn1" (GFN1-xTB via tblite), "dftb" (DFTB+).
+        "gfn2" is rejected — GFN2-xTB has no periodic implementation.
+        Either way the bond graph is preserved: only coordinates, cell
+        and energy change.
 
         Parameters
         ----------
         force_field : str, optional
-            Force field known to lammps-interface, by default
-            "UFF4MOF"; "UFF" and "Dreiding" also work.
+            LAMMPS path only: force field known to lammps-interface,
+            by default "UFF4MOF"; "UFF" and "Dreiding" also work.
         cutoff : float, optional
-            Non-bonded cutoff in Angstrom, by default 12.5. Cells too
-            small for it are relaxed as an internal supercell and
-            folded back.
+            LAMMPS path only: non-bonded cutoff in Angstrom, by
+            default 12.5. Cells too small for it are relaxed as an
+            internal supercell and folded back.
         verbose : bool, optional
             Pass the backend output through instead of suppressing it.
+        calculator : ase Calculator or str, optional
+            Selects the ASE bridge; None (default) keeps LAMMPS.
+        relax_cell : bool, optional
+            ASE path only: relax the cell too (needs stress), by
+            default True.
+        fmax : float, optional
+            ASE path only: force convergence threshold (eV/A).
+        steps : int, optional
+            ASE path only: maximum optimizer steps.
 
         Returns
         -------
         Framework
             A new Framework with identical connectivity, relaxed
-            coordinates and cell, and the force-field energy per unit
-            cell (kcal/mol) in ``.energy``. This framework is
-            unchanged.
+            coordinates and cell, and the energy per unit cell
+            (kcal/mol, converted from eV on the ASE path) in
+            ``.energy``. This framework is unchanged.
 
         Raises
         ------
@@ -478,6 +500,17 @@ class Framework:
             If the backends are missing or the structure cannot be
             relaxed and mapped back.
         """
+        if calculator is not None:
+            from autografs.ase_relax import relax_framework_ase
+
+            return relax_framework_ase(
+                self,
+                calculator,  # type: ignore[arg-type]
+                relax_cell=relax_cell,
+                fmax=fmax,
+                steps=steps,
+                verbose=verbose,
+            )
         from autografs.relax import relax_framework
 
         return relax_framework(
