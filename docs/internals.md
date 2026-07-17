@@ -146,6 +146,7 @@ src/autografs/
 ├── harvest.py       batch SBU harvesting across many structures
 ├── porosity.py      grid-based porosity descriptors
 ├── framework_io.py  Framework save/load
+├── charges.py       partial charges: EQeq + pluggable scheme registry
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
 ├── ase_relax.py     ASE-calculator bridge: GFN-FF, GFN1-xTB, DFTB+
 ├── elastic.py       elastic constants: stress-strain finite differences
