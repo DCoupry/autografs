@@ -59,6 +59,7 @@ Pipeline: libraries → geometric compatibility sieve (`list_building_units(siev
 ## Gotchas
 
 - **Everything ships in the wheel**: `data/topologies.json.gz` (2686 RCSR nets) and both SBU files are bundled; no generation step is needed. Regeneration (only when updating the library): `autografs-topologies --use_rcsr -o topologies.json.gz`. `scripts/cgd2pkl.py` is a deprecated shim for that command.
+- **Research tooling lives in `scripts/`, not the library**: `scripts/benchmarks/` (net-ID accuracy, round-trip closure, throughput) and `scripts/funnel/` (staged multi-fidelity screening driver: level escalation asbuilt→UFF4MOF→GFN-FF/GFN1/DFTB+, top-N selection, per-candidate provenance, checkpoint/restart compatible with `build_all` checkpoint dirs, Spearman rank-stability report). Both have path-insertion smoke tests in `tests/` so CI catches API breakage.
 - Dummy atoms use pymatgen's `"X"` species convention throughout. Slot/SBU compatibility is decided by dummy count + arm-direction match, NOT point group (symbols are metadata only).
 - In `cgd.py`, `# EDGE_CENTER` lines in RCSR files look commented out but are deliberately uncommented by the parser (they create the 2-connected slots). Preserve that behavior when refactoring.
 - `Autografs._validate_mappings` deep-copies fragments: alignment mutates them in place, and aliasing would corrupt the SBU library. Keep that invariant.
