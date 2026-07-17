@@ -546,9 +546,17 @@ def networkx_to_gulp(
     logger.info("Creating Gulp file from graph.")
     lines = []
 
+    # electrostatics only make sense once charges are assigned
+    has_charges = len(graph) > 0 and all(
+        "charge" in d for _, d in graph.nodes(data=True)
+    )
+
     # Header and cell vectors
     cell = graph.graph["cell"]
-    lines.append("opti conp molmec noautobond cartesian noelectrostatics ocell")
+    keywords = "opti conp molmec noautobond cartesian ocell"
+    if not has_charges:
+        keywords += " noelectrostatics"
+    lines.append(keywords)
     lines.append("vectors")
     lines.append(f"{cell[0][0]:>.3f} {cell[0][1]:>.3f} {cell[0][2]:>.3f}")
     lines.append(f"{cell[1][0]:>.3f} {cell[1][1]:>.3f} {cell[1][2]:>.3f}")
@@ -566,7 +574,10 @@ def networkx_to_gulp(
         d = graph.nodes[node]
         x, y, z = d["coord"]
         s = mmdict[d["ufftype"]]
-        lines.append(f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}")
+        line = f"{s:<4} core {x:>15.8f} {y:>15.8f} {z:>15.8f}"
+        if has_charges:
+            line += f" {d['charge']:>10.6f}"
+        lines.append(line)
 
     lines.append("")
 
