@@ -122,10 +122,14 @@ class TestRelaxIntegration:
 
     def test_relax_mof5(self, mof5):
         relaxed = mof5.relax()
-        # same graph: atom count, species, bonds untouched
+        # same graph: atom count, species, bonds untouched (canonical
+        # comparison - an undirected edge has no defined orientation)
         assert len(relaxed) == len(mof5)
         assert relaxed.symbols == mof5.symbols
-        assert sorted(relaxed.graph.edges()) == sorted(mof5.graph.edges())
+        assert {frozenset(edge) for edge in relaxed.graph.edges()} == {
+            frozenset(edge) for edge in mof5.graph.edges()
+        }
+        assert relaxed.graph.number_of_edges() == mof5.graph.number_of_edges()
         # the input framework is untouched
         assert mof5.energy is None
         # energy recorded per unit cell

@@ -326,13 +326,18 @@ def relax_framework(
     new_frac = orig_frac + displacements
     new_coords = new_frac @ prim_matrix
 
+    # nodes first, in sorted order, then edges: the relaxed graph gets
+    # the same insertion order as every builder graph, so edge
+    # iteration (and tuple orientation) matches the input exactly -
+    # adding edges first would order nodes by edge encounter and flip
+    # some reported orientations (networkx-internals-dependent, #145)
     relaxed = networkx.Graph(cell=prim_matrix)
-    relaxed.add_edges_from(framework.graph.edges(data=True))
     # cart_coords (and therefore new_coords) follow sorted node order
     for row, node in enumerate(sorted(framework.graph)):
         copied = dict(framework.graph.nodes[node])
         copied["coord"] = new_coords[row]
         relaxed.add_node(node, **copied)
+    relaxed.add_edges_from(framework.graph.edges(data=True))
     from autografs.framework import Framework as FrameworkCls
 
     result = FrameworkCls(relaxed, name=framework.name)
