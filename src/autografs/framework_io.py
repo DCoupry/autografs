@@ -94,6 +94,11 @@ def framework_to_dict(framework: Framework) -> dict:
     if all("slot" in graph.nodes[n] for n in nodes):
         data["slots"] = [int(graph.nodes[n]["slot"]) for n in nodes]
         data["sbus"] = [graph.nodes[n]["sbu"] for n in nodes]
+    # partial charges: same convention as provenance
+    if nodes and all("charge" in graph.nodes[n] for n in nodes):
+        data["charges"] = [float(graph.nodes[n]["charge"]) for n in nodes]
+        if "charge_method" in graph.graph:
+            data["charge_method"] = graph.graph["charge_method"]
     return data
 
 
@@ -114,6 +119,9 @@ def framework_from_dict(data: dict) -> Framework:
     graph = networkx.Graph(cell=np.asarray(data["cell"], dtype=float))
     slots = data.get("slots")
     sbus = data.get("sbus")
+    charges = data.get("charges")
+    if "charge_method" in data:
+        graph.graph["charge_method"] = data["charge_method"]
     columns = zip(
         data["symbols"], data["coords"], data["tags"], data["ufftypes"], strict=True
     )
@@ -127,6 +135,8 @@ def framework_from_dict(data: dict) -> Framework:
         if slots is not None and sbus is not None:
             attributes["slot"] = int(slots[i])
             attributes["sbu"] = sbus[i]
+        if charges is not None:
+            attributes["charge"] = float(charges[i])
         graph.add_node(i, **attributes)
     for u, v, order in data["bonds"]:
         graph.add_edge(int(u), int(v), bond_order=float(order))

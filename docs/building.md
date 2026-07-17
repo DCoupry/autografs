@@ -159,6 +159,39 @@ Cells smaller than the non-bonded cutoff (12.5 Å by default) are relaxed as an
 internal supercell and folded back transparently. `"UFF"` and `"Dreiding"` are
 also accepted as `force_field`.
 
+## Partial charges
+
+`assign_charges` puts per-atom point charges on the bond graph — the input
+GCMC adsorption codes need. The built-in scheme is EQeq (extended charge
+equilibration, Wilmer et al. 2012): periodic, parameter-free beyond two
+published dials, no DFT required, one linear solve. The implementation is a
+numpy port validated against the reference C++ code:
+
+```python
+charged = mof.assign_charges("eqeq")   # returns a new Framework
+charged.charges                        # per-atom array, sums to 0
+charged.write_cif("charged.cif")       # gains _atom_site_charge (RASPA-style)
+charged.to_ase()                       # charges become ASE initial charges
+charged.save("charged.json.gz")        # charges survive save/load and editing
+```
+
+Other schemes (DDEC from DFT output, ML charge models) plug in through a
+registry:
+
+```python
+from autografs.charges import register_charge_method
+
+@register_charge_method("mymodel")
+def my_charges(framework, **options):
+    return model.predict(framework)    # one charge per atom, node order
+
+charged = mof.assign_charges("mymodel")
+```
+
+Treat the scheme as a controlled variable in any adsorption study — EQeq and
+DDEC charges differ systematically, and uptake predictions inherit that
+difference.
+
 ## Elastic constants
 
 `elastic_properties` computes the 6×6 stiffness tensor at the same force-field

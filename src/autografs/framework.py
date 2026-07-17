@@ -47,6 +47,40 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+
+def _append_cif_charges(path: Path, charges: np.ndarray) -> None:
+    """Add an ``_atom_site_charge`` column to a P1 CIF pymatgen wrote.
+
+    GCMC codes (RASPA and friends) read framework charges from this
+    non-standard but conventional tag. pymatgen's writer cannot emit
+    it, so the column is appended after the fact: the header goes at
+    the end of the ``_atom_site_*`` loop declarations, and one value
+    is appended to each site row - P1 site order is structure (node)
+    order, so charges line up by position.
+    """
+    lines = path.read_text(encoding="utf-8").splitlines()
+    headers = [
+        i for i, line in enumerate(lines) if line.strip().startswith("_atom_site_")
+    ]
+    if not headers:
+        raise ValueError(f"No _atom_site_ loop found in {path}.")
+    last_header = headers[-1]
+    rows = []
+    for i in range(last_header + 1, len(lines)):
+        if not lines[i].strip() or lines[i].strip().startswith(("loop_", "_", "#")):
+            break
+        rows.append(i)
+    if len(rows) != len(charges):
+        raise ValueError(
+            f"CIF site count ({len(rows)}) does not match the number of "
+            f"charges ({len(charges)}) in {path}."
+        )
+    for i, charge in zip(rows, charges, strict=True):
+        lines[i] = f"{lines[i]}  {charge:.6f}"
+    lines.insert(last_header + 1, "  _atom_site_charge")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 # graphite-like default; typical COF interlayer range is 3.3-3.6 A
 DEFAULT_INTERLAYER = 3.35
 
@@ -309,6 +343,51 @@ class Framework:
 
         return pore_limiting_diameter(self, spacing=spacing)
 
+    @property
+    def charges(self) -> np.ndarray | None:
+        """Per-atom partial charges in node order, or None if unset.
+
+        Populated by ``assign_charges``; charges live on the bond
+        graph, so they survive save/load and every editing operation.
+        """
+        nodes = sorted(self.graph)
+        if not nodes or any("charge" not in self.graph.nodes[n] for n in nodes):
+            return None
+        return np.array([self.graph.nodes[n]["charge"] for n in nodes], dtype=float)
+
+    def assign_charges(self, method: str = "eqeq", **kwargs) -> Framework:
+        """A new framework with per-atom partial charges assigned.
+
+        The scheme is looked up in ``autografs.charges.CHARGE_METHODS``
+        — "eqeq" (the extended charge equilibration of Wilmer et al.,
+        periodic, no DFT required) ships built in; DDEC or ML schemes
+        can be registered with ``register_charge_method``. Charges are
+        stored on the bond graph and flow into the exports that can
+        carry them: CIF (``_atom_site_charge``, as GCMC codes like
+        RASPA expect), ASE initial charges, and GULP.
+
+        Parameters
+        ----------
+        method : str, optional
+            Registered scheme name, by default "eqeq".
+        **kwargs
+            Scheme-specific options (for EQeq: ``scaling``,
+            ``hydrogen_affinity``, ``total_charge``, ...).
+
+        Returns
+        -------
+        Framework
+            A copy carrying the charges; this framework is unchanged.
+
+        Raises
+        ------
+        ValueError
+            If the scheme is unknown or an element has no EQeq data.
+        """
+        from autografs.charges import assign_charges
+
+        return assign_charges(self, method=method, **kwargs)
+
     # ------------------------------------------------------------------
     # crystallographic exports
     # ------------------------------------------------------------------
@@ -330,12 +409,16 @@ class Framework:
         # x % 1.0 returns exactly 1.0 for tiny negative x
         frac[frac >= 1.0] -= 1.0
         tags = [self.graph.nodes[n]["tag"] for n in sorted(self.graph)]
+        site_properties: dict = {"tags": tags, "ufftype": self.mmtypes}
+        charges = self.charges
+        if charges is not None:
+            site_properties["charge"] = charges.tolist()
         return Structure(
             lattice,
             self.symbols,
             frac,
             coords_are_cartesian=False,
-            site_properties={"tags": tags, "ufftype": self.mmtypes},
+            site_properties=site_properties,
         )
 
     def write_cif(self, path: str | Path, symprec: float | None = None) -> Path:
@@ -359,6 +442,15 @@ class Framework:
 
         path = Path(path)
         CifWriter(self.structure, symprec=symprec).write_file(path)
+        charges = self.charges
+        if charges is not None:
+            if symprec is None:
+                _append_cif_charges(path, charges)
+            else:
+                logger.warning(
+                    "Charges are not written to symmetrized CIFs; use "
+                    "symprec=None to export _atom_site_charge."
+                )
         logger.info(f"Wrote {self!r} to {path}")
         return path
 
@@ -405,15 +497,23 @@ class Framework:
         return load_framework(path)
 
     def to_ase(self) -> ase.Atoms:
-        """The framework as an ASE Atoms object (wrapped, periodic)."""
+        """The framework as an ASE Atoms object (wrapped, periodic).
+
+        Assigned partial charges (``assign_charges``) become the ASE
+        initial charges.
+        """
         from ase import Atoms
 
-        return Atoms(
+        atoms = Atoms(
             symbols=self.symbols,
             scaled_positions=self.structure.frac_coords,
             cell=self.cell,
             pbc=True,
         )
+        charges = self.charges
+        if charges is not None:
+            atoms.set_initial_charges(charges)
+        return atoms
 
     def to_gulp(self, write_to_file: bool = False) -> str:
         """GULP input for UFF4MOF optimization of this framework.

@@ -146,6 +146,7 @@ src/autografs/
 ├── harvest.py       batch SBU harvesting across many structures
 ├── porosity.py      grid-based porosity descriptors
 ├── framework_io.py  Framework save/load
+├── charges.py       partial charges: EQeq + pluggable scheme registry
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
 ├── elastic.py       elastic constants: stress-strain finite differences
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
