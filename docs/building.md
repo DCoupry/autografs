@@ -159,6 +159,24 @@ Cells smaller than the non-bonded cutoff (12.5 Å by default) are relaxed as an
 internal supercell and folded back transparently. `"UFF"` and `"Dreiding"` are
 also accepted as `force_field`.
 
+### Higher levels: any ASE calculator
+
+Passing `calculator` switches `relax` to a thin ASE bridge — the higher rungs
+of a multi-fidelity funnel. Use a name or any ASE calculator instance:
+
+```python
+relaxed = mof.relax(calculator="gfn-ff")   # periodic GFN-FF (xtb-python)
+relaxed = mof.relax(calculator="gfn1")     # GFN1-xTB (pip install tblite)
+relaxed = mof.relax(calculator="dftb")     # DFTB+ (binary + SK files)
+relaxed = mof.relax(calculator=my_ase_calculator, fmax=0.01, steps=1000)
+```
+
+The bond graph is preserved exactly as on the LAMMPS path, energies land in
+`Framework.energy` in the same kcal/mol-per-cell convention, and
+`relax_cell=False` keeps the cell fixed (cell relaxation needs a calculator
+that provides stress). `"gfn2"` is rejected up front: GFN2-xTB has no
+periodic implementation.
+
 ## Partial charges
 
 `assign_charges` puts per-atom point charges on the bond graph — the input

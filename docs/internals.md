@@ -148,6 +148,7 @@ src/autografs/
 ├── framework_io.py  Framework save/load
 ├── charges.py       partial charges: EQeq + pluggable scheme registry
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
+├── ase_relax.py     ASE-calculator bridge: GFN-FF, GFN1-xTB, DFTB+
 ├── elastic.py       elastic constants: stress-strain finite differences
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
