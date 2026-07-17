@@ -937,6 +937,12 @@ class Framework:
         sequence: Iterable[tuple[float, float]] | None = None,
         n_layers: int | None = None,
         seed: int | None = None,
+        *,
+        angle: float | None = None,
+        angle_tolerance: float = 1.0,
+        max_strain: float = 0.0,
+        max_index: int = 8,
+        max_atoms: int = 20000,
     ) -> Framework:
         """Stack this 2D layer into a COF crystal.
 
@@ -953,6 +959,14 @@ class Framework:
           serrated (1/2, 0), staggered (1/2, 1/2).
         - ``random``: ``n_layers`` copies with seeded uniform in-plane
           offsets - a turbostratic (stacking-disorder) model.
+        - ``twisted``: a commensurate twisted bilayer. The requested
+          ``angle`` is snapped to the nearest coincidence-site-lattice
+          angle of the layer's lattice (an arbitrary angle breaks
+          periodicity) and a moiré supercell is built; the exact angle
+          and residual strain are recorded on the result's graph
+          (``twist_angle``/``twist_strain``). Supercell size grows as
+          ~1/angle² — the ``max_atoms`` guardrail refuses runaway
+          cells. See ``autografs.twist`` for the angle search itself.
         - an explicit ``sequence`` of per-layer offsets for anything
           else (ABC and beyond).
 
@@ -981,6 +995,22 @@ class Framework:
         seed : int or None, optional
             Seed for the random offsets; a fixed seed reproduces the
             same disorder model.
+        angle : float or None, optional
+            ``twisted`` only: requested twist angle in degrees.
+        angle_tolerance : float, optional
+            ``twisted`` only: largest acceptable snap distance in
+            degrees, by default 1.0.
+        max_strain : float, optional
+            ``twisted`` only: admit approximately commensurate angles
+            whose mismatch (absorbed as top-layer strain) stays below
+            this, by default 0 — exactly commensurate only. Oblique
+            lattices usually need a small non-zero value.
+        max_index : int, optional
+            ``twisted`` only: integer search bound for coincidence
+            vectors, by default 8. Larger finds smaller angles.
+        max_atoms : int, optional
+            ``twisted`` only: refuse moiré supercells larger than
+            this, by default 20000.
 
         Returns
         -------
@@ -991,7 +1021,9 @@ class Framework:
         ------
         StackingError
             If the framework is not a flat layer with c perpendicular
-            to it (e.g. a 3D net, or bonds crossing the slab).
+            to it (e.g. a 3D net, or bonds crossing the slab); for
+            ``twisted``, also when no commensurate angle lies within
+            the tolerance or the supercell exceeds ``max_atoms``.
 
         Examples
         --------
@@ -1000,10 +1032,60 @@ class Framework:
         >>> cof = layer.stack(mode="serrated", offset=(0.5, 0))
         >>> abc = layer.stack(sequence=[(0, 0), (1/3, 2/3), (2/3, 1/3)])
         >>> disordered = layer.stack(mode="random", n_layers=6, seed=42)
+        >>> moire = layer.stack(mode="twisted", angle=22.0)  # snaps to 21.79
         """
         if interlayer <= 0:
             raise ValueError(f"Interlayer spacing must be positive, got {interlayer}.")
+        if mode == "twisted":
+            if angle is None:
+                raise ValueError("twisted stacking needs an angle.")
+            if offset is not None or sequence is not None or n_layers is not None:
+                raise ValueError(
+                    "twisted stacking takes angle parameters only; "
+                    "offset/sequence/n_layers do not apply."
+                )
+            self._require_layer_slab(interlayer)
+            from autografs.twist import twisted_bilayer
+
+            return twisted_bilayer(
+                self,
+                angle,
+                interlayer=interlayer,
+                angle_tolerance=angle_tolerance,
+                max_strain=max_strain,
+                max_index=max_index,
+                max_atoms=max_atoms,
+            )
+        if angle is not None:
+            raise ValueError("angle only applies to mode='twisted'.")
         offsets = self._stacking_offsets(mode, offset, sequence, n_layers, seed)
+        cell = self.cell
+        self._require_layer_slab(interlayer)
+        from autografs.editing import replicated_graph
+
+        count = len(offsets)
+        new_cell = cell.copy()
+        new_cell[2] = [0.0, 0.0, count * interlayer]
+        # per-layer tag and slot uniqueness is replicated_graph's
+        # invariant, shared with supercells and interpenetration
+        shifts = []
+        for k, (fx, fy) in enumerate(offsets):
+            shift = fx * cell[0] + fy * cell[1]
+            shift[2] += k * interlayer
+            shifts.append(shift)
+        stacked = replicated_graph(self, shifts, cell=new_cell)
+        label = mode if sequence is None else f"stack{count}"
+        return Framework(stacked, name=f"{self.name}_{label}")
+
+    def _require_layer_slab(self, interlayer: float) -> None:
+        """Validate the padded-slab layer convention before stacking.
+
+        Raises StackingError unless c is perpendicular to the a-b
+        plane and all atoms (hence, with unwrapped coordinates, all
+        bonds) sit in a thin z-window; warns when the layer is thicker
+        than the requested spacing (stacked copies would
+        interpenetrate).
+        """
         cell = self.cell
         pad_c = float(cell[2, 2])
         # the padded-slab convention puts c along z, perpendicular to
@@ -1034,21 +1116,6 @@ class Framework:
                 f"interlayer spacing is {interlayer:.2f} A; stacked layers "
                 "will interpenetrate. Check the result with min_contact()."
             )
-        from autografs.editing import replicated_graph
-
-        count = len(offsets)
-        new_cell = cell.copy()
-        new_cell[2] = [0.0, 0.0, count * interlayer]
-        # per-layer tag and slot uniqueness is replicated_graph's
-        # invariant, shared with supercells and interpenetration
-        shifts = []
-        for k, (fx, fy) in enumerate(offsets):
-            shift = fx * cell[0] + fy * cell[1]
-            shift[2] += k * interlayer
-            shifts.append(shift)
-        stacked = replicated_graph(self, shifts, cell=new_cell)
-        label = mode if sequence is None else f"stack{count}"
-        return Framework(stacked, name=f"{self.name}_{label}")
 
     @staticmethod
     def _stacking_offsets(
