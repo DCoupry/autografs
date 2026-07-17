@@ -83,6 +83,11 @@ class LazyTopologyLibrary(Mapping):
         return dict(self._aliases)
 
     def _resolve(self, name: str) -> str:
+        # a real entry always wins over an alias: a library that
+        # gained e.g. an actual "FAU" topology (--use_iza) must not
+        # have it shadowed by the FAU -> fau alias
+        if name in self._raw:
+            return name
         return self._aliases.get(name, name)
 
     def __getitem__(self, name: str) -> Topology:
