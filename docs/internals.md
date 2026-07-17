@@ -147,6 +147,7 @@ src/autografs/
 ├── porosity.py      grid-based porosity descriptors
 ├── framework_io.py  Framework save/load
 ├── relax.py         in-process LAMMPS / UFF4MOF relaxation backend
+├── elastic.py       elastic constants: stress-strain finite differences
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
 ├── cli.py           interactive wizard, `autografs` entry point

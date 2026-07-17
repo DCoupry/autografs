@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     import ase
     from pymatgen.core.structure import Molecule
 
+    from autografs.elastic import ElasticProperties
     from autografs.topology import Topology
 
 __all__ = [
@@ -481,6 +482,60 @@ class Framework:
 
         return relax_framework(
             self, force_field=force_field, cutoff=cutoff, verbose=verbose
+        )
+
+    def elastic_properties(
+        self,
+        force_field: str = "UFF4MOF",
+        cutoff: float = 12.5,
+        strain: float = 2e-3,
+        symprec: float = 0.01,
+        verbose: bool = False,
+    ) -> ElasticProperties:
+        """Elastic stiffness tensor and moduli at the force-field level.
+
+        Requires the same optional backends as ``relax``. Relaxes cell
+        and geometry, then computes the 6x6 stiffness tensor by
+        central finite differences of the LAMMPS stress under the six
+        Voigt strains, projects it onto the framework's crystal
+        system, and derives Voigt/Reuss/Hill bulk, shear and Young's
+        moduli plus directional Young's modulus extrema.
+
+        Parameters
+        ----------
+        force_field : str, optional
+            Force field known to lammps-interface, by default
+            "UFF4MOF".
+        cutoff : float, optional
+            Non-bonded cutoff in Angstrom, by default 12.5.
+        strain : float, optional
+            Finite-difference strain amplitude, by default 2e-3.
+        symprec : float, optional
+            Symmetry tolerance for the crystal-system projection.
+        verbose : bool, optional
+            Pass the backend output through instead of suppressing it.
+
+        Returns
+        -------
+        ElasticProperties
+            The symmetrized stiffness (GPa) and derived moduli. This
+            is the screening level of the property funnel — expect
+            force-field accuracy, not DFT accuracy.
+
+        Raises
+        ------
+        RelaxationError
+            If the backends are missing or the computation fails.
+        """
+        from autografs.elastic import elastic_properties
+
+        return elastic_properties(
+            self,
+            force_field=force_field,
+            cutoff=cutoff,
+            strain=strain,
+            symprec=symprec,
+            verbose=verbose,
         )
 
     # ------------------------------------------------------------------
