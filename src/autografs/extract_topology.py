@@ -26,6 +26,7 @@ harder problem and deliberately out of scope here.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 import numpy as np
 from pymatgen.core.periodic_table import get_el_sp
@@ -155,3 +156,47 @@ def topology_from_tetrahedral(
         spacegroup_number=spacegroup,
         is_2d=False,
     )
+
+
+def topologies_from_tetrahedral_cifs(
+    paths: dict[str, Path], cutoff: float = T_O_CUTOFF
+) -> dict[str, Topology]:
+    """Convert a batch of tetrahedral-framework CIFs to Topologies.
+
+    The workhorse behind ``autografs-topologies --use_iza``: each CIF
+    (e.g. an IZA idealized SiO2 framework) goes through
+    ``topology_from_tetrahedral``; entries that are interrupted,
+    non-tetrahedral, or unparseable are skipped with a per-entry
+    reason, mirroring ``cgd.read_cgd_data``'s error accounting.
+
+    Parameters
+    ----------
+    paths : dict[str, Path]
+        CIF path per topology name (e.g. official framework codes).
+    cutoff : float, optional
+        T-O bond cutoff in Angstrom.
+
+    Returns
+    -------
+    dict[str, Topology]
+        The successfully converted entries.
+    """
+    converted: dict[str, Topology] = {}
+    failures: dict[str, str] = {}
+    for name in sorted(paths):
+        try:
+            structure = Structure.from_file(paths[name])
+            converted[name] = topology_from_tetrahedral(
+                structure, name=name, cutoff=cutoff
+            )
+        except TopologyExtractionError as exc:
+            failures[name] = str(exc)
+        except Exception as exc:
+            failures[name] = f"{type(exc).__name__}: {exc}"
+    logger.info(
+        f"Converted {len(converted)}/{len(paths)} tetrahedral CIFs "
+        f"({len(failures)} skipped)."
+    )
+    for name, reason in sorted(failures.items()):
+        logger.info(f"    - {name}: {reason}")
+    return converted

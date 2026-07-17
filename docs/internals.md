@@ -153,6 +153,7 @@ src/autografs/
 ├── twist.py         commensurate (CSL) twist search + moiré bilayers
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
+├── fetch.py         license-gated local fetch of external sources (IZA)
 ├── cli.py           interactive wizard, `autografs` entry point
 ├── utils.py         XYZ parsing, UFF typing, graph conversions, GULP
 ├── exceptions.py    AutografsError hierarchy

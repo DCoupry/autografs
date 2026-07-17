@@ -68,6 +68,33 @@ symmetry, extracts one slot per vertex/edge with dummy atoms marking the
 connections, and groups slots into crystallographic orbits — two slots with
 the same local shape but different orbits remain independently mappable.
 
+### Zeolite framework types (IZA)
+
+The full set of IZA zeolite framework types can be added as buildable
+topologies — locally, on your machine:
+
+```bash
+autografs-topologies --use_rcsr --use_iza -o with_zeolites.json.gz
+autografs-topologies --use_iza --accept-licenses -o zeolites.json.gz  # batch
+```
+
+`--use_iza` downloads the idealized SiO₂ CIFs from
+[iza-structure.org](https://www.iza-structure.org/databases/) into a resumable
+cache (`~/.autografs/cache/iza`, override with `--cache-dir`) after showing
+the database's terms — interactively, or accepted up front with
+`--accept-licenses` for scripts. Each framework is converted with the
+tetrahedral extractor (`autografs.extract_topology`): T atoms become
+4-connected node slots, bridging oxygens become edge-center slots, exactly the
+convention CGD-imported nets use, so extracted zeolites are ordinary library
+entries under their official uppercase codes (`FAU`, `LTA`, `SOD`, ...).
+Interrupted frameworks (the `-` codes) are skipped with a reason — they are
+not tetrahedral nets.
+
+Nothing IZA-derived ships with AuToGraFS itself: the wheel only bundles the
+55 lookup aliases onto RCSR nets that carry the same topology. Use of the
+downloaded data is governed by the IZA-SC database terms (in particular,
+commercial use and redistribution need the Structure Commission's consent).
+
 Programmatic (de)serialization lives in `autografs.topology_io`:
 
 ```python

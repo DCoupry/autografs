@@ -10,6 +10,14 @@ Installed as the ``autografs-topologies`` console command::
 
     autografs-topologies --use_rcsr -o topologies.json.gz
     autografs-topologies -i custom.cgd -o my_topologies.json.gz
+    autografs-topologies --use_rcsr --use_iza -o with_zeolites.json.gz
+
+``--use_iza`` fetches the IZA idealized zeolite CIFs to a local cache
+(after a license-acceptance gate; nothing IZA-derived ships with the
+package) and converts them through
+``extract_topology.topology_from_tetrahedral``; entries are stored
+under their official uppercase framework codes alongside the RCSR
+nets.
 
 Notes
 -----
@@ -393,6 +401,26 @@ def main(argv: list[str] | None = None) -> None:
         help="Flag to download and use the RCSR nets in addition to the given inputs.",
     )
     parser.add_argument(
+        "--use_iza",
+        action="store_true",
+        help=(
+            "fetch the IZA idealized zeolite CIFs (license gate, local "
+            "cache) and convert them into buildable topologies under "
+            "their framework codes."
+        ),
+    )
+    parser.add_argument(
+        "--accept-licenses",
+        action="store_true",
+        help="accept external sources' terms non-interactively (batch use).",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="download cache directory (default: ~/.autografs/cache/<source>).",
+    )
+    parser.add_argument(
         "--max-connectivity",
         type=int,
         default=MAX_FRAGMENT_SITES,
@@ -406,7 +434,7 @@ def main(argv: list[str] | None = None) -> None:
     warnings.filterwarnings("ignore")
 
     topologies: dict[str, Topology] = {}
-    if args.use_rcsr or args.input is None:
+    if args.use_rcsr or (args.input is None and not args.use_iza):
         logger.info(f"Downloading RCSR nets from {RCSR_URL}")
         cgd = download_cgd()
         topologies.update(read_cgd_data(cgd, max_sites=args.max_connectivity))
@@ -416,6 +444,15 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(f"Input file not found: {input_path}")
         cgd = input_path.read_bytes().decode("utf8")
         topologies.update(read_cgd_data(cgd, max_sites=args.max_connectivity))
+    if args.use_iza:
+        from autografs.extract_topology import topologies_from_tetrahedral_cifs
+        from autografs.fetch import fetch_iza_cifs
+
+        cifs = fetch_iza_cifs(
+            cache_dir=Path(args.cache_dir) if args.cache_dir else None,
+            accept_licenses=args.accept_licenses,
+        )
+        topologies.update(topologies_from_tetrahedral_cifs(cifs))
 
     if args.output.endswith((".json", ".json.gz")):
         topology_io.save_topologies(topologies, args.output)
