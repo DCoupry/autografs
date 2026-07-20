@@ -167,6 +167,12 @@ class RodUnit:
     n_connections : int
         Cut bonds per crystallographic repeat (a single PoE atom can
         carry several).
+    cut_vectors : list[tuple[int, tuple[float, float, float]]]
+        One entry per cut bond: the carrying rod atom's site index and
+        the cartesian vector from that atom to the cut-bond midpoint
+        (the position deconstruction would give the dummy). This is
+        the rod's connection geometry, consumed by
+        ``autografs.rods.rod_fragment`` for forward building.
     """
 
     atom_indices: list[int]
@@ -175,6 +181,9 @@ class RodUnit:
     generator: tuple[int, int, int]
     poe_indices: list[int]
     n_connections: int
+    cut_vectors: list[tuple[int, tuple[float, float, float]]] = field(
+        default_factory=list
+    )
 
 
 @dataclass
@@ -1046,13 +1055,25 @@ def deconstruct(
     next_vertex = len(units)
     rod_poe: dict[int, list[int]] = defaultdict(list)
     rod_cuts: Counter[int] = Counter()
-    for u, v, _ in cuts:
-        for atom in (u, v):
+    rod_arms: dict[int, list[tuple[int, tuple[float, float, float]]]] = defaultdict(
+        list
+    )
+    for u, v, offset in cuts:
+        for atom, partner, sign in ((u, v, 1), (v, u, -1)):
             unit_index = atom_to_unit[atom]
             if unit_index in rod_indices:
                 rod_cuts[unit_index] += 1
                 if atom not in rod_poe[unit_index]:
                     rod_poe[unit_index].append(atom)
+                # the dummy convention: X sits at the cut-bond
+                # midpoint; store the vector from the rod atom to it
+                delta = (frac[partner] + sign * np.asarray(offset, dtype=float)) - frac[
+                    atom
+                ]
+                midpoint = 0.5 * (delta @ structure.lattice.matrix)
+                rod_arms[unit_index].append(
+                    (atom, (float(midpoint[0]), float(midpoint[1]), float(midpoint[2])))
+                )
     for k in sorted(rod_indices):
         generator = generators[k]
         axis = generator @ structure.lattice.matrix
@@ -1090,6 +1111,7 @@ def deconstruct(
                 generator=(int(generator[0]), int(generator[1]), int(generator[2])),
                 poe_indices=poe,
                 n_connections=rod_cuts[k],
+                cut_vectors=sorted(rod_arms[k]),
             )
         )
     if rods:

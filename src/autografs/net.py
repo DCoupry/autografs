@@ -42,6 +42,7 @@ from __future__ import annotations
 import logging
 import math
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from weakref import WeakKeyDictionary
 
@@ -62,6 +63,8 @@ __all__ = [
     "coordination_sequences",
     "net_signature",
     "identify_net",
+    "SlotRun",
+    "axial_runs",
     "NetMatches",
 ]
 
@@ -577,3 +580,129 @@ def identify_net(
     )
     logger.debug(f"identify_net: contracted-tier match: {fallback or 'none'}")
     return NetMatches(fallback, tier="contracted" if fallback else None)
+
+
+@dataclass(frozen=True)
+class SlotRun:
+    """One straight axial slot run of a blueprint (rod Stage C).
+
+    A run is a cyclic sequence of slots whose consecutive quotient
+    steps are all parallel to one lattice direction and collinear -
+    the chain of blueprint sites a straight rod building unit would
+    occupy (node slots and the axial edge-center slots between them).
+    Helical runs (tube-shaped, e.g. etb's points of extension) are out
+    of scope here and stay with the MOF-74 work.
+
+    Attributes
+    ----------
+    direction : tuple[int, int, int]
+        The lattice generator the run closes on (net voltage of one
+        period).
+    slots : tuple[int, ...]
+        Slot indices along the axis, one period, starting from the
+        smallest index.
+    period : float
+        Length of one period along the axis (|direction @ cell|).
+    """
+
+    direction: tuple[int, int, int]
+    slots: tuple[int, ...]
+    period: float
+
+
+def axial_runs(
+    topology: Topology,
+    tolerance: float = 1e-3,
+    max_period: int = 8,
+) -> list[SlotRun]:
+    """Straight axial slot runs of a blueprint.
+
+    Walks the blueprint's labeled quotient graph following steps whose
+    cartesian displacement stays parallel to the starting step, until
+    the walk returns to its starting slot with a nonzero net voltage -
+    a straight rod channel. In pcu this finds the three node +
+    axial-edge chains along a, b and c; zigzag nets (dia, srs, hcb)
+    have none.
+
+    Parameters
+    ----------
+    topology : Topology
+        The blueprint to analyze.
+    tolerance : float, optional
+        Relative perpendicular deviation allowed per step, by default
+        1e-3 (blueprint coordinates are near-exact).
+    max_period : int, optional
+        Longest run period considered, in slots.
+
+    Returns
+    -------
+    list[SlotRun]
+        Deduplicated runs, sorted by direction then slots. A run and
+        its reverse are the same run (reported once, with the
+        direction canonicalized lexicographically positive).
+    """
+    cell = topology.cell.matrix
+    images = _topology_slot_images(topology)
+    centers = np.array(
+        [np.asarray(slot.atoms.cart_coords).mean(axis=0) for slot in topology.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+
+    steps: dict[int, list[tuple[int, np.ndarray, np.ndarray]]] = {
+        i: [] for i in range(len(centers))
+    }
+    for (a, b, voltage), _count in topology_quotient_edges(topology).items():
+        for u, v, sign in ((a, b, 1), (b, a, -1)):
+            offset = sign * np.asarray(voltage, dtype=float)
+            displacement = wrapped[v] + offset @ cell - wrapped[u]
+            if np.linalg.norm(displacement) > 1e-9:
+                steps[u].append((v, offset, displacement))
+
+    found: dict[tuple, SlotRun] = {}
+    for start in range(len(centers)):
+        for first, first_offset, first_disp in steps[start]:
+            axis = first_disp / np.linalg.norm(first_disp)
+            walk = [start, first]
+            voltage_sum = first_offset.copy()
+            current = first
+            for _ in range(max_period):
+                options = []
+                for nxt, offset, disp in steps[current]:
+                    length = float(np.linalg.norm(disp))
+                    along = float(disp @ axis)
+                    perpendicular = np.linalg.norm(disp - along * axis)
+                    if along > 0 and perpendicular <= tolerance * length:
+                        options.append((nxt, offset))
+                if len(options) != 1:
+                    # a dead end, or an ambiguous branching along the
+                    # same line - not a clean run
+                    walk = []
+                    break
+                nxt, offset = options[0]
+                voltage_sum += offset
+                if nxt == start:
+                    break
+                walk.append(nxt)
+                current = nxt
+            else:
+                walk = []
+            if not walk or len(walk) != len(set(walk)):
+                continue
+            generator = np.round(voltage_sum).astype(int)
+            if not np.any(generator):
+                continue
+            # canonical form: direction lexicographically positive,
+            # slot cycle rotated to start at its smallest index
+            direction = (int(generator[0]), int(generator[1]), int(generator[2]))
+            slots = tuple(walk)
+            if direction < (0, 0, 0):
+                direction = (-direction[0], -direction[1], -direction[2])
+                slots = (slots[0],) + tuple(reversed(slots[1:]))
+            pivot = slots.index(min(slots))
+            slots = slots[pivot:] + slots[:pivot]
+            key = (direction, slots)
+            if key in found:
+                continue
+            period = float(np.linalg.norm(np.asarray(direction, dtype=float) @ cell))
+            found[key] = SlotRun(direction=direction, slots=slots, period=period)
+    return sorted(found.values(), key=lambda r: (r.direction, r.slots))

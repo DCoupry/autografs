@@ -42,7 +42,7 @@ from autografs.deconstruct import (
     write_fragments_xyz,
 )
 from autografs.exceptions import AutografsError
-from autografs.rods import RodRepeat, canonical_rod, merge_rod
+from autografs.rods import RodFragment, merge_rod, rod_fragment, save_rods
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -91,12 +91,14 @@ class HarvestResult:
     failures : dict[str, str]
         Source label to the failure reason, for structures that could
         not be deconstructed.
-    rods : dict[str, RodRepeat]
+    rods : dict[str, RodFragment]
         Deduplicated rod (1-periodic) building units across sources,
         keyed like fragments (``rod_<formula>`` with numeric suffixes
-        for distinct rods sharing a composition). Rod identity is the
-        canonical chemical repeat (see ``autografs.rods``); rods have
-        no finite fragment and never appear in ``fragments``.
+        for distinct rods sharing a composition). Each value is a
+        buildable ``RodFragment`` (canonical chemical repeat template
+        + connection arms); identity for dedup is its ``repeat``.
+        Rods have no finite molecule and never appear in
+        ``fragments``; export them with ``write_rods``.
     rod_provenance : dict[str, list[str]]
         Rod family name to the sorted labels of its sources.
     n_processed : int
@@ -108,7 +110,7 @@ class HarvestResult:
     provenance: dict[str, list[str]] = field(default_factory=dict)
     nets: dict[str, list[str]] = field(default_factory=dict)
     failures: dict[str, str] = field(default_factory=dict)
-    rods: dict[str, RodRepeat] = field(default_factory=dict)
+    rods: dict[str, RodFragment] = field(default_factory=dict)
     rod_provenance: dict[str, list[str]] = field(default_factory=dict)
     n_processed: int = 0
 
@@ -153,6 +155,15 @@ class HarvestResult:
                 if self.kinds.get(name) in wanted
             }
         return write_fragments_xyz(selected, path)
+
+    def write_rods(self, path: str | Path) -> Path:
+        """Write the harvested rod families to a versioned JSON file.
+
+        The rod counterpart of ``write_xyz`` (rods have no finite
+        molecule, so they cannot join the XYZ SBU format); read back
+        with ``autografs.rods.load_rods``.
+        """
+        return save_rods(self.rods, path)
 
     def report(self) -> str:
         """One-line human-readable summary of the harvest."""
@@ -261,8 +272,10 @@ def harvest(
         # rods have no finite fragment; they dedupe through their
         # canonical chemical repeat into their own family library
         for rod in decon.rod_units:
-            repeat = canonical_rod(decon.structure, rod)
-            rod_name = merge_rod(result.rods, repeat, f"rod_{repeat.formula}")
+            fragment_rod = rod_fragment(decon.structure, rod)
+            rod_name = merge_rod(
+                result.rods, fragment_rod, f"rod_{fragment_rod.repeat.formula}"
+            )
             result.rod_provenance.setdefault(rod_name, [])
             if label not in result.rod_provenance[rod_name]:
                 result.rod_provenance[rod_name].append(label)
