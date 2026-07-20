@@ -42,6 +42,7 @@ from autografs.deconstruct import (
     write_fragments_xyz,
 )
 from autografs.exceptions import AutografsError
+from autografs.rods import RodRepeat, canonical_rod, merge_rod
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping
@@ -90,6 +91,14 @@ class HarvestResult:
     failures : dict[str, str]
         Source label to the failure reason, for structures that could
         not be deconstructed.
+    rods : dict[str, RodRepeat]
+        Deduplicated rod (1-periodic) building units across sources,
+        keyed like fragments (``rod_<formula>`` with numeric suffixes
+        for distinct rods sharing a composition). Rod identity is the
+        canonical chemical repeat (see ``autografs.rods``); rods have
+        no finite fragment and never appear in ``fragments``.
+    rod_provenance : dict[str, list[str]]
+        Rod family name to the sorted labels of its sources.
     n_processed : int
         Number of structures successfully deconstructed.
     """
@@ -99,6 +108,8 @@ class HarvestResult:
     provenance: dict[str, list[str]] = field(default_factory=dict)
     nets: dict[str, list[str]] = field(default_factory=dict)
     failures: dict[str, str] = field(default_factory=dict)
+    rods: dict[str, RodRepeat] = field(default_factory=dict)
+    rod_provenance: dict[str, list[str]] = field(default_factory=dict)
     n_processed: int = 0
 
     @property
@@ -153,6 +164,11 @@ class HarvestResult:
         return (
             f"harvested {len(self.fragments)} fragments ({kind_counts}) "
             f"from {self.n_processed}/{n_sources} structures"
+            + (
+                f", {len(self.rods)} rod famil{'y' if len(self.rods) == 1 else 'ies'}"
+                if self.rods
+                else ""
+            )
             + (f", {len(self.failures)} failed" if self.failures else "")
         )
 
@@ -242,7 +258,17 @@ def harvest(
             result.provenance.setdefault(merged_name, [])
             if label not in result.provenance[merged_name]:
                 result.provenance[merged_name].append(label)
+        # rods have no finite fragment; they dedupe through their
+        # canonical chemical repeat into their own family library
+        for rod in decon.rod_units:
+            repeat = canonical_rod(decon.structure, rod)
+            rod_name = merge_rod(result.rods, repeat, f"rod_{repeat.formula}")
+            result.rod_provenance.setdefault(rod_name, [])
+            if label not in result.rod_provenance[rod_name]:
+                result.rod_provenance[rod_name].append(label)
     for sources_list in result.provenance.values():
+        sources_list.sort()
+    for sources_list in result.rod_provenance.values():
         sources_list.sort()
     logger.info(f"\t[x] {result.report()}")
     return result
