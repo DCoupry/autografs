@@ -547,10 +547,10 @@ def build_rod_framework(
     # optimize: coarse rotation grid, refine the best with Nelder-Mead
     guess = build.initial_guess()
     best = None
-    for theta in np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False):
-        value = build.objective(np.array([guess[0], theta, guess[2]]))
+    for angle in np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False):
+        value = build.objective(np.array([guess[0], angle, guess[2]]))
         if best is None or value < best[1]:
-            best = (theta, value)
+            best = (float(angle), value)
     assert best is not None
     start = np.array([guess[0], best[0], guess[2]])
     result = minimize(
