@@ -55,6 +55,11 @@ logger = logging.getLogger(__name__)
 # building unit; looser than exact geometry, tighter than "same shape"
 ROD_MATCH_TOLERANCE = 0.3
 
+# a rod whose screw angle stays under this (degrees) is treated as
+# straight: its chemical repeats tile by pure translation, so the
+# template bond graph is well defined and forward building applies
+STRAIGHT_SCREW_TOL = 1.0
+
 
 @dataclass(eq=False)
 class RodRepeat:
@@ -318,6 +323,13 @@ class RodFragment:
     arms : list[tuple[int, np.ndarray]]
         Connection arms, (atom row, (3,) local vector). Empty when
         the source ``RodUnit`` carried no ``cut_vectors``.
+    bonds : list[tuple[int, int, int]]
+        The rod's internal bond graph as (row a, row b, m): atom a of
+        one repeat bonds to atom b of the repeat m steps further along
+        the axis (m = 0 within a repeat, m = +-1 the continuation).
+        Recorded for screwless rods (screw_order 1) with source
+        ``internal_bonds``; empty otherwise — forward building needs
+        it, identity does not.
     name : str
         Library name, set by ``merge_rod``/harvest.
     """
@@ -325,6 +337,7 @@ class RodFragment:
     repeat: RodRepeat
     positions: np.ndarray = field(repr=False)
     arms: list[tuple[int, np.ndarray]] = field(repr=False)
+    bonds: list[tuple[int, int, int]] = field(repr=False, default_factory=list)
     name: str = "rod"
 
     @property
@@ -419,6 +432,45 @@ def rod_fragment(
             "tile the chemical repeat evenly."
         )
 
+    # internal bond graph in template rows (straight rods only: a
+    # helical screw shifts the azimuth per slab, so the slab
+    # correspondence used here does not hold; identity does not need
+    # bonds - forward building does)
+    bonds_local: list[tuple[int, int, int]] = []
+    if abs(screw) <= STRAIGHT_SCREW_TOL and rod.internal_bonds:
+        axis_hat = basis[2]
+        matrix = structure.lattice.matrix
+        template_axial_all = axial % chemical
+        kept = np.flatnonzero(keep)
+        kept_axial = template_axial_all[kept]
+        kept_radial = radial[kept]
+        kept_angular = angular[kept]
+
+        def _template_row(full_row: int) -> int:
+            # nearest kept atom in the cylindrical template metric;
+            # a straight rod's slabs are pure translations, so the
+            # match is exact
+            da = np.abs(template_axial_all[full_row] - kept_axial)
+            da = np.minimum(da, chemical - da)
+            drho = np.abs(radial[full_row] - kept_radial)
+            dth = np.abs(angular[full_row] - kept_angular)
+            dth = np.minimum(dth, 2.0 * np.pi - dth)
+            return int(np.argmin(da + drho + radial[full_row] * dth))
+
+        seen: set[tuple[int, int, int]] = set()
+        for i, j, off in rod.internal_bonds:
+            a = _template_row(row_of[i])
+            b = _template_row(row_of[j])
+            off_axial = float((np.asarray(off, dtype=float) @ matrix) @ axis_hat)
+            n_i = round((axial[row_of[i]] - kept_axial[a]) / chemical)
+            n_j = round((axial[row_of[j]] + off_axial - kept_axial[b]) / chemical)
+            m = int(n_j - n_i)
+            key = (a, b, m) if (a, b, m) <= (b, a, -m) else (b, a, -m)
+            if key in seen:
+                continue
+            seen.add(key)
+            bonds_local.append((a, b, m))
+
     symbols = [s for s, k in zip(symbols, keep, strict=True) if k]
     axial = axial[keep] % chemical
     radial = radial[keep]
@@ -436,7 +488,13 @@ def rod_fragment(
     template = np.column_stack(
         [radial * np.cos(angular), radial * np.sin(angular), axial]
     )
-    return RodFragment(repeat=repeat, positions=template, arms=arms, name=name)
+    return RodFragment(
+        repeat=repeat,
+        positions=template,
+        arms=arms,
+        bonds=bonds_local,
+        name=name,
+    )
 
 
 def canonical_rod(
@@ -504,6 +562,7 @@ def rod_fragment_to_dict(fragment: RodFragment) -> dict:
             [int(row), np.round(np.asarray(vec), 8).tolist()]
             for row, vec in fragment.arms
         ],
+        "bonds": [[int(a), int(b), int(m)] for a, b, m in fragment.bonds],
     }
 
 
@@ -523,6 +582,7 @@ def rod_fragment_from_dict(data: dict) -> RodFragment:
         repeat=repeat,
         positions=np.asarray(data["positions"], dtype=float),
         arms=[(int(row), np.asarray(vec, dtype=float)) for row, vec in data["arms"]],
+        bonds=[(int(a), int(b), int(m)) for a, b, m in data.get("bonds", [])],
         name=data.get("name", "rod"),
     )
 
