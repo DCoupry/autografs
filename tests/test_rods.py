@@ -20,7 +20,7 @@ from pymatgen.core.structure import Structure
 from autografs.deconstruct import RodUnit
 from autografs.rods import RodRepeat, canonical_rod, merge_rod
 
-from .test_deconstruct import _rod_pillar_structure
+from .test_deconstruct import _helical_rod_structure, _rod_pillar_structure
 
 
 @pytest.fixture(scope="module")
@@ -465,3 +465,52 @@ class TestRodEditingGuards:
         assert loaded.is_rod is True
         with pytest.raises(ValueError, match="rod framework"):
             loaded.flip(0)
+
+
+class TestHelicalRodFixture:
+    """The synthetic 2_1-screw rod (MOF-74 class): full deconstruct path."""
+
+    def _canonical(self, mofgen, n_repeats=2):
+        result = mofgen.deconstruct(_helical_rod_structure(n_repeats))
+        assert len(result.rod_units) == 1
+        return canonical_rod(result.structure, result.rod_units[0])
+
+    def test_screw_recovered(self, mofgen):
+        rep = self._canonical(mofgen)
+        assert rep.screw_order == 2
+        assert abs(rep.screw_angle) == pytest.approx(180.0, abs=1.0)
+        assert rep.formula == "OZn"
+
+    def test_supercell_dedupes_with_base(self, mofgen):
+        # a 4-repeat cell is a supercell of the 2-repeat helical rod;
+        # both canonicalize to the same chemical repeat and match
+        base = self._canonical(mofgen, 2)
+        big = self._canonical(mofgen, 4)
+        assert big.screw_order == 4
+        assert base.matches(big)
+
+    def test_forward_build_refuses_helical(self, mofgen):
+        # Stage C3 builds straight rods only; a real helical rod must
+        # be rejected with a clear reason, not mis-built
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.harvest([_helical_rod_structure()])
+        rod = result.rods["rod_OZn"]
+        linker = mofgen.sbu["Benzene_linear"]
+        with pytest.raises(Exception, match="straight"):
+            build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+
+    def test_harvest_keeps_helical_and_straight_apart(self, mofgen):
+        # the straight pillar and the helical screw rod are different
+        # building units even though both are -Zn-O- (OZn)
+        result = mofgen.harvest([_rod_pillar_structure(1), _helical_rod_structure()])
+        assert sorted(result.rods) == ["rod_OZn", "rod_OZn_2"]
+        straight, helical = (
+            result.rods["rod_OZn"],
+            result.rods["rod_OZn_2"],
+        )
+        # whichever is which, one is straight and one is the 2_1 screw
+        angles = sorted(abs(r.repeat.screw_angle) for r in (straight, helical))
+        assert angles[0] == pytest.approx(0.0, abs=1.0)
+        assert angles[1] == pytest.approx(180.0, abs=1.0)
+        assert not straight.repeat.matches(helical.repeat)

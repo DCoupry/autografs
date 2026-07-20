@@ -407,6 +407,60 @@ def _rod_pillar_structure(n_repeats: int = 1):
     return Structure(lattice, species, coords, coords_are_cartesian=True)
 
 
+def _helical_rod_structure(n_repeats: int = 2):
+    """Tetragonal 2_1-screw -Zn-O- rod, pyrazine linkers laterally.
+
+    A synthetic helical rod MOF standing in for the MOF-74 class: the
+    bridging oxygen sits off the rod axis and alternates side by 180
+    degrees each chemical repeat, so the -Zn-O- chain is a 2_1 screw
+    (screw order 2, angle 180 degrees). Detection and canonicalization
+    must recover that screw - and forward building must refuse it,
+    since Stage C3 handles straight rods only. Real helical rods
+    (zinc formate, Mg carboxylates, ...) look the same to the pipeline
+    but are CSD-derived and stay out of the repo; see the rod-fixture
+    notes. ``n_repeats`` must be even (>=2) so the screw closes.
+    """
+    import math
+
+    import numpy as np
+
+    a, c0, rho = 7.4, 3.9, 0.85
+    lattice = Lattice.tetragonal(a, n_repeats * c0)
+    species, coords = [], []
+    for r in range(n_repeats):
+        species.append("Zn")
+        coords.append([0.0, 0.0, r * c0])
+        theta = r * math.pi  # alternate the bridging O side each repeat
+        species.append("O")
+        coords.append([rho * math.cos(theta), rho * math.sin(theta), r * c0 + c0 / 2])
+    tilt = math.sqrt(0.5)
+    ring = [
+        ("N", -1.395, 0.0),
+        ("N", 1.395, 0.0),
+        ("C", -0.6975, 1.208),
+        ("C", 0.6975, 1.208),
+        ("C", -0.6975, -1.208),
+        ("C", 0.6975, -1.208),
+        ("H", -1.237, 2.143),
+        ("H", 1.237, 2.143),
+        ("H", -1.237, -2.143),
+        ("H", 1.237, -2.143),
+    ]
+    for r in range(n_repeats):
+        for center, plane in (
+            (np.array([a / 2, 0.0, r * c0]), "x"),
+            (np.array([0.0, a / 2, r * c0]), "y"),
+        ):
+            for symbol, along, out in ring:
+                if plane == "x":
+                    pos = center + np.array([along, out * tilt, out * tilt])
+                else:
+                    pos = center + np.array([out * tilt, along, -out * tilt])
+                species.append(symbol)
+                coords.append(pos.tolist())
+    return Structure(lattice, species, coords, coords_are_cartesian=True)
+
+
 class TestRodMOF:
     @pytest.fixture(scope="class")
     def rod_result(self, mofgen):
@@ -451,6 +505,22 @@ class TestRodMOF:
         assert rod.n_connections == 8
         assert result.net_candidates == ["pcu"]
         assert result.subframework_nets[0].tier == "contracted"
+
+    def test_helical_rod_detected(self, mofgen):
+        """The 2_1-screw synthetic rod (MOF-74 class) deconstructs to a
+        single 1-periodic unit whose canonical form carries the screw:
+        order 2, 180 degrees, its chemical repeat half the
+        crystallographic one, and (being helical) no template bonds."""
+        from autografs.rods import rod_fragment
+
+        result = mofgen.deconstruct(_helical_rod_structure())
+        assert len(result.rod_units) == 1
+        frag = rod_fragment(result.structure, result.rod_units[0])
+        assert frag.repeat.formula == "OZn"
+        assert frag.repeat.screw_order == 2
+        assert abs(frag.repeat.screw_angle) == pytest.approx(180.0, abs=1.0)
+        assert frag.repeat.repeat_length == pytest.approx(3.9, abs=0.05)
+        assert frag.bonds == []  # helical: template bonds not recorded
 
 
 class TestErrors:
