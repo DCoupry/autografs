@@ -47,6 +47,8 @@ import autografs.alignment
 import autografs.data
 import autografs.deconstruct
 import autografs.harvest
+import autografs.rod_build
+import autografs.rods
 import autografs.topology_io
 import autografs.utils
 from autografs.exceptions import AlignmentError, OverlapError
@@ -1055,3 +1057,66 @@ class Autografs:
         >>> result.write_xyz("harvested.xyz")
         """
         return autografs.harvest.harvest(sources, topologies=self.topologies)
+
+    def build_rod(
+        self,
+        topology: Topology,
+        rod: autografs.rods.RodFragment,
+        linker: Fragment | str,
+        max_rmsd: float = autografs.rod_build.DEFAULT_MAX_RMSD,
+        min_distance: float | None = 1.0,
+        verbose: bool = False,
+    ) -> Framework:
+        """Build a straight rod framework (rod Stage C).
+
+        Places a harvested rod (``HarvestResult.rods`` or
+        ``autografs.rods.load_rods``) onto one of the blueprint's
+        straight axial slot runs and a ditopic linker onto every other
+        slot — the forward counterpart of rod deconstruction. Scoped
+        to straight (non-helical) rods on single-axis runs; see
+        :mod:`autografs.rod_build` for the full contract.
+
+        Parameters
+        ----------
+        topology : Topology
+            The blueprint; must have a straight axial slot run (e.g.
+            ``pcu``).
+        rod : RodFragment
+            A harvested rod fragment.
+        linker : Fragment or str
+            The ditopic linker, as a library SBU name or a Fragment.
+        max_rmsd : float, optional
+            Directional gate on each linker's arm alignment.
+        min_distance : float or None, optional
+            Post-build closest-contact gate.
+        verbose : bool, optional
+            Log the optimized cell and residuals.
+
+        Returns
+        -------
+        Framework
+            The built rod framework.
+
+        Raises
+        ------
+        AlignmentError
+            For out-of-scope inputs or failed gates.
+        OverlapError
+            When the structure violates ``min_distance``.
+
+        Examples
+        --------
+        >>> harvest = mofgen.harvest("mof74_family/")
+        >>> rod = harvest.rods["rod_MgO4"]
+        >>> mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
+        """
+        if isinstance(linker, str):
+            linker = self.sbu[linker].copy()
+        return autografs.rod_build.build_rod_framework(
+            topology,
+            rod,
+            linker,
+            max_rmsd=max_rmsd,
+            min_distance=min_distance,
+            verbose=verbose,
+        )

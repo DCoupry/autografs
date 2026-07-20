@@ -145,6 +145,7 @@ src/autografs/
 ├── deconstruct.py   inverse pipeline: CIF → SBUs + net candidates
 ├── harvest.py       batch SBU harvesting across many structures
 ├── rods.py          canonical rod repeat units: identity + dedup
+├── rod_build.py     forward building of straight rod frameworks
 ├── porosity.py      grid-based porosity descriptors
 ├── framework_io.py  Framework save/load
 ├── charges.py       partial charges: EQeq + pluggable scheme registry

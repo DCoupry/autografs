@@ -310,3 +310,98 @@ class TestAxialRuns:
         runs = axial_runs(mofgen.topologies["sql"])
         keys = {(r.direction, r.slots) for r in runs}
         assert len(keys) == len(runs) == 2
+
+
+class TestRodForwardBuild:
+    """Rod Stage C3: forward building of straight rod frameworks."""
+
+    def _harvest(self, mofgen, n_repeats=1):
+        result = mofgen.harvest([_rod_pillar_structure(n_repeats)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        return rod, linker
+
+    def test_pillar_round_trip(self, mofgen):
+        # the acceptance criterion: harvest the pillar, rebuild it from
+        # its RodFragment + pyrazine, deconstruct, recover the same net
+        # and the same rod identity
+        from autografs.rod_build import build_rod_framework
+
+        rod, linker = self._harvest(mofgen)
+        built = build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        assert built.min_contact() > 1.0
+        # two chemical repeats along c, one linker per lateral slot per
+        # repeat: Zn2 O2 + 4 pyrazine (C4H4N2)
+        assert built.symbols.count("Zn") == 2
+        assert built.symbols.count("O") == 2
+        assert built.symbols.count("N") == 8
+        # Framework invariants
+        assert sorted(built.graph) == list(range(len(built)))
+        assert all(d["tag"] == 0 for _, d in built.graph.nodes(data=True))
+
+        result = mofgen.deconstruct(built.structure)
+        assert result.net_candidates == ["pcu"]
+        assert len(result.rod_units) == 1
+        rebuilt = canonical_rod(result.structure, result.rod_units[0])
+        assert rod.repeat.matches(rebuilt)
+
+    def test_supercell_harvest_builds_identically(self, mofgen):
+        # a rod canonicalized from a 2-repeat cell (screw_order 2,
+        # angle 0) still builds - its template tiles by translation
+        from autografs.rod_build import build_rod_framework
+
+        rod1, linker = self._harvest(mofgen, 1)
+        rod2, _ = self._harvest(mofgen, 2)
+        assert rod2.repeat.screw_order == 2
+        assert abs(rod2.repeat.screw_angle) < 1.0
+        one = build_rod_framework(mofgen.topologies["pcu"], rod1, linker)
+        two = build_rod_framework(mofgen.topologies["pcu"], rod2, linker)
+        assert len(one) == len(two)
+        assert one.symbols == two.symbols
+
+    def test_build_rod_entry_point(self, mofgen):
+        rod, linker = self._harvest(mofgen)
+        built = mofgen.build_rod(mofgen.topologies["pcu"], rod, linker)
+        assert built.min_contact() > 1.0
+        assert built.name == "pcu_rod_OZn"
+
+    def test_bonds_survive_serialization_round_trip(self, mofgen, tmp_path):
+        # a rod saved and reloaded still builds (bonds persist)
+        from autografs.rod_build import build_rod_framework
+        from autografs.rods import load_rods, save_rods
+
+        rod, linker = self._harvest(mofgen)
+        path = save_rods({"rod_OZn": rod}, tmp_path / "rods.json.gz")
+        reloaded = load_rods(path)["rod_OZn"]
+        assert reloaded.bonds == rod.bonds
+        built = build_rod_framework(mofgen.topologies["pcu"], reloaded, linker)
+        assert built.min_contact() > 1.0
+
+    def test_helical_rod_rejected(self, mofgen):
+        from autografs.rod_build import build_rod_framework
+        from autografs.rods import rod_fragment
+
+        structure, unit = _helix()
+        helix = rod_fragment(structure, unit)
+        assert abs(helix.repeat.screw_angle) > 1.0
+        _, linker = self._harvest(mofgen)
+        with pytest.raises(Exception, match="straight"):
+            build_rod_framework(mofgen.topologies["pcu"], helix, linker)
+
+    def test_no_axial_run_rejected(self, mofgen):
+        from autografs.rod_build import build_rod_framework
+
+        rod, linker = self._harvest(mofgen)
+        # dia has no straight axial run
+        with pytest.raises(Exception, match="axial slot run"):
+            build_rod_framework(mofgen.topologies["dia"], rod, linker)
+
+    def test_non_ditopic_linker_rejected(self, mofgen):
+        from autografs.rod_build import build_rod_framework
+
+        rod, _ = self._harvest(mofgen)
+        node = mofgen.sbu["Zn_mof5_octahedral"]
+        with pytest.raises(Exception, match="ditopic"):
+            build_rod_framework(mofgen.topologies["pcu"], rod, node)

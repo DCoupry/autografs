@@ -89,6 +89,37 @@ axis, axial phase, and the proper flip), so a 2× supercell
 deconstruction dedupes with a 1× one, while enantiomeric screws stay
 distinct — helicity is chiral, and no proper isometry relates them.
 
+### Building rod frameworks forward
+
+A harvested rod fragment goes back through the builder with
+`build_rod` — the forward counterpart of rod deconstruction:
+
+```python
+harvest = mofgen.harvest("mof74_family/")
+rod = harvest.rods["rod_MgO4"]
+mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
+mof.write_cif("built.cif")
+```
+
+The rod is placed on one of the blueprint's straight axial slot runs
+(`autografs.net.axial_runs`) and a ditopic linker fills every other
+slot. Two structural facts fall out of a rod being one-periodic: it
+**pins** the run-axis cell length (`n × chemical repeat`, not a free
+parameter), and its inter-unit bonds are explicit graph edges rather
+than the tag pairs finite SBUs use (a rod anchor carries several
+connections, one atom, one tag). The placement optimizes the in-plane
+scale plus the rod's own axis rotation and axial phase against
+covalent bond-length targets, then relieves the ditopic linkers'
+ring-plane freedom (a free rotation about each linker's own axis that
+leaves its anchors, hence the bonds, fixed) to clear steric clashes.
+Round-tripping — harvest → `build_rod` → `deconstruct` — recovers the
+same net and the same rod identity.
+
+This first pass is scoped to **straight** (non-helical) rods on
+single-axis runs with one point-of-extension slot per period; helical
+rods (MOF-74's screw) and woven multi-axis rod packings are future
+work. Out-of-scope inputs raise `AlignmentError` with the reason.
+
 ## Harvesting a library from many structures
 
 `harvest` runs `deconstruct` over a batch — a directory of CIFs, a

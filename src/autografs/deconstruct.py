@@ -173,6 +173,12 @@ class RodUnit:
         (the position deconstruction would give the dummy). This is
         the rod's connection geometry, consumed by
         ``autografs.rods.rod_fragment`` for forward building.
+    internal_bonds : list[tuple[int, int, tuple[int, int, int]]]
+        The rod's own bond graph: (site index, site index, image
+        offset) per bond between rod atoms, offsets in the stored
+        bond-graph convention. Includes the continuation bonds to the
+        rod's periodic images; forward building rebuilds the rod's
+        connectivity from these.
     """
 
     atom_indices: list[int]
@@ -182,6 +188,9 @@ class RodUnit:
     poe_indices: list[int]
     n_connections: int
     cut_vectors: list[tuple[int, tuple[float, float, float]]] = field(
+        default_factory=list
+    )
+    internal_bonds: list[tuple[int, int, tuple[int, int, int]]] = field(
         default_factory=list
     )
 
@@ -1074,6 +1083,17 @@ def deconstruct(
                 rod_arms[unit_index].append(
                     (atom, (float(midpoint[0]), float(midpoint[1]), float(midpoint[2])))
                 )
+    rod_bonds: dict[int, list[tuple[int, int, tuple[int, int, int]]]] = defaultdict(
+        list
+    )
+    if rod_indices:
+        for u, v, data in bonds.edges(data=True):
+            unit_index = atom_to_unit[u]
+            if unit_index in rod_indices and atom_to_unit[v] == unit_index:
+                off = _jimage_from(u, v, data["to_jimage"])
+                rod_bonds[unit_index].append(
+                    (u, v, (int(off[0]), int(off[1]), int(off[2])))
+                )
     for k in sorted(rod_indices):
         generator = generators[k]
         axis = generator @ structure.lattice.matrix
@@ -1112,6 +1132,7 @@ def deconstruct(
                 poe_indices=poe,
                 n_connections=rod_cuts[k],
                 cut_vectors=sorted(rod_arms[k]),
+                internal_bonds=sorted(rod_bonds[k]),
             )
         )
     if rods:
