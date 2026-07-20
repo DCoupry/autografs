@@ -99,6 +99,10 @@ def framework_to_dict(framework: Framework) -> dict:
         data["charges"] = [float(graph.nodes[n]["charge"]) for n in nodes]
         if "charge_method" in graph.graph:
             data["charge_method"] = graph.graph["charge_method"]
+    # rod-build marker: keeps the editing guards (editing._reject_rod)
+    # working across a save/load round trip
+    if graph.graph.get("rod_build"):
+        data["rod_build"] = True
     return data
 
 
@@ -122,6 +126,8 @@ def framework_from_dict(data: dict) -> Framework:
     charges = data.get("charges")
     if "charge_method" in data:
         graph.graph["charge_method"] = data["charge_method"]
+    if data.get("rod_build"):
+        graph.graph["rod_build"] = True
     columns = zip(
         data["symbols"], data["coords"], data["tags"], data["ufftypes"], strict=True
     )
