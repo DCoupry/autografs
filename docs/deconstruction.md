@@ -75,6 +75,16 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
+Rods also get a canonical identity (`autografs.rods`): `canonical_rod`
+reduces a detected rod to one *chemical* repeat in a cylindrical frame
+about its axis — detecting screw rods whose crystallographic repeat is
+a multiple of the chemical one (the MOF-74 helix) and recording the
+screw order and signed screw angle. `RodRepeat.matches` compares rods
+modulo everything the crystal embedding chooses freely (rotation about
+the axis, axial phase, and the proper flip), so a 2× supercell
+deconstruction dedupes with a 1× one, while enantiomeric screws stay
+distinct — helicity is chiral, and no proper isometry relates them.
+
 ## Harvesting a library from many structures
 
 `harvest` runs `deconstruct` over a batch — a directory of CIFs, a
@@ -92,6 +102,8 @@ result.building_units    # nodes + linkers (bound-solvent caps excluded)
 result.provenance        # {'node_C4O8Zn2_4X': ['HKUST-1', 'MOF-505', ...], ...}
 result.nets              # {'HKUST-1': ['tbo'], ...}  per-source net candidates
 result.failures          # {'disordered_entry': 'DeconstructionError: ...', ...}
+result.rods              # {'rod_OZn': RodRepeat(...)} rod families (see above)
+result.rod_provenance    # {'rod_OZn': ['MOF-74-Zn', ...]}
 
 result.write_xyz("harvested_sbus.xyz")          # nodes + linkers by default
 mofgen2 = Autografs(xyzfile="harvested_sbus.xyz")   # build with the harvest
