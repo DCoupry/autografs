@@ -205,3 +205,108 @@ class TestPoeNetsInLibrary:
         library = load_topologies(bundled)
         for net in ("etb", "sra", "bnn"):
             assert net in library
+
+
+class TestRodFragment:
+    def test_pillar_arms(self, mofgen):
+        from autografs.rods import rod_fragment
+
+        result = mofgen.deconstruct(_rod_pillar_structure())
+        fragment = rod_fragment(result.structure, result.rod_units[0])
+        assert len(fragment.arms) == 4
+        assert fragment.positions.shape == (2, 3)
+        # the pyrazine arms leave the Zn perpendicular to the rod axis
+        # (local frame: axis = +z)
+        for row, vector in fragment.arms:
+            assert fragment.repeat.symbols[row] == "Zn"
+            assert abs(vector[2]) < 1e-6
+            assert np.linalg.norm(vector[:2]) > 0.5
+        # template geometry: Zn and O separated by the chain spacing
+        dz = abs(fragment.positions[0, 2] - fragment.positions[1, 2])
+        assert dz == pytest.approx(1.95, abs=1e-6)
+
+    def test_supercell_fragment_reduces_arms(self, mofgen):
+        from autografs.rods import rod_fragment
+
+        result = mofgen.deconstruct(_rod_pillar_structure(2))
+        fragment = rod_fragment(result.structure, result.rod_units[0])
+        # 8 cuts per crystallographic repeat reduce to 4 per chemical
+        assert len(fragment.arms) == 4
+        assert fragment.repeat.repeat_length == pytest.approx(3.9)
+
+    def test_manual_rod_without_cut_vectors_has_no_arms(self):
+        from autografs.rods import rod_fragment
+
+        structure, rod = _helix()
+        fragment = rod_fragment(structure, rod)
+        assert fragment.arms == []
+        assert fragment.repeat.screw_order == 4
+
+
+class TestRodSerialization:
+    def test_round_trip(self, mofgen, tmp_path):
+        from autografs.rods import load_rods, rod_fragment, save_rods
+
+        result = mofgen.deconstruct(_rod_pillar_structure())
+        fragment = rod_fragment(result.structure, result.rod_units[0], name="rod_OZn")
+        path = save_rods({"rod_OZn": fragment}, tmp_path / "rods.json.gz")
+        loaded = load_rods(path)
+        assert list(loaded) == ["rod_OZn"]
+        restored = loaded["rod_OZn"]
+        assert restored.matches(fragment)
+        np.testing.assert_allclose(restored.positions, fragment.positions, atol=1e-7)
+        assert len(restored.arms) == len(fragment.arms)
+        for (row_a, vec_a), (row_b, vec_b) in zip(
+            restored.arms, fragment.arms, strict=True
+        ):
+            assert row_a == row_b
+            np.testing.assert_allclose(vec_a, vec_b, atol=1e-7)
+
+    def test_version_gate(self, tmp_path):
+        import json
+
+        from autografs.rods import load_rods
+
+        bad = tmp_path / "rods.json"
+        bad.write_text(json.dumps({"format_version": 99, "rods": {}}))
+        with pytest.raises(ValueError, match="format version"):
+            load_rods(bad)
+
+    def test_harvest_write_rods(self, mofgen, tmp_path):
+        from autografs.rods import load_rods
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        path = result.write_rods(tmp_path / "rods.json")
+        loaded = load_rods(path)
+        assert list(loaded) == ["rod_OZn"]
+        assert len(loaded["rod_OZn"].arms) == 4
+
+
+class TestAxialRuns:
+    def test_pcu_has_three_straight_runs(self, mofgen):
+        from autografs.net import axial_runs
+
+        runs = axial_runs(mofgen.topologies["pcu"])
+        assert len(runs) == 3
+        assert sorted(r.direction for r in runs) == [
+            (0, 0, 1),
+            (0, 1, 0),
+            (1, 0, 0),
+        ]
+        for run in runs:
+            # one node slot + one axial edge-center slot per period
+            assert len(run.slots) == 2
+            assert run.period == pytest.approx(1.0)
+
+    def test_zigzag_nets_have_none(self, mofgen):
+        from autografs.net import axial_runs
+
+        for name in ("dia", "hcb", "srs"):
+            assert axial_runs(mofgen.topologies[name]) == []
+
+    def test_runs_are_deduplicated(self, mofgen):
+        from autografs.net import axial_runs
+
+        runs = axial_runs(mofgen.topologies["sql"])
+        keys = {(r.direction, r.slots) for r in runs}
+        assert len(keys) == len(runs) == 2

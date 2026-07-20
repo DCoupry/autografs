@@ -33,9 +33,12 @@ to build cross-structure rod families with provenance.
 
 from __future__ import annotations
 
+import gzip
+import json
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -211,12 +214,16 @@ def _local_positions(
 
 def _cylindrical_frame(
     positions: np.ndarray, axis: np.ndarray
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(axial, radial, angular) coordinates about the centroid axis.
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """(axial, radial, angular, basis) about the centroid axis.
 
     The axis line runs along ``axis`` through the perpendicular
     centroid of the atoms — the only transverse origin invariant under
-    the rod's own screw/rotational symmetry, hence canonical.
+    the rod's own screw/rotational symmetry, hence canonical. The
+    returned (3, 3) basis rows (e1, e2, axis) are the frame the
+    angular coordinates are measured in; vectors attached to the atoms
+    (connection arms) transform into the same local frame by
+    right-multiplying with its transpose.
     """
     axis = np.asarray(axis, dtype=float)
     axis = axis / np.linalg.norm(axis)
@@ -237,7 +244,7 @@ def _cylindrical_frame(
     # atoms on the axis have no azimuth; zero is as good as any and
     # the distance metric ignores it there (rho = 0)
     angular[radial < 1e-9] = 0.0
-    return axial, radial, angular
+    return axial, radial, angular, np.array([e1, e2, axis])
 
 
 def _chemical_reduction(
@@ -289,32 +296,88 @@ def _chemical_reduction(
     return length, 1, 0.0
 
 
-def canonical_rod(
+@dataclass(eq=False)
+class RodFragment:
+    """A buildable rod: the canonical repeat plus connection arms.
+
+    The forward-pipeline counterpart of a finite ``Fragment`` (rod
+    Stage C): identity and matching live in ``repeat``; ``positions``
+    is the chemical repeat's atom template in the canonical local
+    frame (axis = +z through the transverse origin, z in
+    [0, repeat_length)); ``arms`` carries the connection geometry —
+    one entry per cut bond of the chemical repeat, as (template atom
+    row, local vector from that atom to the cut-bond midpoint, i.e.
+    where deconstruction would put the dummy).
+
+    Attributes
+    ----------
+    repeat : RodRepeat
+        The canonical chemical repeat (identity, screw operation).
+    positions : np.ndarray
+        (n, 3) local cartesian coordinates of the template atoms.
+    arms : list[tuple[int, np.ndarray]]
+        Connection arms, (atom row, (3,) local vector). Empty when
+        the source ``RodUnit`` carried no ``cut_vectors``.
+    name : str
+        Library name, set by ``merge_rod``/harvest.
+    """
+
+    repeat: RodRepeat
+    positions: np.ndarray = field(repr=False)
+    arms: list[tuple[int, np.ndarray]] = field(repr=False)
+    name: str = "rod"
+
+    @property
+    def symbols(self) -> list[str]:
+        return self.repeat.symbols
+
+    def matches(
+        self,
+        other: RodFragment | RodRepeat,
+        tolerance: float = ROD_MATCH_TOLERANCE,
+    ) -> bool:
+        """Same rod building unit (identity delegates to the repeat)."""
+        other_repeat = other.repeat if isinstance(other, RodFragment) else other
+        return self.repeat.matches(other_repeat, tolerance)
+
+    def __repr__(self) -> str:
+        return (
+            f"RodFragment({self.repeat.formula}, "
+            f"repeat={self.repeat.repeat_length:.2f} A, "
+            f"{len(self.arms)} arms)"
+        )
+
+
+def rod_fragment(
     structure: Structure,
     rod: RodUnit,
     tolerance: float = ROD_MATCH_TOLERANCE,
-) -> RodRepeat:
-    """The canonical chemical repeat of a detected rod unit.
+    name: str = "rod",
+) -> RodFragment:
+    """The buildable canonical fragment of a detected rod unit.
 
     Parameters
     ----------
     structure : Structure
         The deconstructed structure (``Deconstruction.structure``).
     rod : RodUnit
-        A rod from ``Deconstruction.rod_units``.
+        A rod from ``Deconstruction.rod_units``. Its ``cut_vectors``
+        (when present) become the fragment's connection arms.
     tolerance : float, optional
         Cartesian tolerance for the internal screw self-matching.
+    name : str, optional
+        Name recorded on the fragment.
 
     Returns
     -------
-    RodRepeat
-        One chemical repeat in the canonical cylindrical frame, with
-        the screw operation (order and angle) that generates the full
-        crystallographic repeat from it.
+    RodFragment
+        One chemical repeat (template + arms) in the canonical local
+        frame, with the screw operation that generates the full
+        crystallographic repeat.
     """
     anchor_index = rod.atom_indices[0]
     positions = _local_positions(structure, rod.atom_indices, anchor_index)
-    axial, radial, angular = _cylindrical_frame(positions, rod.axis)
+    axial, radial, angular, basis = _cylindrical_frame(positions, rod.axis)
     length = float(rod.repeat_length)
     symbols = [structure[i].specie.symbol for i in rod.atom_indices]
     axial = (axial - axial.min()) % length
@@ -327,6 +390,7 @@ def canonical_rod(
         # breaks; the connected building unit is the full
         # crystallographic repeat after all
         chemical, order, screw = length, 1, 0.0
+    keep = np.ones(len(symbols), dtype=bool)
     if order > 1:
         # keep one chemical repeat: the atoms in the first axial slab
         keep = axial < chemical - 1e-9
@@ -337,11 +401,29 @@ def canonical_rod(
             ranked = np.argsort(axial, kind="stable")[:expected]
             keep = np.zeros(len(symbols), dtype=bool)
             keep[ranked] = True
-        symbols = [s for s, k in zip(symbols, keep, strict=True) if k]
-        axial = axial[keep] % chemical
-        radial = radial[keep]
-        angular = angular[keep]
-    return RodRepeat(
+
+    # connection arms, rotated into the same local frame as the atoms
+    row_of = {site: row for row, site in enumerate(rod.atom_indices)}
+    kept_rows = np.flatnonzero(keep)
+    remap = {int(old): new for new, old in enumerate(kept_rows)}
+    arms: list[tuple[int, np.ndarray]] = []
+    for site, vector in rod.cut_vectors:
+        row = row_of[site]
+        if not keep[row]:
+            continue
+        arms.append((remap[row], basis @ np.asarray(vector, dtype=float)))
+    if rod.cut_vectors and len(arms) != rod.n_connections // order:
+        logger.warning(
+            f"Rod arm reduction kept {len(arms)} arms but expected "
+            f"{rod.n_connections // order}; the cut pattern does not "
+            "tile the chemical repeat evenly."
+        )
+
+    symbols = [s for s, k in zip(symbols, keep, strict=True) if k]
+    axial = axial[keep] % chemical
+    radial = radial[keep]
+    angular = angular[keep]
+    repeat = RodRepeat(
         symbols=symbols,
         axial=axial,
         radial=radial,
@@ -351,25 +433,134 @@ def canonical_rod(
         screw_angle=screw,
         n_connections=rod.n_connections // order,
     )
+    template = np.column_stack(
+        [radial * np.cos(angular), radial * np.sin(angular), axial]
+    )
+    return RodFragment(repeat=repeat, positions=template, arms=arms, name=name)
+
+
+def canonical_rod(
+    structure: Structure,
+    rod: RodUnit,
+    tolerance: float = ROD_MATCH_TOLERANCE,
+) -> RodRepeat:
+    """The canonical chemical repeat of a detected rod unit.
+
+    Identity-only view of :func:`rod_fragment` (see there); kept as
+    the Stage B entry point.
+    """
+    return rod_fragment(structure, rod, tolerance=tolerance).repeat
 
 
 def merge_rod(
-    library: dict[str, RodRepeat], instance: RodRepeat, base_name: str
+    library: dict,
+    instance: RodFragment | RodRepeat,
+    base_name: str,
 ) -> str:
-    """Add a rod repeat to a library under a deduplicated name.
+    """Add a rod to a library under a deduplicated name.
 
     The counterpart of ``deconstruct.merge_fragment`` for rods: an
     instance matching an existing entry of the same base name reuses
     that name; a genuinely different rod sharing the base name gets a
-    numeric suffix. The library is mutated in place; the resolved name
-    is returned.
+    numeric suffix. Entries may be ``RodRepeat`` or ``RodFragment``
+    (identity always compares the repeats). The library is mutated in
+    place; the resolved name is returned.
     """
+
+    def _repeat_of(entry: RodFragment | RodRepeat) -> RodRepeat:
+        return entry.repeat if isinstance(entry, RodFragment) else entry
+
     name = base_name
     suffix = 1
     while name in library:
-        if library[name].matches(instance):
+        if _repeat_of(library[name]).matches(_repeat_of(instance)):
             return name
         suffix += 1
         name = f"{base_name}_{suffix}"
+    if isinstance(instance, RodFragment):
+        instance.name = name
     library[name] = instance
     return name
+
+
+ROD_FORMAT_VERSION = 1
+
+
+def rod_fragment_to_dict(fragment: RodFragment) -> dict:
+    """Convert a RodFragment into a JSON-compatible dict."""
+    repeat = fragment.repeat
+    return {
+        "name": fragment.name,
+        "symbols": list(repeat.symbols),
+        "axial": np.round(repeat.axial, 8).tolist(),
+        "radial": np.round(repeat.radial, 8).tolist(),
+        "angular": np.round(repeat.angular, 8).tolist(),
+        "repeat_length": repeat.repeat_length,
+        "screw_order": repeat.screw_order,
+        "screw_angle": repeat.screw_angle,
+        "n_connections": repeat.n_connections,
+        "positions": np.round(fragment.positions, 8).tolist(),
+        "arms": [
+            [int(row), np.round(np.asarray(vec), 8).tolist()]
+            for row, vec in fragment.arms
+        ],
+    }
+
+
+def rod_fragment_from_dict(data: dict) -> RodFragment:
+    """Reconstruct a RodFragment from its dict representation."""
+    repeat = RodRepeat(
+        symbols=list(data["symbols"]),
+        axial=np.asarray(data["axial"], dtype=float),
+        radial=np.asarray(data["radial"], dtype=float),
+        angular=np.asarray(data["angular"], dtype=float),
+        repeat_length=float(data["repeat_length"]),
+        screw_order=int(data["screw_order"]),
+        screw_angle=float(data["screw_angle"]),
+        n_connections=int(data["n_connections"]),
+    )
+    return RodFragment(
+        repeat=repeat,
+        positions=np.asarray(data["positions"], dtype=float),
+        arms=[(int(row), np.asarray(vec, dtype=float)) for row, vec in data["arms"]],
+        name=data.get("name", "rod"),
+    )
+
+
+def save_rods(rods: dict[str, RodFragment], path: str | Path) -> Path:
+    """Write a rod fragment library to a versioned JSON file.
+
+    Rods cannot join the XYZ SBU format (no finite molecule), so they
+    get their own sidecar; gzip-compressed when the path ends in .gz.
+    """
+    path = Path(path)
+    payload = {
+        "format_version": ROD_FORMAT_VERSION,
+        "rods": {name: rod_fragment_to_dict(rod) for name, rod in rods.items()},
+    }
+    if path.suffix == ".gz":
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, separators=(",", ":")))
+    else:
+        path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    logger.info(f"Saved {len(rods)} rod fragment(s) to {path}")
+    return path
+
+
+def load_rods(path: str | Path) -> dict[str, RodFragment]:
+    """Load a rod fragment library saved with ``save_rods``."""
+    path = Path(path)
+    if path.suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    else:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    version = payload.get("format_version")
+    if version != ROD_FORMAT_VERSION:
+        raise ValueError(
+            f"Unsupported rod library format version {version!r} in {path}; "
+            f"this build of AuToGraFS reads version {ROD_FORMAT_VERSION}."
+        )
+    return {
+        name: rod_fragment_from_dict(data) for name, data in payload["rods"].items()
+    }

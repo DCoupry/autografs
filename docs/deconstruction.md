@@ -66,7 +66,7 @@ finely divided, but the recovered net is the same.
 Rod MOFs (1-periodic building units, e.g. the MOF-74 family) are
 detected and reported rather than rejected: a rod has no finite
 fragment, so it appears in `rod_units` (axis, crystallographic repeat,
-points of extension, cut count) instead of `fragments`, and in the
+points of extension, cut vectors) instead of `fragments`, and in the
 quotient graph the rod is replaced by its points of extension joined
 along the axis — the O'Keeffe PoE convention — before net
 identification. Because that expansion carries no blueprint edge
@@ -75,13 +75,17 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
-Rods also get a canonical identity (`autografs.rods`): `canonical_rod`
-reduces a detected rod to one *chemical* repeat in a cylindrical frame
-about its axis — detecting screw rods whose crystallographic repeat is
-a multiple of the chemical one (the MOF-74 helix) and recording the
-screw order and signed screw angle. `RodRepeat.matches` compares rods
-modulo everything the crystal embedding chooses freely (rotation about
-the axis, axial phase, and the proper flip), so a 2× supercell
+Rods also get a canonical identity and a buildable form
+(`autografs.rods`): `canonical_rod` reduces a detected rod to one
+*chemical* repeat in a cylindrical frame about its axis — detecting
+screw rods whose crystallographic repeat is a multiple of the chemical
+one (the MOF-74 helix) and recording the screw order and signed screw
+angle — and `rod_fragment` adds the connection arms (from the cut-bond
+midpoints) and the atom template, giving a `RodFragment` that
+serializes to its own JSON sidecar (`save_rods`/`load_rods`;
+`HarvestResult.write_rods`). `RodRepeat.matches` compares rods modulo
+everything the crystal embedding chooses freely (rotation about the
+axis, axial phase, and the proper flip), so a 2× supercell
 deconstruction dedupes with a 1× one, while enantiomeric screws stay
 distinct — helicity is chiral, and no proper isometry relates them.
 
@@ -102,7 +106,8 @@ result.building_units    # nodes + linkers (bound-solvent caps excluded)
 result.provenance        # {'node_C4O8Zn2_4X': ['HKUST-1', 'MOF-505', ...], ...}
 result.nets              # {'HKUST-1': ['tbo'], ...}  per-source net candidates
 result.failures          # {'disordered_entry': 'DeconstructionError: ...', ...}
-result.rods              # {'rod_OZn': RodRepeat(...)} rod families (see above)
+result.rods              # {'rod_OZn': RodFragment(...)} rod families (see above)
+result.write_rods('rods.json')  # buildable rod library (JSON sidecar)
 result.rod_provenance    # {'rod_OZn': ['MOF-74-Zn', ...]}
 
 result.write_xyz("harvested_sbus.xyz")          # nodes + linkers by default
