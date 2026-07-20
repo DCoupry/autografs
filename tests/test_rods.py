@@ -405,3 +405,63 @@ class TestRodForwardBuild:
         node = mofgen.sbu["Zn_mof5_octahedral"]
         with pytest.raises(Exception, match="ditopic"):
             build_rod_framework(mofgen.topologies["pcu"], rod, node)
+
+
+class TestRodEditingGuards:
+    """Rod Stage C4: tag/anchor-based edits refuse rod frameworks."""
+
+    @pytest.fixture(scope="class")
+    def rod_framework(self, mofgen):
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        return build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+
+    def test_is_rod_flag(self, rod_framework, mofgen):
+        assert rod_framework.is_rod is True
+        # a normal finite build is not a rod
+        pcu = mofgen.topologies["pcu"]
+        mappings = {}
+        for key in pcu.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            mappings[key] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[conn]
+        assert mofgen.build(pcu, mappings=mappings).is_rod is False
+
+    def test_defects_refused(self, rod_framework):
+        with pytest.raises(ValueError, match="rod framework"):
+            rod_framework.defects(fraction=0.1, seed=1)
+
+    def test_rotate_refused(self, rod_framework):
+        with pytest.raises(ValueError, match="rod framework"):
+            rod_framework.rotate(0, 0.5)
+
+    def test_flip_refused(self, rod_framework):
+        with pytest.raises(ValueError, match="rod framework"):
+            rod_framework.flip(0)
+
+    def test_functionalize_refused(self, rod_framework):
+        with pytest.raises(ValueError, match="rod framework"):
+            rod_framework.functionalize(5, "CH3")
+
+    def test_supercell_allowed_and_marker_preserved(self, rod_framework):
+        # supercell is a valid graph op on a rod (it extends the rod);
+        # the marker must follow so the guards still apply afterwards
+        sc = rod_framework.supercell((1, 1, 2))
+        assert len(sc) == 2 * len(rod_framework)
+        assert sc.min_contact() > 1.0
+        assert sc.is_rod is True
+        with pytest.raises(ValueError, match="rod framework"):
+            sc.defects(fraction=0.1, seed=1)
+
+    def test_marker_survives_save_load(self, rod_framework, tmp_path):
+        from autografs.framework import Framework
+
+        path = rod_framework.save(tmp_path / "rod.json.gz")
+        loaded = Framework.load(path)
+        assert loaded.is_rod is True
+        with pytest.raises(ValueError, match="rod framework"):
+            loaded.flip(0)

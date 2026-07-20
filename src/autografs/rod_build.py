@@ -638,7 +638,9 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
     """
     from pymatgen.core.bonds import get_bond_order
 
-    graph = networkx.Graph(cell=result["cell"])
+    # rod_build marks the framework so tag/anchor-based editing ops
+    # (defects, flip, rotate, functionalize) refuse it - see editing._reject_rod
+    graph = networkx.Graph(cell=result["cell"], rod_build=True)
     n_atoms = len(build.rod.positions)
 
     # rod atoms: typed once on the first repeat, replicated

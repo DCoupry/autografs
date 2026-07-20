@@ -344,6 +344,17 @@ class Framework:
         return pore_limiting_diameter(self, spacing=spacing)
 
     @property
+    def is_rod(self) -> bool:
+        """True for a framework built by ``Autografs.build_rod``.
+
+        Rod frameworks hold their inter-unit bonds as explicit edges
+        and carry no anchor tags, so the tag/anchor-based editing
+        operations (``defects``, ``flip``, ``rotate``,
+        ``functionalize``) refuse them.
+        """
+        return bool(self.graph.graph.get("rod_build", False))
+
+    @property
     def charges(self) -> np.ndarray | None:
         """Per-atom partial charges in node order, or None if unset.
 

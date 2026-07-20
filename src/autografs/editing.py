@@ -69,6 +69,25 @@ def _require_provenance(framework: Framework) -> None:
         )
 
 
+def _reject_rod(framework: Framework, operation: str) -> None:
+    """Refuse anchor-tag-based edits on a rod (build_rod) framework.
+
+    Rod frameworks (``Framework.is_rod``) hold their inter-unit bonds
+    as explicit edges and carry no anchor tags, so the tag/anchor
+    machinery these edits rely on does not apply. Removing "one SBU"
+    from an infinite rod also leaves dangling rod ends with no cap
+    chemistry (rod pitfall 16), so the operation is refused rather
+    than guessed.
+    """
+    if framework.graph.graph.get("rod_build"):
+        raise ValueError(
+            f"{operation} is not defined for a rod framework: rods carry "
+            "explicit inter-unit bonds and no anchor tags, and a rod has "
+            "no finite SBU to remove or reorient. Edit the linkers of the "
+            "source structure instead, or rebuild."
+        )
+
+
 def _copy_graph(graph: networkx.Graph) -> networkx.Graph:
     """Copy a framework graph with private node dicts and coord arrays."""
     new = networkx.Graph(**graph.graph)
@@ -170,6 +189,7 @@ def rotate_sbu(framework: Framework, slot: int, theta: float) -> Framework:
 
     See Framework.rotate for the user-facing documentation.
     """
+    _reject_rod(framework, "rotate")
     nodes = _slot_nodes(framework, slot)
     anchors = _anchor_nodes(framework, nodes)
     if len(anchors) != 2:
@@ -196,6 +216,7 @@ def flip_sbu(framework: Framework, slot: int) -> Framework:
 
     See Framework.flip for the user-facing documentation.
     """
+    _reject_rod(framework, "flip")
     nodes = _slot_nodes(framework, slot)
     anchors = _anchor_nodes(framework, nodes)
     coords = np.array([framework.graph.nodes[n]["coord"] for n in nodes], dtype=float)
@@ -354,6 +375,10 @@ def replicated_graph(
     graph = framework.graph
     n_atoms = len(graph)
     combined = networkx.Graph(cell=framework.cell.copy() if cell is None else cell)
+    # graph-level markers follow the framework through replication (the
+    # rod-build editing guard must survive a supercell)
+    if framework.graph.graph.get("rod_build"):
+        combined.graph["rod_build"] = True
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
     slot_base = (
         max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1
@@ -474,6 +499,7 @@ def make_defects(
 
     See Framework.defects for the user-facing documentation.
     """
+    _reject_rod(framework, "defects")
     _require_provenance(framework)
     placed = framework.slots
     if (fraction is None) == (slots is None):
@@ -621,6 +647,7 @@ def functionalize(
 
     See Framework.functionalize for the user-facing documentation.
     """
+    _reject_rod(framework, "functionalize")
     _require_provenance(framework)
     indices = [index] if isinstance(index, int) else sorted(set(index))
     if not indices:

@@ -60,3 +60,14 @@ atoms get UFF4MOF types from their local environment — edited
 frameworks stay valid inputs for `relax()`, `min_contact()` and every
 export. Since defects and grafts distort nothing else, a final
 `relax()` is the recommended clean-up for production structures.
+
+### Rod frameworks
+
+Frameworks built with `build_rod` (`Framework.is_rod`) hold their
+inter-unit bonds as explicit edges and carry no anchor tags, so the
+tag/anchor-based edits — `defects`, `rotate`, `flip`, `functionalize`
+— refuse them with a clear error (removing "one SBU" from an infinite
+rod would leave dangling rod ends with no cap chemistry). `supercell`
+still works: it extends the rod, and the result stays marked as a rod
+framework. To decorate a rod MOF, edit the linkers of the source
+structure and rebuild.
