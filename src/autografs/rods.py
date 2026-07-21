@@ -12,8 +12,9 @@ line with the builder's proper-rotations-only invariant.
 
 ``canonical_rod`` turns a detected rod into a :class:`RodRepeat`:
 
-- atoms of one crystallographic repeat are reconstructed locally
-  (minimum-image around an anchor atom) and expressed in a
+- atoms of one crystallographic repeat are reconstructed locally by
+  walking the rod's own bond graph (intra-cell bonds first, so a screw
+  rod lays out monotonically along its axis) and expressed in a
   cylindrical frame about the rod axis through their perpendicular
   centroid — the only transverse origin a screw symmetry can have;
 - the *chemical* repeat is found by self-matching under a screw
@@ -199,22 +200,78 @@ class RodRepeat:
 
 
 def _local_positions(
-    structure: Structure, indices: list[int], anchor_index: int
+    structure: Structure,
+    indices: list[int],
+    anchor_index: int,
+    internal_bonds: list[tuple[int, int, tuple[int, int, int]]] | None = None,
 ) -> np.ndarray:
-    """Minimum-image cartesian positions around an anchor atom.
+    """Contiguous cartesian positions of a rod's atoms.
 
-    Rods are thin compared to the cell, so reconstructing every atom
-    at its image nearest the anchor recovers a geometrically connected
-    copy of the repeat, regardless of how sites were wrapped.
+    The rod is laid out by walking its own bond graph from the anchor,
+    each atom placed at its bonded neighbour plus the (image-corrected)
+    bond vector, so the whole repeat is geometrically connected even
+    when it spans more than half a cell. **Intra-cell bonds (zero image
+    offset) are followed first**; the periodic-closure bonds (nonzero
+    offset along the rod axis, which realize the 1-periodicity) are used
+    only to bridge otherwise-disconnected atoms. This lays a screw rod
+    out *monotonically along its axis* instead of folding a
+    later-repeat atom back next to the anchor - so the chemical-repeat
+    reduction keeps naturally-bonded atoms together.
+
+    Falls back to minimum-image around the anchor when no bond graph is
+    available (or an atom is unreachable), which recovers the old
+    behaviour for thin rods.
     """
     matrix = structure.lattice.matrix
-    anchor_frac = structure[anchor_index].frac_coords
-    positions = []
-    for index in indices:
-        delta = structure[index].frac_coords - anchor_frac
+    anchor_coords = np.asarray(structure[anchor_index].coords, dtype=float)
+
+    def _min_image(index: int) -> np.ndarray:
+        delta = structure[index].frac_coords - structure[anchor_index].frac_coords
         delta -= np.round(delta)
-        positions.append(structure[anchor_index].coords + delta @ matrix)
-    return np.asarray(positions)
+        return np.asarray(anchor_coords + delta @ matrix)
+
+    if not internal_bonds:
+        return np.asarray([_min_image(i) for i in indices])
+
+    # adjacency with image-corrected bond vectors, zero-offset bonds
+    # first so the walk prefers them
+    zero_adj: dict[int, list[tuple[int, np.ndarray]]] = {i: [] for i in indices}
+    wrap_adj: dict[int, list[tuple[int, np.ndarray]]] = {i: [] for i in indices}
+    for u, v, off in internal_bonds:
+        vec = (
+            structure[v].frac_coords
+            + np.asarray(off, dtype=float)
+            - structure[u].frac_coords
+        ) @ matrix
+        target = zero_adj if not any(off) else wrap_adj
+        target[u].append((v, vec))
+        target[v].append((u, -vec))
+
+    placed: dict[int, np.ndarray] = {anchor_index: anchor_coords}
+    frontier = [anchor_index]
+    # first exhaust the zero-offset subgraph, then bridge with a wrap
+    # bond, then exhaust zero-offset again, until every atom is placed
+    while len(placed) < len(indices):
+        while frontier:
+            current = frontier.pop()
+            for neighbour, vec in zero_adj.get(current, ()):
+                if neighbour not in placed:
+                    placed[neighbour] = placed[current] + vec
+                    frontier.append(neighbour)
+        bridged = False
+        for node in list(placed):
+            for neighbour, vec in wrap_adj.get(node, ()):
+                if neighbour not in placed:
+                    placed[neighbour] = placed[node] + vec
+                    frontier.append(neighbour)
+                    bridged = True
+                    break
+            if bridged:
+                break
+        if not bridged:
+            break  # disconnected remainder: min-image them below
+
+    return np.asarray([placed.get(i, _min_image(i)) for i in indices])
 
 
 def _cylindrical_frame(
@@ -389,7 +446,9 @@ def rod_fragment(
         crystallographic repeat.
     """
     anchor_index = rod.atom_indices[0]
-    positions = _local_positions(structure, rod.atom_indices, anchor_index)
+    positions = _local_positions(
+        structure, rod.atom_indices, anchor_index, rod.internal_bonds
+    )
     axial, radial, angular, basis = _cylindrical_frame(positions, rod.axis)
     length = float(rod.repeat_length)
     symbols = [structure[i].specie.symbol for i in rod.atom_indices]
@@ -432,29 +491,39 @@ def rod_fragment(
             "tile the chemical repeat evenly."
         )
 
-    # internal bond graph in template rows (straight rods only: a
-    # helical screw shifts the azimuth per slab, so the slab
-    # correspondence used here does not hold; identity does not need
-    # bonds - forward building does)
+    # internal bond graph in template rows. Repeats are related by a
+    # screw (translation + rotation by screw_angle), so the slab
+    # correspondence de-screws each atom's azimuth by its slab index
+    # before matching it to the chemical-repeat template. This relies
+    # on _local_positions laying the rod out monotonically along its
+    # axis (intra-cell bonds first) so each atom's slab = floor(axial /
+    # chemical) is unambiguous. Works for straight (screw 0) and
+    # helical rods alike; identity does not need bonds - forward
+    # building does.
     bonds_local: list[tuple[int, int, int]] = []
-    if abs(screw) <= STRAIGHT_SCREW_TOL and rod.internal_bonds:
+    if rod.internal_bonds:
         axis_hat = basis[2]
         matrix = structure.lattice.matrix
+        screw_rad = np.radians(screw)
         template_axial_all = axial % chemical
+        slab_all = np.floor(axial / chemical + 1e-6)
         kept = np.flatnonzero(keep)
         kept_axial = template_axial_all[kept]
         kept_radial = radial[kept]
         kept_angular = angular[kept]
 
         def _template_row(full_row: int) -> int:
-            # nearest kept atom in the cylindrical template metric;
-            # a straight rod's slabs are pure translations, so the
-            # match is exact
+            # nearest kept atom after de-screwing this atom's azimuth by
+            # its slab: slab s sits at (rho, theta + s*screw, z + s*chem)
+            slab = slab_all[full_row]
             da = np.abs(template_axial_all[full_row] - kept_axial)
             da = np.minimum(da, chemical - da)
             drho = np.abs(radial[full_row] - kept_radial)
-            dth = np.abs(angular[full_row] - kept_angular)
-            dth = np.minimum(dth, 2.0 * np.pi - dth)
+            dth = np.abs(
+                (angular[full_row] - slab * screw_rad - kept_angular + np.pi)
+                % (2.0 * np.pi)
+                - np.pi
+            )
             return int(np.argmin(da + drho + radial[full_row] * dth))
 
         seen: set[tuple[int, int, int]] = set()
@@ -469,7 +538,7 @@ def rod_fragment(
             if key in seen:
                 continue
             seen.add(key)
-            bonds_local.append((a, b, m))
+            bonds_local.append(key)
 
     symbols = [s for s, k in zip(symbols, keep, strict=True) if k]
     axial = axial[keep] % chemical
