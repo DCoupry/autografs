@@ -514,3 +514,54 @@ class TestHelicalRodFixture:
         assert angles[0] == pytest.approx(0.0, abs=1.0)
         assert angles[1] == pytest.approx(180.0, abs=1.0)
         assert not straight.repeat.matches(helical.repeat)
+
+
+class TestForwardUnwrap:
+    """The monotonic-forward unwrap in _local_positions underpins
+    helical bond recording (rod Stage C / #158)."""
+
+    def test_helix_lays_out_monotonically(self, mofgen):
+        # a 2_1 screw rod's atoms unwrap in increasing axial order,
+        # not folded back next to the anchor by min-image
+        import numpy as np
+
+        from autografs.rods import _local_positions
+
+        result = mofgen.deconstruct(_helical_rod_structure())
+        rod = result.rod_units[0]
+        pos = _local_positions(
+            result.structure, rod.atom_indices, rod.atom_indices[0], rod.internal_bonds
+        )
+        z = np.sort(pos[:, 2])
+        assert np.allclose(z, [0.0, 1.95, 3.9, 5.85], atol=0.05)
+
+    def test_helical_fragment_has_clean_bonds(self, mofgen):
+        # the payoff: the helical rod's template bond graph is the
+        # clean -Zn-O- chain, so the fragment is build-ready
+        frag = self._fragment(mofgen)
+        assert len(frag.bonds) == 2
+        assert sorted(m for _, _, m in frag.bonds) == [-1, 0]
+
+    def test_no_bond_graph_falls_back(self, mofgen):
+        # without internal_bonds the unwrap reverts to min-image
+        # (thin-rod behaviour) and still produces a usable frame
+        import numpy as np
+
+        from autografs.rods import _local_positions
+
+        result = mofgen.deconstruct(_rod_pillar_structure())
+        rod = result.rod_units[0]
+        with_bonds = _local_positions(
+            result.structure, rod.atom_indices, rod.atom_indices[0], rod.internal_bonds
+        )
+        without = _local_positions(
+            result.structure, rod.atom_indices, rod.atom_indices[0], None
+        )
+        # the straight pillar is thin: both routes agree
+        assert np.allclose(with_bonds, without, atol=1e-6)
+
+    def _fragment(self, mofgen):
+        from autografs.rods import rod_fragment
+
+        result = mofgen.deconstruct(_helical_rod_structure())
+        return rod_fragment(result.structure, result.rod_units[0])

@@ -510,7 +510,10 @@ class TestRodMOF:
         """The 2_1-screw synthetic rod (MOF-74 class) deconstructs to a
         single 1-periodic unit whose canonical form carries the screw:
         order 2, 180 degrees, its chemical repeat half the
-        crystallographic one, and (being helical) no template bonds."""
+        crystallographic one. The monotonic-forward unwrap keeps the
+        naturally-bonded -Zn-O- pair together, so the screw-aware
+        template bond graph is the clean 2-bond chain (within-repeat +
+        continuation to the next), just like the straight pillar."""
         from autografs.rods import rod_fragment
 
         result = mofgen.deconstruct(_helical_rod_structure())
@@ -520,7 +523,11 @@ class TestRodMOF:
         assert frag.repeat.screw_order == 2
         assert abs(frag.repeat.screw_angle) == pytest.approx(180.0, abs=1.0)
         assert frag.repeat.repeat_length == pytest.approx(3.9, abs=0.05)
-        assert frag.bonds == []  # helical: template bonds not recorded
+        # Zn(row 0) - O(row 1) within a repeat, and Zn - O of the
+        # neighbouring repeat (m = +-1): two bonds, like the pillar
+        assert len(frag.bonds) == 2
+        assert {(a, b) for a, b, _ in frag.bonds} == {(0, 1)}
+        assert sorted(m for _, _, m in frag.bonds) == [-1, 0]
 
 
 class TestErrors:
