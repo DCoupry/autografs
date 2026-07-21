@@ -64,9 +64,16 @@ is a ground-up rewrite around a small set of design choices:
 - **Runs in reverse.** Deconstruct a CIF (MOF or COF) into library-ready SBUs
   and identify its net; harvest a whole SBU library from a folder of
   structures.
+- **Rod MOFs, both directions.** The MOF-74 family and other rod MOFs are built
+  around an *infinite* 1-periodic metal-oxo chain — no finite building block.
+  AuToGraFS deconstructs them, gives each rod a screw-aware canonical identity
+  (helicity is chiral and preserved), and **builds them forward again** — for
+  straight *and* helical rods, including general (non-180°) screws. See
+  [Rod MOFs](docs/rods.md).
 - **Post-processing built in.** UFF4MOF assignment on every output, GULP input
-  generation, and one-call in-process LAMMPS relaxation
-  (`pip install "autografs[relax]"`).
+  generation, EQeq partial charges, and one-call relaxation — in-process
+  LAMMPS/UFF4MOF or any ASE calculator (GFN-FF, GFN1-xTB, DFTB+) — plus elastic
+  constants via finite differences (`pip install "autografs[relax]"`).
 - **Safe, versioned data formats.** Topology libraries are plain JSON
   (diffable, shareable, survives pymatgen upgrades) — not pickles.
 - **A guided CLI.** The `autografs` wizard walks through
@@ -157,13 +164,19 @@ The README is the overview; the depth lives in `docs/`:
 
 - **[Building frameworks](docs/building.md)** — the Python API: exploring the
   libraries, `build`, `build_all`, working with the `Framework` result
-  (porosity, save/load, exports), UFF4MOF relaxation, error handling.
-- **[2D COFs and stacking](docs/cofs-and-stacking.md)** — layer nets and
-  turning a layer into a bulk crystal (AA / AB / serrated / staggered).
+  (porosity, save/load, exports), relaxation (LAMMPS or any ASE calculator),
+  partial charges, elastic constants, error handling.
+- **[2D COFs and stacking](docs/cofs-and-stacking.md)** — layer nets, turning a
+  layer into a bulk crystal (AA / AB / serrated / staggered), and commensurate
+  twisted (moiré) bilayers.
+- **[Rod MOFs](docs/rods.md)** — 1-periodic building units (MOF-74 & friends):
+  deconstructing, screw-aware canonical identity, and forward building of
+  straight and helical rods.
 - **[Editing](docs/editing.md)** — editing SBUs before a build, and post-build
   supercells, statistical defects, and functionalization.
 - **[Deconstruction](docs/deconstruction.md)** — CIF → SBUs + net, net
-  identification, interpenetration, COFs, and batch harvesting.
+  identification, interpenetration, COFs, batch harvesting, and assembly
+  fingerprints.
 - **[Command line](docs/cli.md)** — the `autografs` wizard and
   `autografs-topologies` in full.
 - **[Extending the libraries](docs/extending.md)** — custom SBUs (XYZ) and
@@ -192,10 +205,17 @@ SBU. Point-group symmetry is diagnostic metadata, not the gate.
 `mofgen.list_topologies()`. 96.5 % are buildable out of the box — the rest, and
 how to enable them, are in [library coverage](docs/coverage.md).
 
-**`deconstruct()` raised `DeconstructionError` — why?** It refuses rod /
-1-periodic (chain) building units, disordered structures, and molecular
-crystals (no periodic framework to analyze). Metal-free COFs *are* supported.
-See [Deconstruction](docs/deconstruction.md).
+**Does it handle rod MOFs (MOF-74, metal carboxylates)?** Yes — rod MOFs, whose
+building unit is an infinite 1-periodic chain, are a first-class case in both
+directions: deconstruct them, harvest rod families with a screw-aware canonical
+identity, and build them forward (straight *and* helical rods, including general
+non-180° screws). See [Rod MOFs](docs/rods.md).
+
+**`deconstruct()` raised `DeconstructionError` — why?** It refuses disordered
+structures, molecular crystals (no periodic framework to analyze), *bare*
+1-periodic polymers with no framework connections, and 2-periodic (layer)
+building units. Rod MOFs and metal-free COFs *are* supported. See
+[Deconstruction](docs/deconstruction.md).
 
 **CIF or JSON — which should I save?** CIF for downstream tools, but it loses
 the bond graph and per-atom provenance that post-build editing needs. Use
@@ -224,11 +244,14 @@ generators. Architecture and module map: [How it works](docs/internals.md).
 
 ## Roadmap
 
-The 3.x line has reached feature parity with 2.x and added the inverse pipeline
-(deconstruction, net identification, and SBU harvesting for MOFs and COFs).
-Remaining directions — rod-MOF (1-periodic SBU) support, IZA zeolite import,
-and curated high-connectivity SBU packs for the last uncovered nets — are
-tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues).
+The 3.x line has reached feature parity with 2.x and gone well beyond it: the
+inverse pipeline (deconstruction, net identification, SBU harvesting for MOFs
+and COFs), rod-MOF support in both directions (including helical rods), IZA
+zeolite import (`autografs-topologies --use_iza`), partial charges, ASE-driven
+relaxation, elastic constants, and commensurate twisted bilayers have all
+landed. Remaining directions — cross-linked multi-rod nets (`etb` itself),
+EPINET import, and curated high-connectivity SBU packs for the last uncovered
+nets — are tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues).
 
 ## Citing
 

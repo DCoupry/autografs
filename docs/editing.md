@@ -70,4 +70,5 @@ tag/anchor-based edits — `defects`, `rotate`, `flip`, `functionalize`
 rod would leave dangling rod ends with no cap chemistry). `supercell`
 still works: it extends the rod, and the result stays marked as a rod
 framework. To decorate a rod MOF, edit the linkers of the source
-structure and rebuild.
+structure and rebuild. See [Rod MOFs](rods.md) for building rods in the
+first place.

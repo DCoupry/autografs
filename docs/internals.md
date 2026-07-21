@@ -141,11 +141,13 @@ src/autografs/
 │                    min_contact, stack, relax, post-build editing API
 ├── editing.py       post-build editing: supercells, statistical
 │                    defects, placed-SBU rotation/flip, functionalize
-├── net.py           quotient graphs: net verification + identification
+├── net.py           quotient graphs: net verification + identification,
+│                    straight (axial_runs) + helical (helical_runs) rod runs
 ├── deconstruct.py   inverse pipeline: CIF → SBUs + net candidates
 ├── harvest.py       batch SBU harvesting across many structures
+├── fingerprint.py   canonical assembly fingerprints (net, blocks, fold)
 ├── rods.py          canonical rod repeat units: identity + dedup
-├── rod_build.py     forward building of straight rod frameworks
+├── rod_build.py     forward building of rod frameworks (straight + helical)
 ├── porosity.py      grid-based porosity descriptors
 ├── framework_io.py  Framework save/load
 ├── charges.py       partial charges: EQeq + pluggable scheme registry
@@ -156,6 +158,7 @@ src/autografs/
 ├── plane_groups.py  the 17 plane groups, for 2D layer nets
 ├── cgd.py           CGD parser + `autografs-topologies` entry point
 ├── fetch.py         license-gated local fetch of external sources (IZA)
+├── extract_topology.py  tetrahedral crystal (zeolite CIF) → Topology
 ├── cli.py           interactive wizard, `autografs` entry point
 ├── utils.py         XYZ parsing, UFF typing, graph conversions, GULP
 ├── exceptions.py    AutografsError hierarchy
