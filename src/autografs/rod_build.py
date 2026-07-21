@@ -1,24 +1,23 @@
 """
-Forward building of straight rod frameworks (rod Stage C3).
+Forward building of rod frameworks — straight and helical (rod Stage C).
 
 ``build_rod_framework`` places a harvested :class:`~autografs.rods.RodFragment`
-onto one of a blueprint's straight axial slot runs
-(``autografs.net.axial_runs``) and ditopic linkers onto the remaining
-slots — the forward counterpart of rod deconstruction, deliberately
-scoped to the straight, non-helical case:
+onto one of a blueprint's axial slot runs (``autografs.net.axial_runs``)
+and ditopic linkers onto the remaining slots — the forward counterpart
+of rod deconstruction:
 
-- the rod must be straight (``|screw_angle|`` under
-  ``rods.STRAIGHT_SCREW_TOL``) and carry its internal bond graph
-  (``bonds``, recorded at harvest since Stage C1); a rod canonicalized
-  from a supercell (``screw_order > 1``, angle ~0) is fine — its
-  repeats tile by pure translation;
+- the rod must carry its internal bond graph (``bonds``, recorded at
+  harvest since Stage C1); helical rods are supported since the
+  screw-aware bond recording (#158);
 - the run must follow a single cell axis and contain exactly one
   PoE-bearing slot per period;
 - every non-run slot must be 2-connected, all taking one ditopic
   linker species.
 
-Helical rods, multi-axis runs and mixed SBU mappings stay with the
-MOF-74-fixture era of #91.
+Multi-axis (woven) runs and mixed SBU mappings stay future work. A
+general (non-180-degree) helical rod also needs a blueprint whose run
+has matching spiralling lateral slots; ``pcu``-family runs suffice for
+2_1 screws with ditopic linkers.
 
 What is structurally different from the finite-SBU pipeline:
 
@@ -28,20 +27,21 @@ What is structurally different from the finite-SBU pipeline:
   scale, optimized together with the rod's own two placement freedoms
   — rotation about the axis and axial phase (pitfall 10) — against
   covalent-length targets for the rod-to-linker anchor pairs.
-- **At least two repeats are always placed.** With one repeat per
-  cell the rod's continuation bond is a second edge between the same
-  two atoms through a different image — unrepresentable in the
-  simple-graph Framework — so the cell is built with two repeats
-  along the axis (a legitimate alternate setting of the crystal).
+- **Repeats are placed by the screw operation.** ``n_repeats`` =
+  ``max(2, screw_order)`` copies are laid down the axis; copy *n* is
+  rotated ``n x screw_angle`` about the axis (pure translation for a
+  straight rod) and the linkers spiral with it, so the built
+  framework is a genuine helix. Two is the minimum so a continuation
+  bond is a distinct node pair, not a parallel edge.
 - **Rod-to-linker bonds are explicit edges, not tag pairs.** The tag
   mechanism assumes one connection per atom; a rod anchor (the
   pillar's Zn, MOF-74's metal) carries several. Rod frameworks hold
   inter-unit bonds directly and all atoms carry tag 0; editing
   operations that rely on anchor tags refuse rods (Stage C4).
 - **Self-closure is exact by construction** (pitfall 11): the cell
-  pin makes continuation bonds lattice translations of the recorded
-  internal bonds, and ``min_contact`` exempts them like any other
-  graph edge (pitfall 15).
+  pin makes continuation bonds screw images of the recorded internal
+  bonds, and ``min_contact`` exempts them like any other graph edge
+  (pitfall 15).
 """
 
 from __future__ import annotations
@@ -71,10 +71,6 @@ __all__ = ["build_rod_framework"]
 
 DEFAULT_MAX_RMSD = 0.35
 DEFAULT_BOND_TOLERANCE = 0.35
-
-# repeats placed along the axis; two keeps every bond a distinct node
-# pair in the simple graph
-N_REPEATS = 2
 
 # arms within this angle cosine of the run axis are the axial dummies
 # of the node slot (consumed by the rod's own continuation)
@@ -127,7 +123,13 @@ class _RodBuild:
         axis_row = blueprint[self.axis_index]
         self.axis_hat = axis_row / np.linalg.norm(axis_row)
         self.period = float(rod.repeat.repeat_length)
-        self.axis_length = N_REPEATS * self.period
+        # repeats placed along the axis: enough to close the screw (a
+        # multiple of the screw order) and at least two, so a
+        # continuation bond is always a distinct node pair rather than
+        # a parallel edge. A straight rod (order 1) uses two.
+        self.screw_rad = np.radians(rod.repeat.screw_angle)
+        self.n_repeats = max(2, rod.repeat.screw_order)
+        self.axis_length = self.n_repeats * self.period
 
         # transverse orthonormal pair the rod's local x/y embed along
         seed = np.array([1.0, 0.0, 0.0])
@@ -183,7 +185,7 @@ class _RodBuild:
         self.placement_orbit = [
             self.orbit_position[orbit]
             for orbit in self.lateral_orbits
-            for _ in range(N_REPEATS)
+            for _ in range(self.n_repeats)
         ]
 
         coords = np.asarray(linker.atoms.cart_coords)
@@ -257,20 +259,43 @@ class _RodBuild:
         cell_p = self._cell_one_period(scale)
         line = self.node_center_frac @ cell_p
         line_perp = line - (line @ self.axis_hat) * self.axis_hat
-        template = self._embed(self.rod.positions, theta)
-        arm_embedded = (
+
+        def screw(points: np.ndarray, n: int) -> np.ndarray:
+            """The nth screw image about the rod axis line: rotate the
+            perpendicular part of (points - line_perp) by n*screw, keep
+            the axial part, then translate n*period along the axis. For
+            a straight rod (screw 0) this is pure translation."""
+            rel = points - line_perp
+            axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
+            perp = rel - axial
+            if self.screw_rad:
+                perp = Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(
+                    perp
+                )
+            return np.asarray(
+                line_perp + axial + perp + n * self.period * self.axis_hat
+            )
+
+        # repeat 0: rod atoms in place; arm vectors as free vectors
+        # (rod atom -> cut midpoint), rotated with the screw per repeat
+        rod0 = self._embed(self.rod.positions, theta) + (line_perp + z0 * self.axis_hat)
+        arm_vec0 = (
             self._embed(self._arm_local, theta)
             if len(self._arm_local)
             else np.empty((0, 3))
         )
-        rod_positions = np.empty((N_REPEATS * n_atoms, 3))
+        rod_positions = np.empty((self.n_repeats * n_atoms, 3))
         arms: list[tuple[int, np.ndarray]] = []
-        for n in range(N_REPEATS):
-            offset = line_perp + (z0 + n * self.period) * self.axis_hat
+        for n in range(self.n_repeats):
             start = n * n_atoms
-            rod_positions[start : start + n_atoms] = template + offset
+            rod_positions[start : start + n_atoms] = screw(rod0, n)
+            arm_vec_n = (
+                Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(arm_vec0)
+                if self.screw_rad and len(arm_vec0)
+                else arm_vec0
+            )
             for k, row in enumerate(self._arm_rows):
-                arms.append((start + row, rod_positions[start + row] + arm_embedded[k]))
+                arms.append((start + row, rod_positions[start + row] + arm_vec_n[k]))
 
         placements = []
         for slot_pos, (center_frac, slot_units) in enumerate(
@@ -287,10 +312,9 @@ class _RodBuild:
                 )
             rotation, rssd = Rotation.align_vectors(slot_units, self.linker_units)
             rmsd = float(rssd) / np.sqrt(len(slot_units))
-            rotated = rotation.apply(centered)
-            base = center_frac @ cell_p
-            for n in range(N_REPEATS):
-                placed = rotated + base + n * self.period * self.axis_hat
+            linker0 = rotation.apply(centered) + center_frac @ cell_p
+            for n in range(self.n_repeats):
+                placed = screw(linker0, n)
                 placements.append(
                     {
                         "coords": placed,
@@ -392,7 +416,7 @@ class _RodBuild:
         inv = np.linalg.inv(cell)
         n_atoms = len(self.rod.positions)
         coords = [placed["rod_positions"]]
-        labels = [np.full(N_REPEATS * n_atoms, -1)]
+        labels = [np.full(self.n_repeats * n_atoms, -1)]
         for p_index, placement in enumerate(placed["placements"]):
             reals = placement["coords"][self.linker_real_rows]
             coords.append(reals)
@@ -427,7 +451,7 @@ def _typed_repeat_molgraph(build: _RodBuild, result: dict):
     full = result["rod_positions"]
     for a, b, m in build.rod.bonds:
         if m != 0:
-            partner = (0 + m) % N_REPEATS * n_atoms + b
+            partner = (0 + m) % build.n_repeats * n_atoms + b
             species.append("X")
             coords.append(0.5 * (full[a] + full[partner]))
     molecule = Molecule(species, coords, site_properties={"tags": [0] * len(species)})
@@ -485,15 +509,8 @@ def build_rod_framework(
     OverlapError
         When the built structure violates ``min_distance``.
     """
-    from autografs.rods import STRAIGHT_SCREW_TOL
     from autografs.utils import find_element_cutoffs, load_uff_lib
 
-    if abs(rod.repeat.screw_angle) > STRAIGHT_SCREW_TOL:
-        raise AlignmentError(
-            "Forward building supports straight (non-helical) rods only "
-            f"for now ({rod.name!r} has screw angle "
-            f"{rod.repeat.screw_angle:.1f} deg)."
-        )
     if not rod.bonds:
         raise AlignmentError(
             f"Rod {rod.name!r} carries no internal bond graph; re-harvest "
@@ -646,7 +663,7 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
     # rod atoms: typed once on the first repeat, replicated
     rod_molgraph = _typed_repeat_molgraph(build, result)
     rod_types = [rod_molgraph.molecule[i].properties["ufftype"] for i in range(n_atoms)]
-    for n in range(N_REPEATS):
+    for n in range(build.n_repeats):
         start = n * n_atoms
         for i in range(n_atoms):
             graph.add_node(
@@ -658,14 +675,14 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
                 slot=n,
                 sbu=build.rod.name,
             )
-    for n in range(N_REPEATS):
+    for n in range(build.n_repeats):
         start = n * n_atoms
         for a, b, m in build.rod.bonds:
-            partner_start = ((n + m) % N_REPEATS) * n_atoms
+            partner_start = ((n + m) % build.n_repeats) * n_atoms
             graph.add_edge(start + a, partner_start + b, bond_order=1.0)
 
     # linkers: one molgraph per placement for types, bonds and orders
-    offset = N_REPEATS * n_atoms
+    offset = build.n_repeats * n_atoms
     anchor_nodes: list[dict[int, int]] = []
     for p_index in range(len(result["placements"])):
         molgraph = _placed_linker_molgraph(build, p_index, result)
@@ -680,7 +697,7 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
                 coord=np.asarray(molecule[i].coords),
                 tag=0,
                 ufftype=molecule[i].properties["ufftype"],
-                slot=N_REPEATS + p_index,
+                slot=build.n_repeats + p_index,
                 sbu=build.linker.name,
             )
             row_to_node[i] = offset + i

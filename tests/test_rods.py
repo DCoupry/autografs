@@ -379,15 +379,17 @@ class TestRodForwardBuild:
         built = build_rod_framework(mofgen.topologies["pcu"], reloaded, linker)
         assert built.min_contact() > 1.0
 
-    def test_helical_rod_rejected(self, mofgen):
+    def test_rod_without_bonds_rejected(self, mofgen):
+        # a hand-built rod carrying no internal bond graph cannot be
+        # built (there is nothing to wire the continuation from)
         from autografs.rod_build import build_rod_framework
         from autografs.rods import rod_fragment
 
-        structure, unit = _helix()
+        structure, unit = _helix()  # RodUnit with no internal_bonds
         helix = rod_fragment(structure, unit)
-        assert abs(helix.repeat.screw_angle) > 1.0
+        assert helix.bonds == []
         _, linker = self._harvest(mofgen)
-        with pytest.raises(Exception, match="straight"):
+        with pytest.raises(Exception, match="internal bond graph"):
             build_rod_framework(mofgen.topologies["pcu"], helix, linker)
 
     def test_no_axial_run_rejected(self, mofgen):
@@ -489,16 +491,55 @@ class TestHelicalRodFixture:
         assert big.screw_order == 4
         assert base.matches(big)
 
-    def test_forward_build_refuses_helical(self, mofgen):
-        # Stage C3 builds straight rods only; a real helical rod must
-        # be rejected with a clear reason, not mis-built
+    def test_forward_build_applies_the_screw(self, mofgen):
+        # forward building places n_repeats = screw_order copies, each
+        # rotated by n*screw about the axis, so the built framework is a
+        # genuine 2_1 helix that round-trips to the same rod identity.
+        # min_distance is relaxed: the synthetic fixture's two tilted
+        # pyrazines crowd on the small pcu cell (a real helical MOF is
+        # roomier; relax() cleans the geometry) - the topology is right.
         from autografs.rod_build import build_rod_framework
 
         result = mofgen.harvest([_helical_rod_structure()])
         rod = result.rods["rod_OZn"]
-        linker = mofgen.sbu["Benzene_linear"]
-        with pytest.raises(Exception, match="straight"):
-            build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        built = build_rod_framework(
+            mofgen.topologies["pcu"], rod, linker, min_distance=None
+        )
+        # two chemical repeats along c (screw order 2), Zn2 O2
+        assert built.symbols.count("Zn") == 2
+        assert built.symbols.count("O") == 2
+        # the O atoms spiral: their transverse positions are on opposite
+        # sides of the axis (a 180 degree screw), not stacked
+        o_coords = built.cart_coords[
+            [i for i, s in enumerate(built.symbols) if s == "O"]
+        ]
+        axis = built.cell[2] / np.linalg.norm(built.cell[2])
+        perp = o_coords - np.outer(o_coords @ axis, axis)
+        perp -= perp.mean(axis=0)
+        assert float(perp[0] @ perp[1]) < 0  # opposite transverse sides
+
+        deconstructed = mofgen.deconstruct(built.structure)
+        assert deconstructed.net_candidates == ["pcu"]
+        rebuilt = canonical_rod(deconstructed.structure, deconstructed.rod_units[0])
+        assert rebuilt.screw_order == 2
+        assert abs(rebuilt.screw_angle) == pytest.approx(180.0, abs=1.0)
+        assert rod.repeat.matches(rebuilt)
+
+    def test_straight_still_builds_cleanly(self, mofgen):
+        # regression: the screw machinery leaves straight rods (screw 0
+        # -> pure translation) untouched - they pass the default gate
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        built = build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        assert built.min_contact() > 1.0
 
     def test_harvest_keeps_helical_and_straight_apart(self, mofgen):
         # the straight pillar and the helical screw rod are different
