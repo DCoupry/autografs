@@ -58,6 +58,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "topology_quotient_edges",
+    "topology_rod_quotient_edges",
     "framework_quotient_edges",
     "verify_net",
     "coordination_sequences",
@@ -235,8 +236,19 @@ def verify_net(framework: Framework, topology: Topology) -> None:
     NetMismatchError
         If the slot sets or the bonded quotient edges differ - the
         framework does not realize the blueprint's net.
+
+    Notes
+    -----
+    Rod frameworks (``Framework.is_rod``) take a different route: their
+    slots are rod repeats and linker placements, not blueprint slots, so
+    the exact-multiset comparison does not apply. They are verified
+    against the blueprint's points-of-extension form instead (see
+    _verify_rod_net).
     """
     _require_provenance(framework)
+    if framework.is_rod:
+        _verify_rod_net(framework, topology)
+        return
     built_slots = set(framework.slots)
     blueprint_slots = set(range(len(topology)))
     if built_slots != blueprint_slots:
@@ -263,6 +275,49 @@ def verify_net(framework: Framework, topology: Topology) -> None:
         f"Framework {framework.name!r} does not realize topology "
         f"{topology.name!r} ({'; '.join(details)}). Edges are "
         "(slot_a, slot_b, periodic image voltage)."
+    )
+
+
+def _verify_rod_net(framework: Framework, topology: Topology) -> None:
+    """Verify a rod framework against its blueprint's PoE form.
+
+    A rod build (``build_rod``) records its continuation as direct
+    point-of-extension edges (rod repeat -> next repeat) and lays down
+    ``n_repeats`` copies along the axis, so its quotient is a supercell
+    with rod-repeat and linker-placement vertices - it shares no slot
+    labels with the blueprint, and it is not one crystallographic
+    period. Both obstacles fall to a cell-choice-invariant signature
+    comparison (the gcd reduction folds the supercell): the framework's
+    uncontracted signature must equal the signature of the blueprint's
+    rod-form quotient (``topology_rod_quotient_edges``, which contracts
+    the run's axial edge centers into the same direct PoE edges) for at
+    least one of the blueprint's runs. Uncontracted, so the linkers'
+    2-connected decoration is checked, not blurred away.
+
+    Raises
+    ------
+    NetMismatchError
+        When no run's PoE form matches - a mis-wired build (a dropped
+        continuation, a linker bonded to the wrong unit) shifts the
+        coordination sequences and no run agrees.
+    """
+    built = net_signature(framework_quotient_edges(framework), contract=False)
+    runs: list[SlotRun | HelicalRun] = [*axial_runs(topology), *helical_runs(topology)]
+    if not runs:
+        raise NetMismatchError(
+            f"Topology {topology.name!r} has no axial or helical slot run; "
+            f"rod framework {framework.name!r} cannot be verified against it."
+        )
+    for run in runs:
+        blueprint = net_signature(
+            topology_rod_quotient_edges(topology, run), contract=False
+        )
+        if built == blueprint:
+            return
+    raise NetMismatchError(
+        f"Rod framework {framework.name!r} does not realize topology "
+        f"{topology.name!r}: its points-of-extension signature matches no "
+        f"axial or helical run of the blueprint (checked {len(runs)})."
     )
 
 
@@ -953,3 +1008,57 @@ def helical_runs(
                     ),
                 )
     return sorted(found.values(), key=lambda r: (r.direction, r.slots))
+
+
+def topology_rod_quotient_edges(
+    topology: Topology, run: SlotRun | HelicalRun
+) -> Counter[Edge]:
+    """The blueprint's rod-form labeled quotient graph on one run.
+
+    The forward mirror of deconstruct's points-of-extension expansion:
+    the run's axial edge-center slots (its members with two connections)
+    are contracted into the run's node slots, turning the rod's chain of
+    blueprint sites into direct point-of-extension continuation edges (in
+    pcu, a node self-loop carrying the run's generator voltage). Lateral
+    (linker) slots stay as their own vertices. The result is directly
+    comparable to a built rod framework's quotient, whose continuation
+    bonds are likewise recorded PoE-to-PoE rather than through an edge
+    center - the basis of rod net verification (see _verify_rod_net).
+
+    Parameters
+    ----------
+    topology : Topology
+        The blueprint.
+    run : SlotRun or HelicalRun
+        The straight or helical run the rod occupies.
+
+    Returns
+    -------
+    Counter[Edge]
+        The rod-form labeled quotient as a canonical edge multiset.
+    """
+    node_slots = {
+        s
+        for s in run.slots
+        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+    }
+    adjacency = _adjacency(topology_quotient_edges(topology))
+    for slot in run.slots:
+        if slot in node_slots:
+            continue
+        halves = adjacency.get(slot)
+        if halves is None or len(halves) != 2:
+            continue  # not a plain 2-connected edge center; leave it be
+        (nb_a, v_a), (nb_b, v_b) = halves
+        adjacency[nb_a].remove((slot, _negate(v_a)))
+        adjacency[nb_b].remove((slot, _negate(v_b)))
+        adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
+        adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
+        del adjacency[slot]
+    edges: Counter[Edge] = Counter()
+    for node, halves in adjacency.items():
+        for neighbor, voltage in halves:
+            edges[_canonical(node, neighbor, np.asarray(voltage))] += 1
+    # every non-loop edge was seen from both ends, every self-loop from
+    # both voltage signs (canonicalized to one key)
+    return Counter({edge: mult // 2 for edge, mult in edges.items()})

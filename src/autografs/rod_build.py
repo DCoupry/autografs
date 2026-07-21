@@ -466,6 +466,7 @@ def build_rod_framework(
     max_rmsd: float = DEFAULT_MAX_RMSD,
     min_distance: float | None = 1.0,
     bond_tolerance: float = DEFAULT_BOND_TOLERANCE,
+    verify_net: bool = False,
     verbose: bool = False,
 ) -> Framework:
     """Build a straight rod framework from a rod fragment and a linker.
@@ -492,6 +493,10 @@ def build_rod_framework(
     bond_tolerance : float, optional
         Closure gate: largest allowed deviation of an optimized
         rod-linker bond from its covalent-length target, in Angstrom.
+    verify_net : bool, optional
+        When set, verify the built framework against ``topology``'s
+        points-of-extension form (``Framework.verify_net``) and raise
+        ``NetMismatchError`` if it does not realize the blueprint net.
     verbose : bool, optional
         Log the optimized cell and residuals.
 
@@ -641,6 +646,10 @@ def build_rod_framework(
                 f"min_distance={min_distance:.2f} A, on rod build "
                 f"{framework.name!r}."
             )
+    if verify_net:
+        from autografs.net import verify_net as _verify_net
+
+        _verify_net(framework, topology)
     return framework
 
 
