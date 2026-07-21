@@ -9,15 +9,17 @@ of rod deconstruction:
 - the rod must carry its internal bond graph (``bonds``, recorded at
   harvest since Stage C1); helical rods are supported since the
   screw-aware bond recording (#158);
-- the run must follow a single cell axis and contain exactly one
-  PoE-bearing slot per period;
+- the run follows a single cell axis: a *straight* run
+  (``autografs.net.axial_runs``) has one PoE-bearing slot per period,
+  supercelled ``n_repeats`` up; a *helical* run
+  (``autografs.net.helical_runs``, a MOF-74 / etb-class screw) has
+  ``screw_order`` node slots that the rod's chemical repeats fill 1:1
+  by the screw operation, no supercell (#158);
 - every non-run slot must be 2-connected, all taking one ditopic
   linker species.
 
-Multi-axis (woven) runs and mixed SBU mappings stay future work. A
-general (non-180-degree) helical rod also needs a blueprint whose run
-has matching spiralling lateral slots; ``pcu``-family runs suffice for
-2_1 screws with ditopic linkers.
+Multi-axis (woven) runs, cross-linked multi-rod nets (etb itself), and
+mixed SBU mappings stay future work.
 
 What is structurally different from the finite-SBU pipeline:
 
@@ -59,7 +61,7 @@ from scipy.spatial.transform import Rotation
 from autografs.exceptions import AlignmentError, OverlapError
 from autografs.fragment import Fragment
 from autografs.framework import Framework
-from autografs.net import SlotRun, axial_runs
+from autografs.net import HelicalRun, SlotRun, axial_runs, helical_runs
 
 if TYPE_CHECKING:
     from autografs.rods import RodFragment
@@ -113,10 +115,22 @@ class _RodBuild:
         topology: Topology,
         rod: RodFragment,
         linker: Fragment,
-        run: SlotRun,
+        run: SlotRun | HelicalRun,
     ) -> None:
         self.rod = rod
         self.linker = linker
+        # a helical run spirals its nodes: the screw axis is a fixed
+        # line offset from the nodes (run.axis_point), the blueprint is
+        # the *full* crystallographic period (screw_order node slots,
+        # filled 1:1 by the rod's repeats - no supercell), and each
+        # lateral slot takes exactly one linker. A straight run keeps
+        # the original path: node at the axis, one period supercelled.
+        self.helical = isinstance(run, HelicalRun)
+        self.axis_point = (
+            np.asarray(run.axis_point, dtype=float)
+            if isinstance(run, HelicalRun)
+            else None
+        )
         blueprint = np.asarray(topology.cell.matrix, dtype=float)
         self.blueprint = blueprint
         self.axis_index = int(np.argmax(np.abs(np.asarray(run.direction))))
@@ -181,11 +195,15 @@ class _RodBuild:
         distinct = sorted(set(self.lateral_orbits))
         self.orbit_position = {orbit: k for k, orbit in enumerate(distinct)}
         self.n_orbits = len(distinct)
+        # linker copies per lateral slot: a helical blueprint already
+        # enumerates every lateral slot of the period (one linker each);
+        # a straight one holds a single period, supercelled n_repeats up
+        self.linker_copies = 1 if self.helical else self.n_repeats
         # the placement index of each linker maps to its orbit's phi
         self.placement_orbit = [
             self.orbit_position[orbit]
             for orbit in self.lateral_orbits
-            for _ in range(self.n_repeats)
+            for _ in range(self.linker_copies)
         ]
 
         coords = np.asarray(linker.atoms.cart_coords)
@@ -257,8 +275,17 @@ class _RodBuild:
         """
         n_atoms = len(self.rod.positions)
         cell_p = self._cell_one_period(scale)
-        line = self.node_center_frac @ cell_p
-        line_perp = line - (line @ self.axis_hat) * self.axis_hat
+        cell_full = self.cell(scale)
+        if self.helical:
+            # the screw axis is the run's fixed line (offset from the
+            # nodes); its perpendicular position scales with the cell
+            assert self.axis_point is not None
+            line_perp = self.axis_point * scale
+            linker_cell = cell_full
+        else:
+            line = self.node_center_frac @ cell_p
+            line_perp = line - (line @ self.axis_hat) * self.axis_hat
+            linker_cell = cell_p
 
         def screw(points: np.ndarray, n: int) -> np.ndarray:
             """The nth screw image about the rod axis line: rotate the
@@ -312,8 +339,8 @@ class _RodBuild:
                 )
             rotation, rssd = Rotation.align_vectors(slot_units, self.linker_units)
             rmsd = float(rssd) / np.sqrt(len(slot_units))
-            linker0 = rotation.apply(centered) + center_frac @ cell_p
-            for n in range(self.n_repeats):
+            linker0 = rotation.apply(centered) + center_frac @ linker_cell
+            for n in range(self.linker_copies):
                 placed = screw(linker0, n)
                 placements.append(
                     {
@@ -393,9 +420,11 @@ class _RodBuild:
         scale0 = (
             float(wanted / (2.0 * blueprint_half)) if blueprint_half > 1e-9 else 1.0
         )
-        # z0: put the mean arm-carrying atom at the node center height
-        cell_p = self._cell_one_period(scale0)
-        z_node = float((self.node_center_frac @ cell_p) @ self.axis_hat)
+        # z0: put the mean arm-carrying atom at the node center height.
+        # A helical run's node fraction is in the full period; a
+        # straight one's node is in the (supercelled) single period.
+        node_cell = self.cell(scale0) if self.helical else self._cell_one_period(scale0)
+        z_node = float((self.node_center_frac @ node_cell) @ self.axis_hat)
         z_arms = (
             float(np.mean([self.rod.positions[row][2] for row in self._arm_rows]))
             if self._arm_rows
@@ -458,28 +487,64 @@ def _typed_repeat_molgraph(build: _RodBuild, result: dict):
     return fragment_to_molgraph(Fragment(atoms=molecule, name=build.rod.name))
 
 
+def _select_run(
+    topology: Topology, rod: RodFragment, rod_is_helical: bool
+) -> SlotRun | HelicalRun:
+    """Pick the run a rod occupies: a helical run matching the rod's
+    screw for a helical rod, else the first straight axial run.
+
+    Symmetry-equivalent runs give equivalent frameworks, so the first
+    match is as good as any. A helical run must agree with the rod on
+    both node count (``screw_order``) and *signed* rotation - helicity
+    is chiral, so a left-handed screw never hosts a right-handed rod.
+    """
+    if rod_is_helical:
+        matches = [
+            run
+            for run in helical_runs(topology)
+            if run.screw_order == rod.repeat.screw_order
+            and abs((run.screw_angle - rod.repeat.screw_angle + 180.0) % 360.0 - 180.0)
+            <= 5.0
+        ]
+        if matches:
+            return matches[0]
+        # no matching helical run: a 2_1 (180 deg) screw still builds on
+        # a straight run - a ditopic linker's arm sign-flip is a no-op,
+        # so pcu hosts it - while a higher screw would fail the closure
+        # gate there, which is the correct rejection
+    runs = axial_runs(topology)
+    if not runs:
+        raise AlignmentError(
+            f"Topology {topology.name!r} has no straight axial slot run "
+            "(nor a matching helical one); rod building needs one."
+        )
+    return runs[0]
+
+
 def build_rod_framework(
     topology: Topology,
     rod: RodFragment,
     linker: Fragment,
-    run: SlotRun | None = None,
+    run: SlotRun | HelicalRun | None = None,
     max_rmsd: float = DEFAULT_MAX_RMSD,
     min_distance: float | None = 1.0,
     bond_tolerance: float = DEFAULT_BOND_TOLERANCE,
     verify_net: bool = False,
     verbose: bool = False,
 ) -> Framework:
-    """Build a straight rod framework from a rod fragment and a linker.
+    """Build a rod framework - straight or helical - from a rod and linker.
 
     Parameters
     ----------
     topology : Topology
-        The blueprint. Must have at least one straight axial slot run
-        (``autografs.net.axial_runs``).
+        The blueprint. Must have a matching slot run: a straight axial
+        run (``autografs.net.axial_runs``) for a screwless rod, or a
+        helical run (``autografs.net.helical_runs``) whose screw agrees
+        with the rod's for a helical one.
     rod : RodFragment
-        A harvested rod (``HarvestResult.rods`` / ``load_rods``);
-        screwless (``screw_order == 1``) and carrying its internal
-        bond graph.
+        A harvested rod (``HarvestResult.rods`` / ``load_rods``),
+        straight or helical (``screw_order``/``screw_angle``), carrying
+        its internal bond graph.
     linker : Fragment
         One ditopic linker species, placed on every non-run slot.
     run : SlotRun or None, optional
@@ -503,13 +568,14 @@ def build_rod_framework(
     Returns
     -------
     Framework
-        The built framework: two chemical repeats of the rod along the
-        pinned axis plus one linker per lateral slot per repeat.
+        The built framework: ``n_repeats`` chemical repeats of the rod
+        along the pinned axis (screw-generated for a helical rod) plus
+        the ditopic linkers on the lateral slots.
 
     Raises
     ------
     AlignmentError
-        For out-of-scope inputs (screw rods, missing bonds, no run,
+        For out-of-scope inputs (missing bonds, no matching run,
         non-ditopic linkers) and failed gates.
     OverlapError
         When the built structure violates ``min_distance``.
@@ -526,14 +592,13 @@ def build_rod_framework(
     if len(list(linker.atoms.indices_from_symbol("X"))) != 2:
         raise AlignmentError("Rod builds take one ditopic linker species.")
 
-    runs = axial_runs(topology)
+    from autografs.rods import STRAIGHT_SCREW_TOL
+
+    rod_is_helical = (
+        rod.repeat.screw_order > 1 and abs(rod.repeat.screw_angle) > STRAIGHT_SCREW_TOL
+    )
     if run is None:
-        if not runs:
-            raise AlignmentError(
-                f"Topology {topology.name!r} has no straight axial slot "
-                "run; rod building needs one."
-            )
-        run = runs[0]
+        run = _select_run(topology, rod, rod_is_helical)
     direction = np.asarray(run.direction)
     if sorted(np.abs(direction).tolist()) != [0, 0, 1]:
         raise AlignmentError(
@@ -545,10 +610,13 @@ def build_rod_framework(
         for s in run.slots
         if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
     ]
-    if len(node_slots) != 1:
+    # a straight run has one PoE-bearing node per period; a helical run
+    # has screw_order of them, filled 1:1 by the rod's chemical repeats
+    expected_nodes = run.screw_order if isinstance(run, HelicalRun) else 1
+    if len(node_slots) != expected_nodes:
         raise AlignmentError(
-            "Rod building supports runs with one PoE-bearing slot per "
-            f"period for now (run has {len(node_slots)})."
+            f"Rod building expects {expected_nodes} PoE-bearing node "
+            f"slot(s) on this run but found {len(node_slots)}."
         )
     lateral_slots = [s for s in range(len(topology.slots)) if s not in run.slots]
     for s in lateral_slots:
