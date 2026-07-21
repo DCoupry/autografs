@@ -65,6 +65,8 @@ __all__ = [
     "identify_net",
     "SlotRun",
     "axial_runs",
+    "HelicalRun",
+    "helical_runs",
     "NetMatches",
 ]
 
@@ -705,4 +707,249 @@ def axial_runs(
                 continue
             period = float(np.linalg.norm(np.asarray(direction, dtype=float) @ cell))
             found[key] = SlotRun(direction=direction, slots=slots, period=period)
+    return sorted(found.values(), key=lambda r: (r.direction, r.slots))
+
+
+@dataclass(frozen=True)
+class HelicalRun:
+    """One helical (screw) axial slot run of a blueprint (rod Stage C).
+
+    Like :class:`SlotRun`, but the run's node slots spiral: consecutive
+    node steps advance a constant amount along one lattice direction and
+    rotate by a constant angle about a fixed axis line parallel to it.
+    This is the channel a helical rod building unit occupies - the
+    MOF-74 / etb class, where straight ``axial_runs`` finds nothing
+    (etb's ditopic edge centers zig-zag around a 3_1 screw). A straight
+    run (screw angle 0) is reported by ``axial_runs``, never here.
+
+    The ``(screw_order, screw_angle)`` pair is the blueprint-side mirror
+    of a harvested rod's ``RodRepeat.screw_order`` / ``.screw_angle``: a
+    rod is placeable on a run only when they agree (same node count per
+    period, same signed rotation - helicity included).
+
+    Attributes
+    ----------
+    direction : tuple[int, int, int]
+        The lattice generator the run closes on (net voltage of one
+        crystallographic period), lexicographically positive.
+    slots : tuple[int, ...]
+        Slot indices along the run, one period (node slots and the
+        axial edge-center slots between them), rotated to start at the
+        smallest index.
+    period : float
+        Length of one crystallographic period along the axis.
+    screw_angle : float
+        Rotation about the axis (degrees, signed, in (-180, 180])
+        accompanying one node-to-node step; the sign is the handedness.
+    screw_order : int
+        Node slots per crystallographic period (the screw closes after
+        this many steps; ``screw_order * screw_angle`` is a whole turn).
+    axis_point : tuple[float, float, float]
+        A cartesian point the screw axis line passes through (the
+        perpendicular centroid of one period's node slots).
+    """
+
+    direction: tuple[int, int, int]
+    slots: tuple[int, ...]
+    period: float
+    screw_angle: float
+    screw_order: int
+    axis_point: tuple[float, float, float]
+
+
+def _directed_steps(
+    topology: Topology,
+) -> tuple[np.ndarray, np.ndarray, dict[int, list[tuple[int, np.ndarray, np.ndarray]]]]:
+    """Directed slot-to-slot steps of the blueprint quotient graph.
+
+    Returns the cell matrix, the home-cell-wrapped slot centers, and,
+    per slot, the ``(neighbor, image offset, cartesian displacement)``
+    of every non-degenerate quotient half-edge leaving it.
+    """
+    cell = topology.cell.matrix
+    images = _topology_slot_images(topology)
+    centers = np.array(
+        [np.asarray(slot.atoms.cart_coords).mean(axis=0) for slot in topology.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+    steps: dict[int, list[tuple[int, np.ndarray, np.ndarray]]] = {
+        i: [] for i in range(len(centers))
+    }
+    for (a, b, voltage), _count in topology_quotient_edges(topology).items():
+        for u, v, sign in ((a, b, 1), (b, a, -1)):
+            offset = sign * np.asarray(voltage, dtype=float)
+            displacement = wrapped[v] + offset @ cell - wrapped[u]
+            if np.linalg.norm(displacement) > 1e-9:
+                steps[u].append((v, offset, displacement))
+    return cell, wrapped, steps
+
+
+def _fit_screw(
+    node_positions: np.ndarray,
+    axis_hat: np.ndarray,
+    tolerance: float,
+    angle_tolerance: float,
+) -> tuple[float, int, np.ndarray] | None:
+    """Fit a constant screw to a period's node-slot positions.
+
+    ``node_positions`` are the unwrapped cartesian centers of the run's
+    node slots over one period, in walk order. Returns
+    ``(signed screw angle in degrees, node count, axis point)`` when the
+    nodes lie on a common cylinder and rotate by a constant angle about
+    its axis, or None when they are straight (no screw) or inconsistent.
+    """
+    order = len(node_positions)
+    if order < 2:
+        return None
+    perp = node_positions - np.outer(node_positions @ axis_hat, axis_hat)
+    center = perp.mean(axis=0)
+    q = perp - center
+    radii = np.linalg.norm(q, axis=1)
+    if radii.min() < tolerance:
+        return None  # a node on the axis has no defined azimuth
+    if radii.max() - radii.min() > 10.0 * tolerance:
+        return None  # not a common cylinder
+    e1 = q[0] / radii[0]
+    e2 = np.cross(axis_hat, e1)
+    azimuth = np.arctan2(q @ e2, q @ e1)
+    # per-step rotations, including the closing step back to the first
+    # node one period up (which rotates by the same angle)
+    steps_angle = np.diff(azimuth)
+    steps_angle = (steps_angle + np.pi) % (2.0 * np.pi) - np.pi
+    if steps_angle.size == 0:
+        return None
+    mean_angle = float(np.mean(steps_angle))
+    if np.max(np.abs(steps_angle - mean_angle)) > angle_tolerance:
+        return None  # rotation not constant
+    if abs(np.degrees(mean_angle)) <= 1.0:
+        return None  # straight run: axial_runs owns it
+    # the screw must close a whole number of turns over the period
+    turns = order * mean_angle / (2.0 * np.pi)
+    if abs(turns - round(turns)) > angle_tolerance:
+        return None
+    angle = float(np.degrees(mean_angle))
+    angle = (angle + 180.0) % 360.0 - 180.0
+    return angle, order, center
+
+
+def helical_runs(
+    topology: Topology,
+    tolerance: float = 1e-2,
+    angle_tolerance: float = 0.09,
+    max_period: int = 16,
+) -> list[HelicalRun]:
+    """Helical (screw) axial slot runs of a blueprint.
+
+    Follows the quotient graph along one cell axis at a time, taking
+    steps of constant positive axial advance, until the walk returns to
+    its start with a nonzero net voltage along that axis. The run is
+    kept only when its node slots fit a constant screw about a fixed
+    axis line (see :func:`_fit_screw`): a common cylinder rotated by a
+    constant angle per node step. In etb this finds the 3_1 metal-oxo
+    channels (screw order 3, +-120 degrees); pcu and other straight
+    nets yield nothing here (their runs are ``axial_runs``).
+
+    Parameters
+    ----------
+    topology : Topology
+        The blueprint to analyze.
+    tolerance : float, optional
+        Cartesian slack (Angstrom) on the constant axial advance and
+        the common-cylinder radius; blueprint coordinates are
+        near-exact.
+    angle_tolerance : float, optional
+        Rotational slack (radians, ~5 degrees) on the constant screw
+        angle and its whole-turn closure.
+    max_period : int, optional
+        Longest run period considered, in slots.
+
+    Returns
+    -------
+    list[HelicalRun]
+        Deduplicated helical runs, sorted by direction then slots. A
+        run and its reverse are the same run (reported once, with the
+        direction canonicalized lexicographically positive and the
+        screw angle signed to match that traversal).
+    """
+    if getattr(topology, "is_2d", False):
+        # a layer net's c is frozen slab padding; an in-plane "screw"
+        # is planar zig-zag, not a 3D channel a rod could occupy
+        return []
+    cell, wrapped, steps = _directed_steps(topology)
+    is_node = [len(slot.atoms.indices_from_symbol("X")) > 2 for slot in topology.slots]
+    found: dict[tuple, HelicalRun] = {}
+    for axis_index in range(3):
+        axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+        for start in range(len(topology.slots)):
+            for first, first_offset, first_disp in steps[start]:
+                advance = float(first_disp @ axis_hat)
+                if advance <= tolerance:
+                    continue
+                walk = [start, first]
+                positions = {
+                    start: wrapped[start],
+                    first: wrapped[start] + first_disp,
+                }
+                voltage_sum = first_offset.copy()
+                current = first
+                closed = False
+                for _ in range(max_period):
+                    options = [
+                        (nxt, offset, disp)
+                        for nxt, offset, disp in steps[current]
+                        if abs(float(disp @ axis_hat) - advance) <= tolerance
+                    ]
+                    if len(options) != 1:
+                        break
+                    nxt, offset, disp = options[0]
+                    voltage_sum = voltage_sum + offset
+                    if nxt == start:
+                        closed = True
+                        break
+                    if nxt in positions:
+                        break
+                    positions[nxt] = positions[current] + disp
+                    walk.append(nxt)
+                    current = nxt
+                if not closed:
+                    continue
+                generator = np.round(voltage_sum).astype(int)
+                # the run must close along this single cell axis only
+                if generator[axis_index] == 0 or np.count_nonzero(generator) != 1:
+                    continue
+                node_positions = np.array([positions[s] for s in walk if is_node[s]])
+                fit = _fit_screw(node_positions, axis_hat, tolerance, angle_tolerance)
+                if fit is None:
+                    continue
+                screw_angle, screw_order, axis_point = fit
+                direction = (
+                    int(generator[0]),
+                    int(generator[1]),
+                    int(generator[2]),
+                )
+                slots = tuple(walk)
+                if direction < (0, 0, 0):
+                    direction = (-direction[0], -direction[1], -direction[2])
+                    slots = (slots[0],) + tuple(reversed(slots[1:]))
+                    screw_angle = -screw_angle
+                pivot = slots.index(min(slots))
+                slots = slots[pivot:] + slots[:pivot]
+                key = (direction, slots)
+                if key in found:
+                    continue
+                period = float(
+                    np.linalg.norm(np.asarray(direction, dtype=float) @ cell)
+                )
+                found[key] = HelicalRun(
+                    direction=direction,
+                    slots=slots,
+                    period=period,
+                    screw_angle=screw_angle,
+                    screw_order=screw_order,
+                    axis_point=(
+                        float(axis_point[0]),
+                        float(axis_point[1]),
+                        float(axis_point[2]),
+                    ),
+                )
     return sorted(found.values(), key=lambda r: (r.direction, r.slots))

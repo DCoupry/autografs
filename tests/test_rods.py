@@ -312,6 +312,94 @@ class TestAxialRuns:
         assert len(keys) == len(runs) == 2
 
 
+@pytest.fixture(scope="module")
+def bundled_topologies():
+    """The full shipped topology library (etb lives here, not in the
+    reduced test fixture)."""
+    from pathlib import Path
+
+    import autografs
+    from autografs.topology_io import load_topologies
+
+    bundled = Path(autografs.__file__).parent / "data" / "topologies.json.gz"
+    return load_topologies(bundled)
+
+
+class TestHelicalRuns:
+    """Rod Stage C: detecting the spiralling slot runs a helical rod
+    (MOF-74 / etb class) occupies, where straight axial_runs finds none.
+    The library nets are the oracles: etb carries a 3_1 metal-oxo screw
+    and srs is the textbook 4_1 chiral net."""
+
+    def test_etb_has_the_mof74_screw(self, bundled_topologies):
+        from autografs.net import axial_runs, helical_runs
+
+        etb = bundled_topologies["etb"]
+        # etb's channels are helical: nothing straight, everything screw
+        assert axial_runs(etb) == []
+        runs = helical_runs(etb)
+        assert runs
+        # a rod axis is a single cell direction (etb's short c)
+        assert all(sorted(map(abs, r.direction)) == [0, 0, 1] for r in runs)
+        # the distinct screw is 3_1: three node slots per period, +-120
+        distinct = {(r.screw_order, round(abs(r.screw_angle))) for r in runs}
+        assert distinct == {(3, 120)}
+        for run in runs:
+            assert -180.0 < run.screw_angle <= 180.0
+            # screw_order node slots (>2 X) sit on the run
+            nodes = [
+                s
+                for s in run.slots
+                if len(etb.slots[s].atoms.indices_from_symbol("X")) > 2
+            ]
+            assert len(nodes) == run.screw_order
+
+    def test_srs_is_the_four_one_screw(self, mofgen):
+        from autografs.net import helical_runs
+
+        runs = helical_runs(mofgen.topologies["srs"])
+        assert runs
+        # srs (the (10,3)-a net) is chiral: a single 4_1 handedness
+        distinct = {(r.screw_order, round(r.screw_angle)) for r in runs}
+        assert distinct == {(4, 90)}
+
+    def test_straight_nets_have_no_helical_runs(self, mofgen):
+        from autografs.net import helical_runs
+
+        # pcu/dia/sql are straight or zig-zag, never screw
+        for name in ("pcu", "dia", "sql"):
+            assert helical_runs(mofgen.topologies[name]) == []
+
+    def test_layer_nets_are_skipped(self, mofgen):
+        from autografs.net import helical_runs
+
+        # a 2D net's c is frozen slab padding; an in-plane 2_1 zig-zag
+        # is not a 3D channel a rod could occupy
+        hcb = mofgen.topologies["hcb"]
+        assert hcb.is_2d
+        assert helical_runs(hcb) == []
+
+    def test_screw_order_matches_a_harvested_helical_rod(
+        self, mofgen, bundled_topologies
+    ):
+        # the blueprint-side screw is the mirror of a rod's own: the
+        # synthetic 2_1 pillar is order 2 / 180, and no straight run
+        # carries it - only a helical one would
+        from autografs.net import helical_runs
+
+        result = mofgen.harvest([_helical_rod_structure()])
+        rod = next(iter(result.rods.values()))
+        assert rod.repeat.screw_order == 2
+        assert abs(abs(rod.repeat.screw_angle) - 180.0) < 5.0
+        # etb's order-3 screw would not host an order-2 rod; a matching
+        # host needs (screw_order, |screw_angle|) agreement
+        etb_screws = {
+            (r.screw_order, round(abs(r.screw_angle)))
+            for r in helical_runs(bundled_topologies["etb"])
+        }
+        assert (rod.repeat.screw_order, 180) not in etb_screws
+
+
 class TestRodForwardBuild:
     """Rod Stage C3: forward building of straight rod frameworks."""
 
