@@ -75,50 +75,12 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
-Rods also get a canonical identity and a buildable form
-(`autografs.rods`): `canonical_rod` reduces a detected rod to one
-*chemical* repeat in a cylindrical frame about its axis — detecting
-screw rods whose crystallographic repeat is a multiple of the chemical
-one (the MOF-74 helix) and recording the screw order and signed screw
-angle — and `rod_fragment` adds the connection arms (from the cut-bond
-midpoints) and the atom template, giving a `RodFragment` that
-serializes to its own JSON sidecar (`save_rods`/`load_rods`;
-`HarvestResult.write_rods`). `RodRepeat.matches` compares rods modulo
-everything the crystal embedding chooses freely (rotation about the
-axis, axial phase, and the proper flip), so a 2× supercell
-deconstruction dedupes with a 1× one, while enantiomeric screws stay
-distinct — helicity is chiral, and no proper isometry relates them.
-
-### Building rod frameworks forward
-
-A harvested rod fragment goes back through the builder with
-`build_rod` — the forward counterpart of rod deconstruction:
-
-```python
-harvest = mofgen.harvest("mof74_family/")
-rod = harvest.rods["rod_MgO4"]
-mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
-mof.write_cif("built.cif")
-```
-
-The rod is placed on one of the blueprint's straight axial slot runs
-(`autografs.net.axial_runs`) and a ditopic linker fills every other
-slot. Two structural facts fall out of a rod being one-periodic: it
-**pins** the run-axis cell length (`n × chemical repeat`, not a free
-parameter), and its inter-unit bonds are explicit graph edges rather
-than the tag pairs finite SBUs use (a rod anchor carries several
-connections, one atom, one tag). The placement optimizes the in-plane
-scale plus the rod's own axis rotation and axial phase against
-covalent bond-length targets, then relieves the ditopic linkers'
-ring-plane freedom (a free rotation about each linker's own axis that
-leaves its anchors, hence the bonds, fixed) to clear steric clashes.
-Round-tripping — harvest → `build_rod` → `deconstruct` — recovers the
-same net and the same rod identity.
-
-This first pass is scoped to **straight** (non-helical) rods on
-single-axis runs with one point-of-extension slot per period; helical
-rods (MOF-74's screw) and woven multi-axis rod packings are future
-work. Out-of-scope inputs raise `AlignmentError` with the reason.
+Rods get a canonical, screw-aware identity and a buildable form, and
+they can be **built forward again** — for straight and helical rods
+alike, including general (non-180°) screws such as MOF-74's. That is a
+topic of its own: see **[Rod MOFs](rods.md)** for the full pipeline
+(`canonical_rod`, `RodFragment`, `build_rod`, screw detection, and net
+verification).
 
 ## Harvesting a library from many structures
 

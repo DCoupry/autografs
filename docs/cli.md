@@ -22,8 +22,9 @@ A guided session covers the whole workflow without writing a script:
 - **Deconstruct a structure** — read a CIF (or anything pymatgen parses),
   recover its building units and net, and either write the harvested SBUs to an
   XYZ file or add them straight into the session library so they are selectable
-  in the next build. Expected refusals (rod, disordered, non-framework)
-  are reported, not crashes.
+  in the next build. Rod (1-periodic) building units are detected and
+  reported; genuine refusals (disordered, molecular, bare 1-periodic
+  polymers) are reported too, not crashes.
 - **Browse topologies** — summary table per net plus every compatible SBU per
   slot type.
 - **Browse building units** — composition, connectivity, dummy point group,
