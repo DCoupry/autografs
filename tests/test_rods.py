@@ -85,6 +85,101 @@ def _helix(sense=1, length=8.0, order=4, rho=1.5, cell=25.0):
     return structure, rod
 
 
+def _unc_helical_rod(unc, scale=4.0):
+    """A RodFragment hand-matched to unc's 4_1 run, plus a ditopic linker.
+
+    A -Zn-O- helix (screw order 4, +90 deg): one Zn per chemical repeat
+    on a cylinder about the run axis, an inner bridging O to the next
+    repeat (kept clear of the outward linkers so it clusters with the
+    metal, not the organic), and two lateral arms per Zn pointing at
+    unc's non-run slots. Deriving the geometry from unc's own run makes
+    the build close exactly. Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import (
+        _topology_slot_images,
+        helical_runs,
+        topology_quotient_edges,
+    )
+    from autografs.rods import RodFragment
+
+    cell = unc.cell.matrix
+    run = next(r for r in helical_runs(unc) if r.screw_order == 4)
+    axis_index = int(np.argmax(np.abs(run.direction)))
+    axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in unc.slots]
+    nodes = [s for s in run.slots if counts[s] > 2]
+
+    images = _topology_slot_images(unc)
+    centers = np.array(
+        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in unc.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+    steps: dict[int, list] = {i: [] for i in range(len(centers))}
+    for (a, b, v), _ in topology_quotient_edges(unc).items():
+        for u, w, sg in ((a, b, 1), (b, a, -1)):
+            off = sg * np.asarray(v, float)
+            disp = wrapped[w] + off @ cell - wrapped[u]
+            if np.linalg.norm(disp) > 1e-9:
+                steps[u].append((w, disp))
+    pos = {run.slots[0]: wrapped[run.slots[0]]}
+    cur = run.slots[0]
+    for nxt in run.slots[1:]:
+        pos[nxt] = pos[cur] + next(d for w, d in steps[cur] if w == nxt)
+        cur = nxt
+
+    n0 = nodes[0]
+    axis_pt = np.array(run.axis_point)
+    rel0 = (pos[n0] - axis_pt) - ((pos[n0] - axis_pt) @ axis_hat) * axis_hat
+    radius = np.linalg.norm(rel0)
+    e1 = rel0 / radius
+    e2 = np.cross(axis_hat, e1)
+    basis = np.array([e1, e2, axis_hat])
+    run_set = set(run.slots)
+    lateral = np.array([d for w, d in steps[n0] if w not in run_set])
+    arm_local = lateral @ basis.T  # (2, 3): radial, tangential, axial
+
+    chemical = float(run.period / 4) * scale
+    r_zn = radius * scale
+    r_o = r_zn * 0.45  # inner bridge, clear of the outward linkers
+    arms = arm_local * scale
+    half = np.radians(run.screw_angle) / 2.0
+    positions = np.array(
+        [
+            [r_zn, 0.0, 0.0],
+            [r_o * np.cos(half), r_o * np.sin(half), chemical / 2],
+        ]
+    )
+    repeat = RodRepeat(
+        symbols=["Zn", "O"],
+        axial=np.array([0.0, chemical / 2]),
+        radial=np.array([r_zn, r_o]),
+        angular=np.array([0.0, half]),
+        repeat_length=chemical,
+        screw_order=4,
+        screw_angle=float(run.screw_angle),
+        n_connections=2,
+    )
+    rod = RodFragment(
+        repeat=repeat,
+        positions=positions,
+        arms=[(0, arms[0]), (0, arms[1])],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_unc4",
+    )
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [[-1.9, 0, 0], [-0.7, 0, 0], [0.7, 0, 0], [1.9, 0, 0]],
+            site_properties={"tags": [1, 0, 0, 2]},
+        ),
+        name="cc",
+    )
+    return rod, linker
+
+
 class TestPillarCanonicalization:
     def test_single_repeat(self, mofgen):
         repeat = _pillar_repeat(mofgen)
@@ -582,6 +677,75 @@ class TestRodVerifyNet:
         assert not any(ec in (a, b) for a, b, _ in poe)
         # and it is a strict reduction of the full quotient
         assert len(poe) < len(topology_quotient_edges(pcu))
+
+
+class TestGeneralHelicalBuild:
+    """Rod Stage C: forward building of a general (non-180 deg) helical
+    rod on a spiralling blueprint. unc is a 4_1 single-helix net; the
+    rod's four chemical repeats fill its four node slots by the screw."""
+
+    def test_four_one_rod_builds_and_round_trips(self, bundled_topologies):
+        from autografs.deconstruct import deconstruct
+        from autografs.rod_build import build_rod_framework
+
+        unc = bundled_topologies["unc"]
+        rod, linker = _unc_helical_rod(unc)
+        built = build_rod_framework(unc, rod, linker)
+        # -Zn-O- helix (4 repeats) + one X-C-C-X linker per lateral slot
+        assert built.symbols.count("Zn") == 4
+        assert built.symbols.count("O") == 4
+        assert built.symbols.count("C") == 8
+        # a genuine helix: the default contact gate passes unrelaxed
+        assert built.min_contact() > 1.0
+        assert sorted(built.graph) == list(range(len(built)))
+        # it realizes unc's net (PoE-form quotient), and round-trips to
+        # the same 4_1 rod identity
+        built.verify_net(unc)
+        result = deconstruct(built.structure, topologies=bundled_topologies)
+        assert result.net_candidates == ["unc"]
+        assert len(result.rod_units) == 1
+        rebuilt = canonical_rod(result.structure, result.rod_units[0])
+        assert rebuilt.screw_order == 4
+        assert abs(rebuilt.screw_angle - 90.0) < 5.0
+        assert rod.repeat.matches(rebuilt)
+
+    def test_the_build_is_actually_helical(self, bundled_topologies):
+        # the four Zn sit at four distinct azimuths about the axis (a
+        # 4_1 screw), not stacked straight above one another
+        from autografs.rod_build import build_rod_framework
+
+        unc = bundled_topologies["unc"]
+        rod, linker = _unc_helical_rod(unc)
+        built = build_rod_framework(unc, rod, linker)
+        cell = built.cell
+        axis = cell[2] / np.linalg.norm(cell[2])
+        zn = np.array(
+            [
+                built.graph.nodes[n]["coord"]
+                for n, d in built.graph.nodes(data=True)
+                if d["symbol"] == "Zn"
+            ]
+        )
+        perp = zn - np.outer(zn @ axis, axis)
+        center = perp.mean(axis=0)
+        radial = perp - center
+        e1 = radial[0] / np.linalg.norm(radial[0])
+        e2 = np.cross(axis, e1)
+        azimuths = np.sort(np.degrees(np.arctan2(radial @ e2, radial @ e1)) % 360)
+        gaps = np.diff(np.concatenate([azimuths, [azimuths[0] + 360]]))
+        # four Zn evenly spread ~90 deg apart round the axis
+        assert np.allclose(gaps, 90.0, atol=15.0)
+
+    def test_rod_screw_must_match_a_run(self, bundled_topologies):
+        # a 3_1 rod has no matching run on unc (only 4_1 / 2_1) -> rejected
+        from autografs.rod_build import build_rod_framework
+
+        unc = bundled_topologies["unc"]
+        rod, linker = _unc_helical_rod(unc)
+        rod.repeat.screw_order = 3
+        rod.repeat.screw_angle = 120.0
+        with pytest.raises(Exception, match="helical|run"):
+            build_rod_framework(unc, rod, linker)
 
 
 class TestRodEditingGuards:
