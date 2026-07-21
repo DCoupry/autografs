@@ -1065,6 +1065,7 @@ class Autografs:
         linker: Fragment | str,
         max_rmsd: float = autografs.rod_build.DEFAULT_MAX_RMSD,
         min_distance: float | None = 1.0,
+        verify_net: bool = False,
         verbose: bool = False,
     ) -> Framework:
         """Build a straight rod framework (rod Stage C).
@@ -1089,6 +1090,9 @@ class Autografs:
             Directional gate on each linker's arm alignment.
         min_distance : float or None, optional
             Post-build closest-contact gate.
+        verify_net : bool, optional
+            Verify the build realizes the blueprint net (rod PoE form)
+            and raise ``NetMismatchError`` otherwise.
         verbose : bool, optional
             Log the optimized cell and residuals.
 
@@ -1118,5 +1122,6 @@ class Autografs:
             linker,
             max_rmsd=max_rmsd,
             min_distance=min_distance,
+            verify_net=verify_net,
             verbose=verbose,
         )

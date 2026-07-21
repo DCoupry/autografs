@@ -258,7 +258,11 @@ class Framework:
 
         Only meaningful for as-built frameworks: supercells, stacks
         and defective frameworks intentionally change the quotient
-        graph.
+        graph. Rod frameworks (``is_rod``) are verified against the
+        blueprint's points-of-extension form instead of by exact
+        multiset (their slots are rod repeats, not blueprint slots);
+        this too is available at build time via
+        ``build_rod(..., verify_net=True)``.
 
         Parameters
         ----------

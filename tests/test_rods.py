@@ -497,6 +497,93 @@ class TestRodForwardBuild:
             build_rod_framework(mofgen.topologies["pcu"], rod, node)
 
 
+class TestRodVerifyNet:
+    """Rod net verification against the blueprint's PoE form (#158).
+
+    A rod build records its continuation as direct point-of-extension
+    edges and is an n_repeats supercell, so it is verified by a
+    cell-choice-invariant signature comparison rather than the exact
+    multiset the finite pipeline uses."""
+
+    def _harvest(self, mofgen, n=1):
+        result = mofgen.harvest([_rod_pillar_structure(n)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(name for name, k in result.kinds.items() if k == "linker")
+        ]
+        return rod, linker
+
+    def test_correct_build_verifies(self, mofgen):
+        from autografs.rod_build import build_rod_framework
+
+        rod, linker = self._harvest(mofgen)
+        built = build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        # explicit and as a build-time gate: neither raises
+        built.verify_net(mofgen.topologies["pcu"])
+        build_rod_framework(mofgen.topologies["pcu"], rod, linker, verify_net=True)
+
+    def test_supercell_rod_still_verifies(self, mofgen):
+        # a rod canonicalized from a 2x cell (screw_order 2) builds an
+        # n_repeats supercell; the gcd fold still matches the blueprint
+        from autografs.rod_build import build_rod_framework
+
+        rod2, linker = self._harvest(mofgen, 2)
+        built = build_rod_framework(mofgen.topologies["pcu"], rod2, linker)
+        built.verify_net(mofgen.topologies["pcu"])
+
+    def test_dropped_inter_unit_bond_raises(self, mofgen):
+        from autografs.exceptions import NetMismatchError
+        from autografs.framework import Framework
+        from autografs.rod_build import build_rod_framework
+
+        rod, linker = self._harvest(mofgen)
+        built = build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        # mis-wire: drop one rod-linker bond; the coordination
+        # sequences shift and no run's PoE form matches
+        graph = built.graph.copy()
+        u, v = next(
+            (a, b)
+            for a, b in graph.edges()
+            if graph.nodes[a]["sbu"] != graph.nodes[b]["sbu"]
+        )
+        graph.remove_edge(u, v)
+        with pytest.raises(NetMismatchError):
+            Framework(graph, name="miswired").verify_net(mofgen.topologies["pcu"])
+
+    def test_verify_against_runless_topology_raises(self, mofgen):
+        from autografs.exceptions import NetMismatchError
+        from autografs.rod_build import build_rod_framework
+
+        rod, linker = self._harvest(mofgen)
+        built = build_rod_framework(mofgen.topologies["pcu"], rod, linker)
+        # dia has neither a straight nor a helical run to verify against
+        with pytest.raises(NetMismatchError):
+            built.verify_net(mofgen.topologies["dia"])
+
+    def test_blueprint_poe_form_contracts_edge_centers(self, mofgen):
+        # the PoE expansion turns pcu's node+axial-edge-center run into a
+        # direct node self-loop continuation (one vertex, not two)
+        from autografs.net import (
+            axial_runs,
+            topology_quotient_edges,
+            topology_rod_quotient_edges,
+        )
+
+        pcu = mofgen.topologies["pcu"]
+        run = axial_runs(pcu)[0]
+        poe = topology_rod_quotient_edges(pcu, run)
+        # a self-loop on the node slot carrying the run's generator
+        node = next(
+            s for s in run.slots if len(pcu.slots[s].atoms.indices_from_symbol("X")) > 2
+        )
+        assert any(a == b == node for a, b, _ in poe)
+        # the axial edge-center slot is gone (contracted away)
+        ec = next(s for s in run.slots if s != node)
+        assert not any(ec in (a, b) for a, b, _ in poe)
+        # and it is a strict reduction of the full quotient
+        assert len(poe) < len(topology_quotient_edges(pcu))
+
+
 class TestRodEditingGuards:
     """Rod Stage C4: tag/anchor-based edits refuse rod frameworks."""
 
