@@ -302,6 +302,10 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
         coordination sequences and no run agrees.
     """
     built = net_signature(framework_quotient_edges(framework), contract=False)
+    # slots the build deliberately left empty (their neighbours bond
+    # directly); contracted out of the blueprint alongside the runs' own
+    # edge centers so the two forms are comparable
+    empty_slots = framework.graph.graph.get("rod_empty_slots", ())
     # candidate rod-form quotients: helical runs grouped by screw order
     # (a net can carry several - unc has a 2_1 and a 4_1 over the same
     # nodes - and only one order is the rod's; a cross-linked multi-rod
@@ -330,7 +334,8 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
         )
     for run_group in candidates:
         blueprint = net_signature(
-            topology_rod_quotient_edges(topology, run_group), contract=False
+            topology_rod_quotient_edges(topology, run_group, empty_slots),
+            contract=False,
         )
         if built == blueprint:
             return
@@ -1033,6 +1038,7 @@ def helical_runs(
 def topology_rod_quotient_edges(
     topology: Topology,
     run: SlotRun | HelicalRun | list[SlotRun | HelicalRun],
+    empty_slots: Iterable[int] = (),
 ) -> Counter[Edge]:
     """The blueprint's rod-form labeled quotient graph on its rod run(s).
 
@@ -1050,12 +1056,21 @@ def topology_rod_quotient_edges(
     edge centers of every run are contracted, leaving each helix's node
     PoEs joined by the linkers that bridge different helices.
 
+    ``empty_slots`` contracts *lateral* slots the same way. A build may
+    leave a 2-connected blueprint slot empty so its two neighbours bond
+    directly - what a real rod MOF needs, its metal-oxo rod binding
+    straight onto a polytopic linker while the blueprint decorates that
+    edge with a slot the structure has no unit for (#168).
+
     Parameters
     ----------
     topology : Topology
         The blueprint.
     run : SlotRun or HelicalRun or list
         The rod run(s) the framework occupies.
+    empty_slots : iterable of int, optional
+        Lateral slots the build deliberately left empty; contracted out
+        of the blueprint like the runs' own edge centers.
 
     Returns
     -------
@@ -1070,7 +1085,7 @@ def topology_rod_quotient_edges(
         if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
     }
     adjacency = _adjacency(topology_quotient_edges(topology))
-    for slot in run_slots - node_slots:
+    for slot in (run_slots - node_slots) | set(empty_slots):
         halves = adjacency.get(slot)
         if halves is None or len(halves) != 2:
             continue  # not a plain 2-connected edge center; leave it be

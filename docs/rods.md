@@ -156,6 +156,32 @@ How many lateral arms a rod needs is read off the run itself — a node
 slot's degree minus the connections the run's own continuation consumes —
 so a blueprint node of any local geometry is handled.
 
+Which slots may bond is the blueprint's business, not geometry's: the
+optimizer spends one bond budget per bonded slot pair of the blueprint,
+and geometry only picks which individual ports (and periodic images)
+realize them. Pairing purely by proximity looked simpler but made the
+objective multi-modal — its *global* minimum could be a spurious pairing
+at a badly inflated cell, where unrelated connection points happen to
+meet.
+
+### Leaving a slot empty
+
+A 2-connected slot mapped to `None` is left **empty**: nothing is placed
+and its two neighbours bond to each other directly.
+
+```python
+mof = mofgen.build_rod(etbe, rod, {decoration_slot_type: None,
+                                   tetratopic_slot_type: dobdc})
+```
+
+Real rod MOFs need this. A MOF-74 metal-oxo rod binds *straight* onto its
+4-connected DOBDC, but the blueprint decorates every edge with a
+2-connected slot the structure has no unit for — which is also why such
+structures identify on the contracted tier when deconstructed. Net
+verification knows about it: the emptied slots are contracted out of the
+blueprint before the comparison, exactly as a run's own axial edge
+centers are.
+
 ### Straight vs helical runs
 
 Which run a rod occupies is chosen automatically from its screw:
