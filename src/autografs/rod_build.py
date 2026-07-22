@@ -26,7 +26,13 @@ helices (the enantiomer on the opposite-handedness runs — etb is
 centrosymmetric, three helices of each hand), and the linkers
 bridge *between* different rods rather than within one (#158).
 
-Multi-axis (woven) runs stay future work.
+A *woven* net (bmn) spirals along several cell axes at once. Runs are
+grouped into **axis families**, each pinning its own cell parameter and
+carrying its own rotation and axial phase (#168); a fully woven packing
+pins all three axes, which determines the cell outright. One rod pins
+every axis it runs along to the same length, so only runs of equal
+period can be woven together. Runs along a lattice *diagonal* stay out
+of scope — they would pin a combination of cell parameters.
 
 What is structurally different from the finite-SBU pipeline:
 
@@ -391,16 +397,8 @@ class _RodBuild:
         self.runs = list(run) if isinstance(run, list) else [run]
         primary = self.runs[0]
         self.helical = isinstance(primary, HelicalRun)
-        self.axis_point = (
-            np.asarray(primary.axis_point, dtype=float)
-            if isinstance(primary, HelicalRun)
-            else None
-        )
         blueprint = np.asarray(topology.cell.matrix, dtype=float)
         self.blueprint = blueprint
-        self.axis_index = int(np.argmax(np.abs(np.asarray(primary.direction))))
-        axis_row = blueprint[self.axis_index]
-        self.axis_hat = axis_row / np.linalg.norm(axis_row)
         self.period = float(rod.repeat.repeat_length)
         # repeats placed along the axis: enough to close the screw (a
         # multiple of the screw order) and at least two, so a
@@ -410,13 +408,39 @@ class _RodBuild:
         self.n_repeats = max(2, rod.repeat.screw_order)
         self.axis_length = self.n_repeats * self.period
 
-        # transverse orthonormal pair the rod's local x/y embed along
-        seed = np.array([1.0, 0.0, 0.0])
-        if abs(float(seed @ self.axis_hat)) > 0.9:
-            seed = np.array([0.0, 1.0, 0.0])
-        e1 = seed - (seed @ self.axis_hat) * self.axis_hat
-        self.e1 = e1 / np.linalg.norm(e1)
-        self.e2 = np.cross(self.axis_hat, self.e1)
+        # runs grouped into *axis families* - a woven packing spirals
+        # along several cell axes at once (bmn: six 4_1 helices, two per
+        # axis, covering every node slot). Each family pins its own cell
+        # parameter and carries its own transverse frame and placement
+        # freedoms; a single-axis build is just the one-family case.
+        by_axis: dict[int, list[SlotRun | HelicalRun]] = {}
+        for a_run in self.runs:
+            axis = int(np.argmax(np.abs(np.asarray(a_run.direction))))
+            by_axis.setdefault(axis, []).append(a_run)
+        self.families: list[dict] = []
+        for axis_index in sorted(by_axis):
+            axis_hat = blueprint[axis_index] / np.linalg.norm(blueprint[axis_index])
+            # transverse orthonormal pair the rod's local x/y embed along
+            seed = np.array([1.0, 0.0, 0.0])
+            if abs(float(seed @ axis_hat)) > 0.9:
+                seed = np.array([0.0, 1.0, 0.0])
+            e1 = seed - (seed @ axis_hat) * axis_hat
+            e1 /= np.linalg.norm(e1)
+            self.families.append(
+                {
+                    "axis_index": axis_index,
+                    "axis_hat": axis_hat,
+                    "e1": e1,
+                    "e2": np.cross(axis_hat, e1),
+                    "runs": by_axis[axis_index],
+                }
+            )
+        self.n_families = len(self.families)
+        # the primary family's frame, for the single-axis code paths
+        self.axis_index = self.families[0]["axis_index"]
+        self.axis_hat = self.families[0]["axis_hat"]
+        self.e1 = self.families[0]["e1"]
+        self.e2 = self.families[0]["e2"]
 
         def _node_slots(a_run: SlotRun | HelicalRun) -> list[int]:
             return [
@@ -430,28 +454,35 @@ class _RodBuild:
             topology.slots[self.node_slot_index], blueprint
         )
 
-        # one placement spec per rod (per helical run): where its axis
-        # line sits, the fractional centre of its first node (fixes the
-        # azimuth + height its repeat 0 lands on), its signed screw, and
-        # whether the harvested rod must be reflected to match the run's
-        # handedness (etb hosts both hands; the enantiomer is a proper
-        # copy for an achiral metal-oxo rod).
+        # one placement spec per rod (per helical run): which axis family
+        # it belongs to, where its axis line sits, the fractional centre
+        # of its first node (fixes the azimuth + height its repeat 0
+        # lands on), its signed screw, and whether the harvested rod must
+        # be reflected to match the run's handedness (etb hosts both
+        # hands; the enantiomer is a proper copy for an achiral
+        # metal-oxo rod).
         self.rod_specs: list[dict] = []
         if self.helical:
             rod_sign = 1.0 if rod.repeat.screw_angle >= 0 else -1.0
-            for a_run in self.runs:
-                assert isinstance(a_run, HelicalRun)
-                self.rod_specs.append(
-                    {
-                        "axis_point": np.asarray(a_run.axis_point, dtype=float),
-                        # the reference node, unwrapped onto the run's own
-                        # cylinder (a home-cell image can sit off it)
-                        "node_frac": _unwrapped_node_frac(topology, a_run),
-                        "screw_rad": np.radians(a_run.screw_angle),
-                        "reflect": (1.0 if a_run.screw_angle >= 0 else -1.0)
-                        != rod_sign,
-                    }
-                )
+            inverse = np.linalg.inv(blueprint)
+            for family_index, family in enumerate(self.families):
+                for a_run in family["runs"]:
+                    assert isinstance(a_run, HelicalRun)
+                    self.rod_specs.append(
+                        {
+                            "family": family_index,
+                            # fractional, so the axis line follows an
+                            # anisotropic cell instead of a scalar scale
+                            # (a woven build pins more than one axis)
+                            "axis_point_frac": np.asarray(a_run.axis_point) @ inverse,
+                            # the reference node, unwrapped onto the run's
+                            # own cylinder (a home-cell image can sit off it)
+                            "node_frac": _unwrapped_node_frac(topology, a_run),
+                            "screw_rad": np.radians(a_run.screw_angle),
+                            "reflect": (1.0 if a_run.screw_angle >= 0 else -1.0)
+                            != rod_sign,
+                        }
+                    )
 
         # lateral (linker) slots: everything not claimed by *any* rod run.
         # Each takes its own SBU species - one uniform ditopic linker is
@@ -542,9 +573,11 @@ class _RodBuild:
         # which blueprint node slot each rod repeat sits on: a helical
         # run's nodes are screw images of one another in walk order, so
         # repeat n fills the nth; a straight run reuses one node slot for
-        # every repeat of its supercell
+        # every repeat of its supercell. Indexed like rod_specs, i.e.
+        # grouped by axis family.
         self.repeat_slot: list[list[int]] = []
-        for a_run in self.runs:
+        ordered = [a_run for family in self.families for a_run in family["runs"]]
+        for a_run in ordered:
             nodes = [
                 s
                 for s in a_run.slots
@@ -592,8 +625,16 @@ class _RodBuild:
     # ------------------------------------------------------------------
 
     def cell(self, scale: float) -> np.ndarray:
+        """The cell at this scale, with every rod-bearing axis pinned.
+
+        A family's axis length is fixed by its rods (``n_repeats`` x the
+        chemical repeat); ``scale`` only stretches whatever axes carry
+        no rod. A fully woven packing pins all three and leaves nothing
+        for scale to do.
+        """
         cell = self.blueprint * scale
-        cell[self.axis_index] = self.axis_hat * self.axis_length
+        for family in self.families:
+            cell[family["axis_index"]] = family["axis_hat"] * self.axis_length
         return cell
 
     def _cell_one_period(self, scale: float) -> np.ndarray:
@@ -601,24 +642,28 @@ class _RodBuild:
         cell[self.axis_index] = self.axis_hat * self.period
         return cell
 
-    def _embed(self, local: np.ndarray, theta: float) -> np.ndarray:
+    def _embed(self, local: np.ndarray, theta: float, family: dict) -> np.ndarray:
         cos_t, sin_t = np.cos(theta), np.sin(theta)
         x = cos_t * local[..., 0] - sin_t * local[..., 1]
         y = sin_t * local[..., 0] + cos_t * local[..., 1]
         return (
-            np.outer(x, self.e1)
-            + np.outer(y, self.e2)
-            + np.outer(local[..., 2], self.axis_hat)
+            np.outer(x, family["e1"])
+            + np.outer(y, family["e2"])
+            + np.outer(local[..., 2], family["axis_hat"])
         )
 
     def evaluate(
         self,
         scale: float,
-        theta: float,
-        z0: float,
+        theta: np.ndarray | float,
+        z0: np.ndarray | float,
         phi: np.ndarray | None = None,
     ) -> dict:
         """Place everything for one parameter set.
+
+        ``theta`` and ``z0`` carry one value per axis family (a scalar
+        is accepted for the single-axis case): the rotation about that
+        family's axis and the axial phase of its rods.
 
         Returns a dict with rod positions, arm tips, linker
         placements, the connection-point pairing and the per-bond
@@ -628,23 +673,27 @@ class _RodBuild:
         moving its anchors.
         """
         n_atoms = len(self.rod.positions)
+        thetas = np.broadcast_to(np.atleast_1d(theta), (self.n_families,))
+        z0s = np.broadcast_to(np.atleast_1d(z0), (self.n_families,))
         cell_p = self._cell_one_period(scale)
         cell_full = self.cell(scale)
 
         def screw_about(
-            points: np.ndarray, axis_point: np.ndarray, screw_rad: float, n: int
+            points: np.ndarray,
+            axis_point: np.ndarray,
+            axis_hat: np.ndarray,
+            screw_rad: float,
+            n: int,
         ) -> np.ndarray:
             """The nth screw image about a given axis line: rotate the
             perpendicular part of (points - axis_point) by n*screw, keep
             the axial part, then translate n*period along the axis."""
             rel = points - axis_point
-            axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
+            axial = (rel @ axis_hat)[:, None] * axis_hat
             perp = rel - axial
             if screw_rad:
-                perp = Rotation.from_rotvec(n * screw_rad * self.axis_hat).apply(perp)
-            return np.asarray(
-                axis_point + axial + perp + n * self.period * self.axis_hat
-            )
+                perp = Rotation.from_rotvec(n * screw_rad * axis_hat).apply(perp)
+            return np.asarray(axis_point + axial + perp + n * self.period * axis_hat)
 
         arms: list[tuple[int, np.ndarray]] = []
         if self.helical:
@@ -657,11 +706,15 @@ class _RodBuild:
                 (len(self.rod_specs) * self.n_repeats * n_atoms, 3)
             )
             for ri, spec in enumerate(self.rod_specs):
-                axis_point = spec["axis_point"] * scale
+                family = self.families[spec["family"]]
+                axis_hat, e1, e2 = family["axis_hat"], family["e1"], family["e2"]
+                theta_f = float(thetas[spec["family"]])
+                z0_f = float(z0s[spec["family"]])
+                axis_point = spec["axis_point_frac"] @ cell_full
                 node_cart = spec["node_frac"] @ cell_full
                 rel = node_cart - axis_point
-                phi0 = float(np.arctan2(rel @ self.e2, rel @ self.e1))
-                z_node = float(node_cart @ self.axis_hat)
+                phi0 = float(np.arctan2(rel @ e2, rel @ e1))
+                z_node = float(node_cart @ axis_hat)
                 template = (
                     self._positions_reflected if spec["reflect"] else self.rod.positions
                 )
@@ -669,11 +722,11 @@ class _RodBuild:
                     self._arm_local_reflected if spec["reflect"] else self._arm_local
                 )
                 screw_rad = spec["screw_rad"]
-                rod0 = self._embed(template, phi0 + theta) + (
-                    axis_point + (z_node + z0) * self.axis_hat
+                rod0 = self._embed(template, phi0 + theta_f, family) + (
+                    axis_point + (z_node + z0_f) * axis_hat
                 )
                 arm_vec0 = (
-                    self._embed(arm_local, phi0 + theta)
+                    self._embed(arm_local, phi0 + theta_f, family)
                     if len(arm_local)
                     else np.empty((0, 3))
                 )
@@ -681,12 +734,10 @@ class _RodBuild:
                 for n in range(self.n_repeats):
                     start = base + n * n_atoms
                     rod_positions[start : start + n_atoms] = screw_about(
-                        rod0, axis_point, screw_rad, n
+                        rod0, axis_point, axis_hat, screw_rad, n
                     )
                     arm_vec_n = (
-                        Rotation.from_rotvec(n * screw_rad * self.axis_hat).apply(
-                            arm_vec0
-                        )
+                        Rotation.from_rotvec(n * screw_rad * axis_hat).apply(arm_vec0)
                         if screw_rad and len(arm_vec0)
                         else arm_vec0
                     )
@@ -716,11 +767,11 @@ class _RodBuild:
                     line_perp + axial + perp + n * self.period * self.axis_hat
                 )
 
-            rod0 = self._embed(self.rod.positions, theta) + (
-                line_perp + z0 * self.axis_hat
-            )
+            rod0 = self._embed(
+                self.rod.positions, float(thetas[0]), self.families[0]
+            ) + (line_perp + float(z0s[0]) * self.axis_hat)
             arm_vec0 = (
-                self._embed(self._arm_local, theta)
+                self._embed(self._arm_local, float(thetas[0]), self.families[0])
                 if len(self._arm_local)
                 else np.empty((0, 3))
             )
@@ -821,21 +872,26 @@ class _RodBuild:
             "residuals": residuals,
         }
 
+    def unpack(self, params: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
+        """(scale, theta per family, z0 per family) from a flat vector."""
+        rest = np.asarray(params[1:], dtype=float).reshape(self.n_families, 2)
+        return float(params[0]), rest[:, 0], rest[:, 1]
+
     def objective(self, params: np.ndarray) -> float:
-        scale, theta, z0 = params
+        scale, theta, z0 = self.unpack(params)
         if scale <= 0.05:
             return 1e6
-        residuals = self.evaluate(float(scale), float(theta), float(z0))["residuals"]
+        residuals = self.evaluate(scale, theta, z0)["residuals"]
         return float(np.sqrt((residuals**2).mean()))
 
     def initial_guess(self) -> np.ndarray:
-        """(scale, theta, z0) heuristics good enough for Nelder-Mead."""
+        """(scale, then theta/z0 per family) good enough for Nelder-Mead."""
         if self.helical:
             # scale: the rod sits on the run's cylinder, so match the
             # rod's own radius to the (unscaled) blueprint node radius
             spec = self.rod_specs[0]
             node0 = spec["node_frac"] @ self.blueprint
-            rel = node0 - spec["axis_point"]
+            rel = node0 - spec["axis_point_frac"] @ self.blueprint
             node_radius = float(
                 np.linalg.norm(rel - (rel @ self.axis_hat) * self.axis_hat)
             )
@@ -888,7 +944,8 @@ class _RodBuild:
             else 0.0
         )
         if self.helical:
-            return np.array([scale0, 0.0, -z_arms])
+            per_family = [0.0, -z_arms] * self.n_families
+            return np.array([scale0, *per_family])
         cell_p = self._cell_one_period(scale0)
         z_node = float((self.node_center_frac @ cell_p) @ self.axis_hat)
         return np.array([scale0, 0.0, z_node - z_arms])
@@ -989,6 +1046,14 @@ def _select_runs(
     rod), so a centrosymmetric net with both hands is filled from one
     harvested rod. Runs are deduplicated by their node set, since
     ``helical_runs`` reports a helix once per starting node.
+
+    Runs along **several** cell axes are taken together - a woven rod
+    packing (bmn: six 4_1 helices, two along each cubic axis, covering
+    every node slot). Each axis pins its own cell parameter to the rod's
+    length, so only axes whose runs share the rod's period can be woven
+    together; where they differ, the busiest period wins and the other
+    runs' slots stay lateral, needing linkers like any other slot rather
+    than being built along an axis pinned to the wrong length.
     """
     if rod_is_helical:
 
@@ -1000,7 +1065,7 @@ def _select_runs(
             )
 
         seen: set[frozenset[int]] = set()
-        matches: list[SlotRun | HelicalRun] = []
+        by_period: dict[float, list[SlotRun | HelicalRun]] = {}
         for a_run in helical_runs(topology):
             if a_run.screw_order != rod.repeat.screw_order:
                 continue
@@ -1010,8 +1075,23 @@ def _select_runs(
             if ns in seen:
                 continue
             seen.add(ns)
-            matches.append(a_run)
-        if matches:
+            key = next(
+                (p for p in by_period if abs(p - a_run.period) < 1e-6), a_run.period
+            )
+            by_period.setdefault(key, []).append(a_run)
+        if by_period:
+            # busiest period first, its value as a deterministic tie-break
+            period, matches = min(
+                by_period.items(), key=lambda item: (-len(item[1]), item[0])
+            )
+            if len(by_period) > 1:
+                logger.info(
+                    f"\t[!] {topology.name!r} carries matching helical runs of "
+                    f"{len(by_period)} different periods; building the "
+                    f"{period:.3f} ones (one rod pins every axis it runs "
+                    "along to the same length). The others' slots need "
+                    "linkers like any other slot."
+                )
             return matches
         # no matching helical run: a 2_1 (180 deg) screw still builds on
         # a straight run - a ditopic linker's arm sign-flip is a no-op,
@@ -1194,10 +1274,21 @@ def build_rod_framework(
     adjacency = _slot_adjacency(topology)
     for a_run in runs:
         direction = np.asarray(a_run.direction)
+        # each run must follow one cell axis (several *different* axes
+        # across runs is fine - that is a woven packing); a diagonal run
+        # would pin a combination of cell parameters, which the cell
+        # parametrization cannot express
         if sorted(np.abs(direction).tolist()) != [0, 0, 1]:
             raise AlignmentError(
-                "Rod building supports runs along a single cell axis for "
-                f"now (got direction {a_run.direction})."
+                "Rod building supports runs along a cell axis for now "
+                f"(got direction {a_run.direction})."
+            )
+        if not isinstance(a_run, HelicalRun) and any(
+            other.direction != a_run.direction for other in runs
+        ):
+            raise AlignmentError(
+                "Woven (multi-axis) rod packings are supported for helical "
+                "runs only; a straight run is supercelled along its own axis."
             )
         node_slots = [
             s
@@ -1231,22 +1322,25 @@ def build_rod_framework(
 
     build = _RodBuild(topology, rod, per_slot, runs if len(runs) > 1 else runs[0])
 
-    # optimize: coarse rotation grid, refine the best with Nelder-Mead
-    guess = build.initial_guess()
-    best = None
-    for angle in np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False):
-        value = build.objective(np.array([guess[0], angle, guess[2]]))
-        if best is None or value < best[1]:
-            best = (float(angle), value)
-    assert best is not None
-    start = np.array([guess[0], best[0], guess[2]])
+    # optimize: coarse rotation grid per axis family (a full product
+    # grid would be 16^families), then refine everything with Nelder-Mead
+    start = build.initial_guess()
+    for family in range(build.n_families):
+        angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+
+        def value_at(angle: float, family: int = family) -> float:
+            trial = start.copy()
+            trial[1 + 2 * family] = angle
+            return build.objective(trial)
+
+        start[1 + 2 * family] = min(angles, key=value_at)
     result = minimize(
         build.objective,
         start,
         method="Nelder-Mead",
         options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
     )
-    scale, theta, z0 = (float(x) for x in result.x)
+    scale, theta, z0 = build.unpack(result.x)
     # the polytopic arm assignments were fixed at the blueprint cell;
     # re-solve them now that the cell has moved
     build.refresh_assignments(scale)

@@ -243,6 +243,31 @@ MOF-74 arrangement as it actually bonds, rod → ditopic → tetratopic
 bridge → ditopic → rod. It builds with two lateral species, clears the
 default contact gate unrelaxed, and identifies as `etb-e`.
 
+### Woven (multi-axis) packings
+
+Some nets spiral along several cell axes at once. `bmn` is the clean
+case: six 4₁ helices per cubic cell, **two along each axis**, together
+covering every one of its 24 node slots without sharing one. `build_rod`
+places a rod on all six.
+
+```python
+mof = mofgen.build_rod(mofgen.topologies["bmn"], rod_4_1, linker)
+mof.structure.lattice.abc     # cubic — all three axes pinned by the rod
+```
+
+Each axis carries its own placement freedoms (a rotation about it and an
+axial phase), and each is **pinned** to `n_repeats × chemical repeat`.
+A fully woven packing therefore determines the whole cell: there is
+nothing left for the in-plane scale of a single-axis build to vary. That
+also sets the limit — one rod pins every axis it runs along to the *same*
+length, so runs of different periods cannot be woven together. Where a
+net offers several (`bbe` spirals 2₁ along `a` and `b` with different
+periods), the busiest period is built and the other runs' slots stay
+lateral, needing linkers like any other slot.
+
+Runs along a diagonal (⟨011⟩ and friends) are still out of scope: they
+would pin a *combination* of cell parameters.
+
 ### Verifying the built net
 
 Passing `verify_net=True` (or calling `mof.verify_net(topology)` after
