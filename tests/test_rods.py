@@ -269,6 +269,100 @@ def _etb_helical_rod(etb, scale=6.0):
     return rod, linker
 
 
+def _bmn_woven_rod(bmn, scale=6.53):
+    """A rod hand-matched to bmn's woven 4_1 helices, plus a linker.
+
+    bmn is a *woven* net: six 4_1 helices per cubic cell, two along
+    each axis, together covering every one of its 24 three-connected
+    node slots without sharing a single one. One rod species fills all
+    six, so all three cell parameters end up pinned by the same rod
+    length - the multi-axis case (#168 item 2), where the single
+    in-plane scale of a one-axis build has nothing left to vary.
+
+    Each node keeps one lateral connection (degree 3 = two along its
+    own helix plus one out), so the rod carries a single arm per
+    repeat and the twelve remaining 2-connected slots take a ditopic
+    linker. Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import helical_runs
+    from autografs.rods import RodFragment
+
+    radius_c, radius_zn = 0.75, 1.22
+    cell = np.asarray(bmn.cell.matrix)
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in bmn.slots]
+    runs: dict[frozenset, object] = {}
+    for run in helical_runs(bmn):
+        runs.setdefault(frozenset(s for s in run.slots if counts[s] > 2), run)
+    reference = next(r for r in runs.values() if r.screw_angle > 0)
+    axis_index = int(np.argmax(np.abs(reference.direction)))
+    axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+    pos, steps = _unwrapped_walk(bmn, reference)
+
+    run_slots = {s for run in runs.values() for s in run.slots}
+    n0 = next(s for s in reference.slots if counts[s] > 2)
+    axis_point = np.asarray(reference.axis_point)
+    rel0 = (pos[n0] - axis_point) - ((pos[n0] - axis_point) @ axis_hat) * axis_hat
+    radius = float(np.linalg.norm(rel0))
+    basis = np.array([rel0 / radius, np.cross(axis_hat, rel0 / radius), axis_hat])
+
+    _, node_arms = _slot_arms(bmn, n0)
+    lateral = next(d for w, d in steps[n0] if w not in run_slots)
+    unit = lateral / np.linalg.norm(lateral)
+    arm_node = float(
+        np.linalg.norm(max(node_arms, key=lambda a: (a / np.linalg.norm(a)) @ unit))
+    )
+
+    chemical = float(reference.period / reference.screw_order) * scale
+    half = np.radians(reference.screw_angle) / 2.0
+    metal_radius = radius * scale
+    positions = np.array(
+        [
+            [metal_radius, 0.0, 0.0],
+            [
+                metal_radius * 0.45 * np.cos(half),
+                metal_radius * 0.45 * np.sin(half),
+                chemical / 2,
+            ],
+        ]
+    )
+    rod = RodFragment(
+        repeat=RodRepeat(
+            symbols=["Zn", "O"],
+            axial=positions[:, 2].copy(),
+            radial=np.linalg.norm(positions[:, :2], axis=1),
+            angular=np.arctan2(positions[:, 1], positions[:, 0]),
+            repeat_length=chemical,
+            screw_order=reference.screw_order,
+            screw_angle=float(reference.screw_angle),
+            n_connections=1,
+        ),
+        positions=positions,
+        arms=[(0, (unit @ basis.T) * (arm_node * scale))],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_bmn",
+    )
+    laterals = [s for s in range(len(bmn.slots)) if s not in run_slots]
+    arm_lateral = float(np.linalg.norm(_slot_arms(bmn, laterals[0])[1][0]))
+    span = (arm_node + arm_lateral) * scale - radius_zn - radius_c
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [
+                [-arm_lateral * scale, 0, 0],
+                [-span, 0, 0],
+                [span, 0, 0],
+                [arm_lateral * scale, 0, 0],
+            ],
+            site_properties={"tags": [0, 0, 0, 0]},
+        ),
+        name="cc",
+    )
+    return rod, linker
+
+
 def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5, empty_decorations=False):
     """A rod plus *two* linker species hand-matched to etb-e (#168).
 
@@ -1149,6 +1243,75 @@ class TestMixedRodMappings:
         rod.arms = rod.arms[:1]
         with pytest.raises(Exception, match="expects 2 lateral connections"):
             build_rod_framework(etbe, rod, mapping)
+
+
+class TestWovenMultiAxisBuild:
+    """Woven (multi-axis) rod packings (#168 item 2). bmn spirals 4_1
+    along all three cubic axes at once - six helices, two per axis,
+    covering every node slot. Each axis is pinned by the same rod, so
+    the cell is fully determined and the placement freedoms are per
+    axis: one rotation and one axial phase each."""
+
+    @pytest.fixture(scope="class")
+    def woven(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        bmn = bundled_topologies["bmn"]
+        rod, linker = _bmn_woven_rod(bmn)
+        return bmn, build_rod_framework(bmn, rod, linker)
+
+    def test_rods_are_placed_on_every_axis(self, bundled_topologies):
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        bmn = bundled_topologies["bmn"]
+        rod, linker = _bmn_woven_rod(bmn)
+        runs = _select_runs(bmn, rod, True)
+        assert len(runs) == 6
+        assert {run.direction for run in runs} == {(1, 0, 0), (0, 1, 0), (0, 0, 1)}
+        build = _RodBuild(bmn, rod, linker, runs)
+        assert build.n_families == 3
+        assert build.n_rods == 6
+        # one rotation + one axial phase per axis, on top of the scale
+        assert len(build.initial_guess()) == 1 + 2 * 3
+
+    def test_every_axis_is_pinned_by_the_rod(self, woven):
+        bmn, built = woven
+        a, b, c = built.structure.lattice.abc
+        # every axis carries n_repeats (4) chemical repeats of the same
+        # rod, so the cubic cell is fully determined - nothing is left
+        # for the in-plane scale of a single-axis build to vary
+        assert a == pytest.approx(b) == pytest.approx(c)
+        assert a == pytest.approx(bmn.cell.abc[0] * 6.53)
+
+    def test_woven_build_realizes_bmn(self, woven):
+        from autografs.net import framework_quotient_edges, identify_net
+
+        bmn, built = woven
+        # six -Zn-O- helices of four repeats + twelve ditopic linkers
+        assert built.symbols.count("Zn") == 24
+        assert built.symbols.count("O") == 24
+        assert built.symbols.count("C") == 24
+        assert len(built.slots) == 6 * 4 + 12
+        assert sorted(built.graph) == list(range(len(built)))
+        assert built.min_contact() > 1.0
+        built.verify_net(bmn)
+        assert identify_net(framework_quotient_edges(built), {"bmn": bmn}) == ["bmn"]
+
+    def test_runs_of_different_periods_are_not_woven(self, bundled_topologies):
+        # bbe spirals 2_1 along a and b, but with different periods; one
+        # rod cannot pin both axes to the same length, so only the
+        # matching set is taken and the rest stay lateral
+        from autografs.net import helical_runs
+        from autografs.rod_build import _select_runs
+
+        bbe = bundled_topologies["bbe"]
+        periods = {round(r.period, 4) for r in helical_runs(bbe)}
+        assert len(periods) > 1
+        rod, _linker = _etb_helical_rod(bundled_topologies["etb"])
+        rod.repeat.screw_order = 2
+        rod.repeat.screw_angle = 180.0
+        chosen = _select_runs(bbe, rod, True)
+        assert len({round(run.period, 4) for run in chosen}) == 1
 
 
 class TestEmptyLateralSlots:
