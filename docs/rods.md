@@ -116,9 +116,9 @@ mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
 mof.write_cif("built.cif")
 ```
 
-The rod is placed on one of the blueprint's **slot runs** and a ditopic
-linker fills every other slot. Two structural facts fall out of a rod
-being one-periodic, and both differ from the finite pipeline:
+The rod is placed on one of the blueprint's **slot runs** and finite SBUs
+fill every other slot. Two structural facts fall out of a rod being
+one-periodic, and both differ from the finite pipeline:
 
 - **The rod pins a cell parameter.** The run-axis length is fixed to
   `n_repeats × chemical repeat`, never a free parameter. The remaining
@@ -126,12 +126,35 @@ being one-periodic, and both differ from the finite pipeline:
   axis rotation and axial phase against covalent bond-length targets.
 - **Inter-unit bonds are explicit graph edges,** not the tag pairs finite
   SBUs use — a rod anchor (the metal) carries several connections on one
-  atom. A relief pass then rotates each ditopic linker about its own arm
+  atom. Every connection point in the build, rod arm tip and SBU dummy
+  alike, is paired against every other by shortest periodic separation. A
+  relief pass then rotates each straight ditopic linker about its own arm
   axis (which leaves the anchors, hence the bonds, fixed) to clear steric
   clashes.
 
 Closure, alignment RMSD, and `min_distance` are hard gates;
 out-of-scope inputs raise `AlignmentError` with the reason.
+
+### Mixed rod / finite mappings
+
+The third argument takes a **mapping**, exactly like `build`: one
+Fragment (or SBU name) for every lateral slot, or a `{slot type: SBU}` /
+`{slot index: SBU}` dict when the blueprint's non-run slots are not all
+alike. Lateral SBUs may be of any connectivity — and a polytopic one
+bonds to its lateral *neighbours* as well as to the rod, which is what
+real rod MOFs need: MOF-74's DOBDC is a 4-connected bridge, not a ditopic
+linker, and no library net with a rod run has polytopic laterals that
+touch only run nodes.
+
+```python
+etbe = mofgen.topologies["etb-e"]        # etb's edge net: 2-c and 4-c laterals
+mof = mofgen.build_rod(etbe, rod, {ditopic_slot_type: "Benzene_linear",
+                                   tetratopic_slot_type: dobdc})
+```
+
+How many lateral arms a rod needs is read off the run itself — a node
+slot's degree minus the connections the run's own continuation consumes —
+so a blueprint node of any local geometry is handled.
 
 ### Straight vs helical runs
 
@@ -179,14 +202,20 @@ things make it work from a *single* harvested rod:
   each way. The opposite-hand helices are filled with the rod's
   **enantiomer** (a reflection of the template), which is a proper copy
   for an achiral metal-oxo rod, so one harvested rod fills all six.
-- **The linkers bridge rods, not repeats.** Every non-run slot is a
-  ditopic linker connecting a node on one helix to a node on another;
-  the optimizer's global arm↔anchor matching wires them across rods.
+- **The linkers bridge rods, not repeats.** Every non-run slot connects a
+  node on one helix to a node on another; the optimizer's global port
+  pairing wires them across rods.
 
 A −Zn–O− rod built on `etb` gives six cross-linked helices that
 `verify_net(etb)` accepts and that identify as `etb`. (The idealized net
 is small, so a synthetic rod crowds it — `relax()` cleans the packing;
 the topology is exact.)
+
+`etb-e`, the same six helices with 4-connected nodes and a tetratopic
+lateral linker, is the mixed-mapping version of the same structure — the
+MOF-74 arrangement as it actually bonds, rod → ditopic → tetratopic
+bridge → ditopic → rod. It builds with two lateral species, clears the
+default contact gate unrelaxed, and identifies as `etb-e`.
 
 ### Verifying the built net
 

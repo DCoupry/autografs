@@ -1062,30 +1062,34 @@ class Autografs:
         self,
         topology: Topology,
         rod: autografs.rods.RodFragment,
-        linker: Fragment | str,
+        linkers: Fragment | str | dict[Fragment | int, Fragment | str],
         max_rmsd: float = autografs.rod_build.DEFAULT_MAX_RMSD,
         min_distance: float | None = 1.0,
         verify_net: bool = False,
         verbose: bool = False,
     ) -> Framework:
-        """Build a straight rod framework (rod Stage C).
+        """Build a rod framework — straight or helical (rod Stage C).
 
         Places a harvested rod (``HarvestResult.rods`` or
-        ``autografs.rods.load_rods``) onto one of the blueprint's
-        straight axial slot runs and a ditopic linker onto every other
-        slot — the forward counterpart of rod deconstruction. Scoped
-        to straight (non-helical) rods on single-axis runs; see
-        :mod:`autografs.rod_build` for the full contract.
+        ``autografs.rods.load_rods``) onto the blueprint's matching slot
+        run(s) and finite SBUs onto every other slot — the forward
+        counterpart of rod deconstruction. Scoped to runs along a single
+        cell axis; see :mod:`autografs.rod_build` for the full contract.
 
         Parameters
         ----------
         topology : Topology
-            The blueprint; must have a straight axial slot run (e.g.
-            ``pcu``).
+            The blueprint; must have a slot run matching the rod — a
+            straight axial one (e.g. ``pcu``) for a screwless rod, a
+            helical one (e.g. ``etb``) for a screw.
         rod : RodFragment
             A harvested rod fragment.
-        linker : Fragment or str
-            The ditopic linker, as a library SBU name or a Fragment.
+        linkers : Fragment or str or dict
+            The SBUs filling the non-run slots: one linker (library SBU
+            name or Fragment) for all of them, or a mapping keyed by
+            slot type or slot index, as :meth:`build` takes. Polytopic
+            SBUs are allowed and bond to each other where the blueprint
+            says so.
         max_rmsd : float, optional
             Directional gate on each linker's arm alignment.
         min_distance : float or None, optional
@@ -1114,12 +1118,19 @@ class Autografs:
         >>> rod = harvest.rods["rod_MgO4"]
         >>> mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
         """
-        if isinstance(linker, str):
-            linker = self.sbu[linker].copy()
+
+        def resolve(value: Fragment | str) -> Fragment:
+            return self.sbu[value].copy() if isinstance(value, str) else value
+
+        resolved: Fragment | dict[Fragment | int, Fragment] = (
+            {key: resolve(value) for key, value in linkers.items()}
+            if isinstance(linkers, dict)
+            else resolve(linkers)
+        )
         return autografs.rod_build.build_rod_framework(
             topology,
             rod,
-            linker,
+            resolved,
             max_rmsd=max_rmsd,
             min_distance=min_distance,
             verify_net=verify_net,

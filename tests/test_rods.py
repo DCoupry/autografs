@@ -85,6 +85,44 @@ def _helix(sense=1, length=8.0, order=4, rho=1.5, cell=25.0):
     return structure, rod
 
 
+def _unwrapped_walk(topology, run):
+    """(slot -> unwrapped position, slot -> [(neighbour, displacement)]).
+
+    Walks a run the same way ``helical_runs`` does, so its nodes come
+    out on the run's own cylinder rather than as home-cell images that
+    can sit well off it. Shared by the hand-matched rod fixtures below.
+    """
+    from autografs.net import _topology_slot_images, topology_quotient_edges
+
+    cell = np.asarray(topology.cell.matrix)
+    images = _topology_slot_images(topology)
+    centers = np.array(
+        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in topology.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+    steps: dict[int, list] = {i: [] for i in range(len(centers))}
+    for (a, b, v), _ in topology_quotient_edges(topology).items():
+        for u, w, sg in ((a, b, 1), (b, a, -1)):
+            disp = wrapped[w] + (sg * np.asarray(v, float)) @ cell - wrapped[u]
+            if np.linalg.norm(disp) > 1e-9:
+                steps[u].append((w, disp))
+    pos = {run.slots[0]: wrapped[run.slots[0]]}
+    cur = run.slots[0]
+    for nxt in run.slots[1:]:
+        pos[nxt] = pos[cur] + next(d for w, d in steps[cur] if w == nxt)
+        cur = nxt
+    return pos, steps
+
+
+def _slot_arms(topology, slot_index):
+    """(centre, arm vectors) of one blueprint slot, cartesian."""
+    slot = topology.slots[slot_index]
+    coords = np.asarray(slot.atoms.cart_coords)
+    dummies = list(slot.atoms.indices_from_symbol("X"))
+    center = coords.mean(axis=0)
+    return center, coords[dummies] - center
+
+
 def _unc_helical_rod(unc, scale=4.0):
     """A RodFragment hand-matched to unc's 4_1 run, plus a ditopic linker.
 
@@ -98,11 +136,7 @@ def _unc_helical_rod(unc, scale=4.0):
     from pymatgen.core.structure import Molecule
 
     from autografs.fragment import Fragment
-    from autografs.net import (
-        _topology_slot_images,
-        helical_runs,
-        topology_quotient_edges,
-    )
+    from autografs.net import helical_runs
     from autografs.rods import RodFragment
 
     cell = unc.cell.matrix
@@ -111,24 +145,7 @@ def _unc_helical_rod(unc, scale=4.0):
     axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
     counts = [len(s.atoms.indices_from_symbol("X")) for s in unc.slots]
     nodes = [s for s in run.slots if counts[s] > 2]
-
-    images = _topology_slot_images(unc)
-    centers = np.array(
-        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in unc.slots]
-    )
-    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
-    steps: dict[int, list] = {i: [] for i in range(len(centers))}
-    for (a, b, v), _ in topology_quotient_edges(unc).items():
-        for u, w, sg in ((a, b, 1), (b, a, -1)):
-            off = sg * np.asarray(v, float)
-            disp = wrapped[w] + off @ cell - wrapped[u]
-            if np.linalg.norm(disp) > 1e-9:
-                steps[u].append((w, disp))
-    pos = {run.slots[0]: wrapped[run.slots[0]]}
-    cur = run.slots[0]
-    for nxt in run.slots[1:]:
-        pos[nxt] = pos[cur] + next(d for w, d in steps[cur] if w == nxt)
-        cur = nxt
+    pos, steps = _unwrapped_walk(unc, run)
 
     n0 = nodes[0]
     axis_pt = np.array(run.axis_point)
@@ -193,11 +210,7 @@ def _etb_helical_rod(etb, scale=6.0):
     from pymatgen.core.structure import Molecule
 
     from autografs.fragment import Fragment
-    from autografs.net import (
-        _topology_slot_images,
-        helical_runs,
-        topology_quotient_edges,
-    )
+    from autografs.net import helical_runs
     from autografs.rods import RodFragment
 
     cell = etb.cell.matrix
@@ -206,23 +219,7 @@ def _etb_helical_rod(etb, scale=6.0):
     plus = next(
         r for r in helical_runs(etb) if r.screw_order == 3 and r.screw_angle > 0
     )
-    images = _topology_slot_images(etb)
-    centers = np.array(
-        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in etb.slots]
-    )
-    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
-    steps: dict[int, list] = {i: [] for i in range(len(centers))}
-    for (a, b, v), _ in topology_quotient_edges(etb).items():
-        for u, w, sg in ((a, b, 1), (b, a, -1)):
-            off = sg * np.asarray(v, float)
-            disp = wrapped[w] + off @ cell - wrapped[u]
-            if np.linalg.norm(disp) > 1e-9:
-                steps[u].append((w, disp))
-    pos = {plus.slots[0]: wrapped[plus.slots[0]]}
-    cur = plus.slots[0]
-    for nxt in plus.slots[1:]:
-        pos[nxt] = pos[cur] + next(d for w, d in steps[cur] if w == nxt)
-        cur = nxt
+    pos, steps = _unwrapped_walk(etb, plus)
 
     n0 = next(s for s in plus.slots if counts[s] > 2)
     axis_pt = np.array(plus.axis_point)
@@ -270,6 +267,136 @@ def _etb_helical_rod(etb, scale=6.0):
         name="cc",
     )
     return rod, linker
+
+
+def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5):
+    """A rod plus *two* linker species hand-matched to etb-e (#168).
+
+    etb-e is etb's edge net: the same six 3_1 helices, but each helix
+    node is 4-connected and its lateral neighbours are 2-connected
+    decorations that carry on to a 4-connected linker (MOF-74's DOBDC
+    is exactly that tetratopic bridge). It is the smallest library net
+    that forces everything mixed mappings are for - two lateral
+    species, a polytopic lateral slot, and linker-to-linker bonds that
+    never touch the rod.
+
+    Geometry is solved from the blueprint so the build closes exactly:
+    every bonded pair of slots shares a dummy site, so putting each
+    anchor its own bond-budget back from that site along its arm makes
+    every anchor pair land one covalent bond apart at ``scale``. The
+    rod carries its lateral arms on their own atoms (``arm_atom`` from
+    the metal, as a real carboxylate carbon does), which is what leaves
+    the ditopic linker symmetric - an asymmetric one has no way to know
+    which end faces the rod.
+
+    Returns (rod, ditopic, tetratopic, ditopic slots, tetratopic slots).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import helical_runs
+    from autografs.rods import RodFragment
+
+    radius_c = 0.75  # Cordero covalent radius of carbon
+    cell = np.asarray(etbe.cell.matrix)
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in etbe.slots]
+    runs: dict[frozenset, object] = {}
+    for run in helical_runs(etbe):
+        runs.setdefault(frozenset(s for s in run.slots if counts[s] > 2), run)
+    plus = next(r for r in runs.values() if r.screw_angle > 0)
+    axis_hat = cell[2] / np.linalg.norm(cell[2])
+    pos, steps = _unwrapped_walk(etbe, plus)
+
+    run_slots = {s for run in runs.values() for s in run.slots}
+    n0 = next(s for s in plus.slots if counts[s] > 2)
+    axis_point = np.asarray(plus.axis_point)
+    rel0 = (pos[n0] - axis_point) - ((pos[n0] - axis_point) @ axis_hat) * axis_hat
+    radius = float(np.linalg.norm(rel0))
+    basis = np.array([rel0 / radius, np.cross(axis_hat, rel0 / radius), axis_hat])
+
+    # the node's lateral steps, in the rod's own cylindrical frame, and
+    # the blueprint arm length toward each (the shared dummy site)
+    _, node_arms = _slot_arms(etbe, n0)
+    lateral_units, lateral_lengths = [], []
+    for disp in (d for w, d in steps[n0] if w not in run_slots):
+        unit = disp / np.linalg.norm(disp)
+        arm = max(node_arms, key=lambda a: (a / np.linalg.norm(a)) @ unit)
+        lateral_units.append(unit @ basis.T)
+        lateral_lengths.append(float(np.linalg.norm(arm)))
+    lateral_units = np.array(lateral_units)
+
+    chemical = float(plus.period / plus.screw_order) * scale
+    half = np.radians(plus.screw_angle) / 2.0
+    metal = np.array([radius * scale, 0.0, 0.0])
+    bridge = np.array(
+        [
+            radius * scale * 0.45 * np.cos(half),
+            radius * scale * 0.45 * np.sin(half),
+            chemical / 2,
+        ]
+    )
+    positions = np.array(
+        [metal, bridge, *(metal + arm_atom * u for u in lateral_units)]
+    )
+    rod = RodFragment(
+        repeat=RodRepeat(
+            symbols=["Zn", "O", "C", "C"],
+            axial=positions[:, 2].copy(),
+            radial=np.linalg.norm(positions[:, :2], axis=1),
+            angular=np.arctan2(positions[:, 1], positions[:, 0]),
+            repeat_length=chemical,
+            screw_order=plus.screw_order,
+            screw_angle=float(plus.screw_angle),
+            n_connections=len(lateral_units),
+        ),
+        positions=positions,
+        arms=[
+            (2 + k, lateral_units[k] * (lateral_lengths[k] * scale - arm_atom))
+            for k in range(len(lateral_units))
+        ],
+        # -Zn-O- helix, plus one arm-bearing carbon per lateral arm
+        bonds=[(0, 1, 0), (1, 0, 1), (0, 2, 0), (0, 3, 0)],
+        name="rod_etbe",
+    )
+
+    laterals = [s for s in range(len(etbe.slots)) if s not in run_slots]
+    ditopic_slots = [s for s in laterals if counts[s] == 2]
+    tetratopic_slots = [s for s in laterals if counts[s] == 4]
+    arm_ditopic = float(np.linalg.norm(_slot_arms(etbe, ditopic_slots[0])[1][0]))
+    arm_tetratopic = float(np.linalg.norm(_slot_arms(etbe, tetratopic_slots[0])[1][0]))
+    # bond budgets along the chain rod -> ditopic -> tetratopic
+    span_ditopic = (
+        (np.mean(lateral_lengths) + arm_ditopic) * scale - 2 * radius_c - arm_atom
+    )
+    span_tetratopic = (
+        (arm_ditopic + arm_tetratopic) * scale - 2 * radius_c - span_ditopic
+    )
+    ditopic = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [
+                [-arm_ditopic * scale, 0, 0],
+                [-span_ditopic, 0, 0],
+                [span_ditopic, 0, 0],
+                [arm_ditopic * scale, 0, 0],
+            ],
+            site_properties={"tags": [0, 0, 0, 0]},
+        ),
+        name="dit",
+    )
+    _, tetratopic_arms = _slot_arms(etbe, tetratopic_slots[0])
+    units = tetratopic_arms / np.linalg.norm(tetratopic_arms, axis=1, keepdims=True)
+    tetratopic = Fragment(
+        atoms=Molecule(
+            ["C"] * (len(units) + 1) + ["X"] * len(units),
+            [np.zeros(3)]
+            + [u * span_tetratopic for u in units]
+            + [u * arm_tetratopic * scale for u in units],
+            site_properties={"tags": [0] * (2 * len(units) + 1)},
+        ),
+        name="tet",
+    )
+    return rod, ditopic, tetratopic, ditopic_slots, tetratopic_slots
 
 
 class TestPillarCanonicalization:
@@ -675,12 +802,14 @@ class TestRodForwardBuild:
         with pytest.raises(Exception, match="axial slot run"):
             build_rod_framework(mofgen.topologies["dia"], rod, linker)
 
-    def test_non_ditopic_linker_rejected(self, mofgen):
+    def test_linker_must_fit_its_slot(self, mofgen):
+        # polytopic linkers are allowed since #168, but the connection
+        # count still has to match the slot it is asked to fill
         from autografs.rod_build import build_rod_framework
 
         rod, _ = self._harvest(mofgen)
         node = mofgen.sbu["Zn_mof5_octahedral"]
-        with pytest.raises(Exception, match="ditopic"):
+        with pytest.raises(Exception, match="6 connection points"):
             build_rod_framework(mofgen.topologies["pcu"], rod, node)
 
 
@@ -891,6 +1020,119 @@ class TestCrossLinkedMultiRodBuild:
         # three helices of each hand -> three rods reflected, three not
         assert reflected.count(True) == 3
         assert reflected.count(False) == 3
+
+
+class TestMixedRodMappings:
+    """Mixed rod / finite mappings (#168). etb-e carries a rod run, a
+    ditopic lateral orbit *and* a tetratopic one whose linkers bond to
+    each other rather than to the rod - the shape every real rod MOF
+    turned out to need (MOF-74's DOBDC is 4-connected, and no library
+    net has polytopic laterals that touch only run nodes)."""
+
+    @pytest.fixture(scope="class")
+    def etbe_build(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        mapping = {s: ditopic for s in dit_slots} | {s: tetratopic for s in tet_slots}
+        return etbe, build_rod_framework(etbe, rod, mapping)
+
+    def test_builds_with_two_linker_species(self, etbe_build):
+        etbe, built = etbe_build
+        # six 3_1 -Zn-O(-C)2- rods of three repeats, 36 ditopic and 9
+        # tetratopic linkers
+        assert built.symbols.count("Zn") == 18
+        assert built.symbols.count("O") == 18
+        assert built.symbols.count("C") == 36 + 72 + 45
+        assert len(built.slots) == 6 * 3 + 36 + 9
+        assert set(built.slots.values()) == {"rod_etbe", "dit", "tet"}
+        assert sorted(built.graph) == list(range(len(built)))
+        # unlike the crowded etb fixture this one clears the default
+        # contact gate as built, no relaxation needed
+        assert built.min_contact() > 1.0
+
+    def test_realizes_the_blueprint_net(self, etbe_build):
+        from autografs.net import framework_quotient_edges, identify_net
+
+        etbe, built = etbe_build
+        built.verify_net(etbe)
+        matches = identify_net(framework_quotient_edges(built), {"etb-e": etbe})
+        assert matches == ["etb-e"]
+
+    def test_linkers_bond_to_each_other(self, etbe_build):
+        # the point of the generalized pairing: every ditopic linker
+        # bridges a rod and a *tetratopic linker*, so 36 of the bonds
+        # join two finite SBUs - bonds the old rod-to-linker bipartite
+        # matching could not make at all
+        _etbe, built = etbe_build
+        sbu = {n: d["sbu"] for n, d in built.graph.nodes(data=True)}
+        slot = {n: d["slot"] for n, d in built.graph.nodes(data=True)}
+        inter = [
+            frozenset((sbu[a], sbu[b]))
+            for a, b in built.graph.edges()
+            if slot[a] != slot[b]
+        ]
+        assert inter.count(frozenset({"dit", "tet"})) == 36
+        assert inter.count(frozenset({"rod_etbe", "dit"})) == 36
+        # the rod's own continuation is inter-slot too (repeat to repeat)
+        assert inter.count(frozenset({"rod_etbe"})) == 6 * 3
+
+    def test_mapping_can_be_keyed_by_slot_type(self, bundled_topologies):
+        # the same build addressed by orbit rather than slot index, as
+        # Autografs.build takes it
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        by_type = {}
+        for key, slots in etbe.mappings.items():
+            if set(slots) <= set(dit_slots):
+                by_type[key] = ditopic
+            elif set(slots) <= set(tet_slots):
+                by_type[key] = tetratopic
+        assert len(by_type) == 2
+        built = build_rod_framework(etbe, rod, by_type)
+        built.verify_net(etbe)
+
+    def test_uncovered_lateral_slot_rejected(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        partial = {s: ditopic for s in dit_slots[:-1]} | {
+            s: tetratopic for s in tet_slots
+        }
+        with pytest.raises(Exception, match="No linker given for lateral slot"):
+            build_rod_framework(etbe, rod, partial)
+
+    def test_run_slot_cannot_be_mapped(self, bundled_topologies):
+        from autografs.net import helical_runs
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        on_a_run = helical_runs(etbe)[0].slots[0]
+        mapping = (
+            {s: ditopic for s in dit_slots}
+            | {s: tetratopic for s in tet_slots}
+            | {on_a_run: ditopic}
+        )
+        with pytest.raises(Exception, match="not a lateral slot"):
+            build_rod_framework(etbe, rod, mapping)
+
+    def test_rod_arm_count_comes_from_run_membership(self, bundled_topologies):
+        # etb-e's node slots are 4-connected but the run consumes two of
+        # those connections, so the rod needs exactly two arms - not
+        # "degree - 2" by assumption but by counting the run's own edges
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        mapping = {s: ditopic for s in dit_slots} | {s: tetratopic for s in tet_slots}
+        rod.arms = rod.arms[:1]
+        with pytest.raises(Exception, match="expects 2 lateral connections"):
+            build_rod_framework(etbe, rod, mapping)
 
 
 class TestRodEditingGuards:
