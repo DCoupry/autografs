@@ -18,8 +18,13 @@ of rod deconstruction:
 - every non-run slot must be 2-connected, all taking one ditopic
   linker species.
 
-Multi-axis (woven) runs, cross-linked multi-rod nets (etb itself), and
-mixed SBU mappings stay future work.
+A *cross-linked multi-rod* net (etb / MOF-74 proper) passes **several**
+helical runs: one rod is placed on each of the net's interleaved
+helices (the enantiomer on the opposite-handedness runs — etb is
+centrosymmetric, three helices of each hand), and the ditopic linkers
+bridge *between* different rods rather than within one (#158).
+
+Multi-axis (woven) runs and mixed SBU mappings stay future work.
 
 What is structurally different from the finite-SBU pipeline:
 
@@ -93,6 +98,52 @@ def _slot_geometry(slot, blueprint: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return center @ inv, arms
 
 
+def _unwrapped_node_frac(topology: Topology, run: HelicalRun) -> np.ndarray:
+    """Fractional coord of a helical run's first node, unwrapped along
+    the run's own walk so it lies on the same cylinder as
+    ``run.axis_point``.
+
+    ``helical_runs`` derives ``axis_point`` from the *unwrapped* walk
+    (nodes accumulated step by step from ``run.slots[0]``); a node's
+    home-cell image can be a perpendicular-wrapped copy sitting well off
+    that cylinder, which would place the rod at the wrong radius and
+    azimuth. Walking the run the same way puts the reference node back on
+    the axis line's cylinder.
+    """
+    from autografs.net import _topology_slot_images, topology_quotient_edges
+
+    cell = np.asarray(topology.cell.matrix, dtype=float)
+    images = _topology_slot_images(topology)
+    centers = np.array(
+        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in topology.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+    steps: dict[int, list[tuple[int, np.ndarray]]] = {
+        i: [] for i in range(len(centers))
+    }
+    for (a, b, voltage), _count in topology_quotient_edges(topology).items():
+        for u, w, sign in ((a, b, 1), (b, a, -1)):
+            disp = (
+                wrapped[w]
+                + (sign * np.asarray(voltage, dtype=float)) @ cell
+                - wrapped[u]
+            )
+            if np.linalg.norm(disp) > 1e-9:
+                steps[u].append((w, disp))
+    pos = {run.slots[0]: wrapped[run.slots[0]]}
+    cur = run.slots[0]
+    for nxt in run.slots[1:]:
+        disp = next(d for w, d in steps[cur] if w == nxt)
+        pos[nxt] = pos[cur] + disp
+        cur = nxt
+    node0 = next(
+        s
+        for s in run.slots
+        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+    )
+    return np.asarray(pos[node0] @ np.linalg.inv(cell))
+
+
 def _linker_anchor_rows(linker: Fragment) -> list[int]:
     """The linker atom bonded through each dummy (nearest real atom)."""
     coords = np.asarray(linker.atoms.cart_coords)
@@ -115,7 +166,7 @@ class _RodBuild:
         topology: Topology,
         rod: RodFragment,
         linker: Fragment,
-        run: SlotRun | HelicalRun,
+        run: SlotRun | HelicalRun | list[SlotRun | HelicalRun],
     ) -> None:
         self.rod = rod
         self.linker = linker
@@ -125,15 +176,20 @@ class _RodBuild:
         # filled 1:1 by the rod's repeats - no supercell), and each
         # lateral slot takes exactly one linker. A straight run keeps
         # the original path: node at the axis, one period supercelled.
-        self.helical = isinstance(run, HelicalRun)
+        # A cross-linked *multi-rod* net (etb) passes several helical
+        # runs: one rod is placed on each, and the lateral linkers
+        # bridge between different rods (see rod_specs / evaluate).
+        self.runs = list(run) if isinstance(run, list) else [run]
+        primary = self.runs[0]
+        self.helical = isinstance(primary, HelicalRun)
         self.axis_point = (
-            np.asarray(run.axis_point, dtype=float)
-            if isinstance(run, HelicalRun)
+            np.asarray(primary.axis_point, dtype=float)
+            if isinstance(primary, HelicalRun)
             else None
         )
         blueprint = np.asarray(topology.cell.matrix, dtype=float)
         self.blueprint = blueprint
-        self.axis_index = int(np.argmax(np.abs(np.asarray(run.direction))))
+        self.axis_index = int(np.argmax(np.abs(np.asarray(primary.direction))))
         axis_row = blueprint[self.axis_index]
         self.axis_hat = axis_row / np.linalg.norm(axis_row)
         self.period = float(rod.repeat.repeat_length)
@@ -153,12 +209,14 @@ class _RodBuild:
         self.e1 = e1 / np.linalg.norm(e1)
         self.e2 = np.cross(self.axis_hat, self.e1)
 
-        node_slots = [
-            s
-            for s in run.slots
-            if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-        ]
-        self.node_slot_index = node_slots[0]
+        def _node_slots(a_run: SlotRun | HelicalRun) -> list[int]:
+            return [
+                s
+                for s in a_run.slots
+                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+            ]
+
+        self.node_slot_index = _node_slots(primary)[0]
         self.node_center_frac, node_arms = _slot_geometry(
             topology.slots[self.node_slot_index], blueprint
         )
@@ -168,8 +226,33 @@ class _RodBuild:
         units = node_arms / np.linalg.norm(node_arms, axis=1, keepdims=True)
         self.lateral_units = units[np.abs(units @ self.axis_hat) <= AXIAL_DOT]
 
+        # one placement spec per rod (per helical run): where its axis
+        # line sits, the fractional centre of its first node (fixes the
+        # azimuth + height its repeat 0 lands on), its signed screw, and
+        # whether the harvested rod must be reflected to match the run's
+        # handedness (etb hosts both hands; the enantiomer is a proper
+        # copy for an achiral metal-oxo rod).
+        self.rod_specs: list[dict] = []
+        if self.helical:
+            rod_sign = 1.0 if rod.repeat.screw_angle >= 0 else -1.0
+            for a_run in self.runs:
+                assert isinstance(a_run, HelicalRun)
+                self.rod_specs.append(
+                    {
+                        "axis_point": np.asarray(a_run.axis_point, dtype=float),
+                        # the reference node, unwrapped onto the run's own
+                        # cylinder (a home-cell image can sit off it)
+                        "node_frac": _unwrapped_node_frac(topology, a_run),
+                        "screw_rad": np.radians(a_run.screw_angle),
+                        "reflect": (1.0 if a_run.screw_angle >= 0 else -1.0)
+                        != rod_sign,
+                    }
+                )
+
+        # lateral (linker) slots: everything not claimed by *any* rod run
+        run_slots = {s for a_run in self.runs for s in a_run.slots}
         self.lateral_slot_indices = [
-            s for s in range(len(topology.slots)) if s not in run.slots
+            s for s in range(len(topology.slots)) if s not in run_slots
         ]
         self.lateral_centers = []
         self.lateral_arm_units = []
@@ -233,6 +316,19 @@ class _RodBuild:
         self._rod_radius = [_covalent_radius(symbol) for symbol in rod.repeat.symbols]
         self._arm_rows = [row for row, _ in rod.arms]
         self._arm_local = np.array([vec for _, vec in rod.arms])
+        # the enantiomer template + arms (reflect the local tangential
+        # axis y -> -y, i.e. azimuth -> -azimuth): placed on an
+        # opposite-handedness run, screwed by that run's negative angle,
+        # this reproduces the mirror helix - the bridging atoms land on
+        # the correct side (a straight/single-hand build never uses it)
+        self._reflect = np.array([1.0, -1.0, 1.0])
+        self._positions_reflected = self.rod.positions * self._reflect
+        self._arm_local_reflected = (
+            self._arm_local * self._reflect if len(self._arm_local) else self._arm_local
+        )
+        # rods placed this build: one per helical run (etb: several),
+        # a single rod otherwise
+        self.n_rods = len(self.rod_specs) if self.helical else 1
 
     # ------------------------------------------------------------------
     # parameterized geometry
@@ -276,53 +372,115 @@ class _RodBuild:
         n_atoms = len(self.rod.positions)
         cell_p = self._cell_one_period(scale)
         cell_full = self.cell(scale)
+
+        def screw_about(
+            points: np.ndarray, axis_point: np.ndarray, screw_rad: float, n: int
+        ) -> np.ndarray:
+            """The nth screw image about a given axis line: rotate the
+            perpendicular part of (points - axis_point) by n*screw, keep
+            the axial part, then translate n*period along the axis."""
+            rel = points - axis_point
+            axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
+            perp = rel - axial
+            if screw_rad:
+                perp = Rotation.from_rotvec(n * screw_rad * self.axis_hat).apply(perp)
+            return np.asarray(
+                axis_point + axial + perp + n * self.period * self.axis_hat
+            )
+
+        arms: list[tuple[int, np.ndarray]] = []
         if self.helical:
-            # the screw axis is the run's fixed line (offset from the
-            # nodes); its perpendicular position scales with the cell
-            assert self.axis_point is not None
-            line_perp = self.axis_point * scale
+            # one rod per helical run: place its repeat 0 at that run's
+            # first node (azimuth + height), reflected to the run's
+            # handedness, then screw n_repeats copies about the run's own
+            # axis line. Lateral linkers are placed once (not screwed).
             linker_cell = cell_full
+            rod_positions = np.empty(
+                (len(self.rod_specs) * self.n_repeats * n_atoms, 3)
+            )
+            for ri, spec in enumerate(self.rod_specs):
+                axis_point = spec["axis_point"] * scale
+                node_cart = spec["node_frac"] @ cell_full
+                rel = node_cart - axis_point
+                phi0 = float(np.arctan2(rel @ self.e2, rel @ self.e1))
+                z_node = float(node_cart @ self.axis_hat)
+                template = (
+                    self._positions_reflected if spec["reflect"] else self.rod.positions
+                )
+                arm_local = (
+                    self._arm_local_reflected if spec["reflect"] else self._arm_local
+                )
+                screw_rad = spec["screw_rad"]
+                rod0 = self._embed(template, phi0 + theta) + (
+                    axis_point + (z_node + z0) * self.axis_hat
+                )
+                arm_vec0 = (
+                    self._embed(arm_local, phi0 + theta)
+                    if len(arm_local)
+                    else np.empty((0, 3))
+                )
+                base = ri * self.n_repeats * n_atoms
+                for n in range(self.n_repeats):
+                    start = base + n * n_atoms
+                    rod_positions[start : start + n_atoms] = screw_about(
+                        rod0, axis_point, screw_rad, n
+                    )
+                    arm_vec_n = (
+                        Rotation.from_rotvec(n * screw_rad * self.axis_hat).apply(
+                            arm_vec0
+                        )
+                        if screw_rad and len(arm_vec0)
+                        else arm_vec0
+                    )
+                    for k, row in enumerate(self._arm_rows):
+                        arms.append(
+                            (start + row, rod_positions[start + row] + arm_vec_n[k])
+                        )
+
+            def screw(points: np.ndarray, n: int) -> np.ndarray:
+                return points  # helical linkers are placed once, unscrewed
         else:
             line = self.node_center_frac @ cell_p
             line_perp = line - (line @ self.axis_hat) * self.axis_hat
             linker_cell = cell_p
 
-        def screw(points: np.ndarray, n: int) -> np.ndarray:
-            """The nth screw image about the rod axis line: rotate the
-            perpendicular part of (points - line_perp) by n*screw, keep
-            the axial part, then translate n*period along the axis. For
-            a straight rod (screw 0) this is pure translation."""
-            rel = points - line_perp
-            axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
-            perp = rel - axial
-            if self.screw_rad:
-                perp = Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(
-                    perp
+            def screw(points: np.ndarray, n: int) -> np.ndarray:
+                """The nth screw image about the rod axis line (pure
+                translation for a straight rod, screw 0)."""
+                rel = points - line_perp
+                axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
+                perp = rel - axial
+                if self.screw_rad:
+                    perp = Rotation.from_rotvec(
+                        n * self.screw_rad * self.axis_hat
+                    ).apply(perp)
+                return np.asarray(
+                    line_perp + axial + perp + n * self.period * self.axis_hat
                 )
-            return np.asarray(
-                line_perp + axial + perp + n * self.period * self.axis_hat
-            )
 
-        # repeat 0: rod atoms in place; arm vectors as free vectors
-        # (rod atom -> cut midpoint), rotated with the screw per repeat
-        rod0 = self._embed(self.rod.positions, theta) + (line_perp + z0 * self.axis_hat)
-        arm_vec0 = (
-            self._embed(self._arm_local, theta)
-            if len(self._arm_local)
-            else np.empty((0, 3))
-        )
-        rod_positions = np.empty((self.n_repeats * n_atoms, 3))
-        arms: list[tuple[int, np.ndarray]] = []
-        for n in range(self.n_repeats):
-            start = n * n_atoms
-            rod_positions[start : start + n_atoms] = screw(rod0, n)
-            arm_vec_n = (
-                Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(arm_vec0)
-                if self.screw_rad and len(arm_vec0)
-                else arm_vec0
+            rod0 = self._embed(self.rod.positions, theta) + (
+                line_perp + z0 * self.axis_hat
             )
-            for k, row in enumerate(self._arm_rows):
-                arms.append((start + row, rod_positions[start + row] + arm_vec_n[k]))
+            arm_vec0 = (
+                self._embed(self._arm_local, theta)
+                if len(self._arm_local)
+                else np.empty((0, 3))
+            )
+            rod_positions = np.empty((self.n_repeats * n_atoms, 3))
+            for n in range(self.n_repeats):
+                start = n * n_atoms
+                rod_positions[start : start + n_atoms] = screw(rod0, n)
+                arm_vec_n = (
+                    Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(
+                        arm_vec0
+                    )
+                    if self.screw_rad and len(arm_vec0)
+                    else arm_vec0
+                )
+                for k, row in enumerate(self._arm_rows):
+                    arms.append(
+                        (start + row, rod_positions[start + row] + arm_vec_n[k])
+                    )
 
         placements = []
         for slot_pos, (center_frac, slot_units) in enumerate(
@@ -402,34 +560,54 @@ class _RodBuild:
 
     def initial_guess(self) -> np.ndarray:
         """(scale, theta, z0) heuristics good enough for Nelder-Mead."""
-        # scale: lateral node-to-node distance should fit two rod arms
-        # plus the linker span between its dummies
-        center_cart = self.node_center_frac @ self.blueprint
-        lateral_center = self.lateral_centers[0] @ self.blueprint
-        blueprint_half = np.linalg.norm(
-            lateral_center
-            - center_cart
-            - ((lateral_center - center_cart) @ self.axis_hat) * self.axis_hat
-        )
-        arm_length = (
-            float(np.linalg.norm(self._arm_local, axis=1).mean())
-            if len(self._arm_local)
-            else 1.0
-        )
-        wanted = 2.0 * arm_length + self.linker_dummy_span
-        scale0 = (
-            float(wanted / (2.0 * blueprint_half)) if blueprint_half > 1e-9 else 1.0
-        )
-        # z0: put the mean arm-carrying atom at the node center height.
-        # A helical run's node fraction is in the full period; a
-        # straight one's node is in the (supercelled) single period.
-        node_cell = self.cell(scale0) if self.helical else self._cell_one_period(scale0)
-        z_node = float((self.node_center_frac @ node_cell) @ self.axis_hat)
+        if self.helical:
+            # scale: the rod sits on the run's cylinder, so match the
+            # rod's own radius to the (unscaled) blueprint node radius
+            spec = self.rod_specs[0]
+            node0 = spec["node_frac"] @ self.blueprint
+            rel = node0 - spec["axis_point"]
+            node_radius = float(
+                np.linalg.norm(rel - (rel @ self.axis_hat) * self.axis_hat)
+            )
+            rod_radius = (
+                float(np.linalg.norm(self.rod.positions[self._arm_rows[0]][:2]))
+                if self._arm_rows
+                else float(np.linalg.norm(self.rod.positions[0][:2]))
+            )
+            scale0 = rod_radius / node_radius if node_radius > 1e-9 else 1.0
+        else:
+            # scale: lateral node-to-node distance should fit two rod arms
+            # plus the linker span between its dummies
+            center_cart = self.node_center_frac @ self.blueprint
+            lateral_center = self.lateral_centers[0] @ self.blueprint
+            blueprint_half = np.linalg.norm(
+                lateral_center
+                - center_cart
+                - ((lateral_center - center_cart) @ self.axis_hat) * self.axis_hat
+            )
+            arm_length = (
+                float(np.linalg.norm(self._arm_local, axis=1).mean())
+                if len(self._arm_local)
+                else 1.0
+            )
+            wanted = 2.0 * arm_length + self.linker_dummy_span
+            scale0 = (
+                float(wanted / (2.0 * blueprint_half)) if blueprint_half > 1e-9 else 1.0
+            )
+        # z0: put the mean arm-carrying atom at the node height. For a
+        # helical run z0 is an *offset* from each rod's own node axial
+        # (added per spec in evaluate), so it starts near -z_arms; a
+        # straight run places the rod absolutely, so z0 carries the whole
+        # node height (in the supercelled single period).
         z_arms = (
             float(np.mean([self.rod.positions[row][2] for row in self._arm_rows]))
             if self._arm_rows
             else 0.0
         )
+        if self.helical:
+            return np.array([scale0, 0.0, -z_arms])
+        cell_p = self._cell_one_period(scale0)
+        z_node = float((self.node_center_frac @ cell_p) @ self.axis_hat)
         return np.array([scale0, 0.0, z_node - z_arms])
 
     def min_inter_unit_contact(self, placed: dict) -> float:
@@ -445,7 +623,16 @@ class _RodBuild:
         inv = np.linalg.inv(cell)
         n_atoms = len(self.rod.positions)
         coords = [placed["rod_positions"]]
-        labels = [np.full(self.n_repeats * n_atoms, -1)]
+        # each rod is its own unit (a bond within a rod is rigid); in a
+        # multi-rod net different rods can clash, so label them apart
+        labels = [
+            np.concatenate(
+                [
+                    np.full(self.n_repeats * n_atoms, -(ri + 1))
+                    for ri in range(self.n_rods)
+                ]
+            )
+        ]
         for p_index, placement in enumerate(placed["placements"]):
             reals = placement["coords"][self.linker_real_rows]
             coords.append(reals)
@@ -487,27 +674,43 @@ def _typed_repeat_molgraph(build: _RodBuild, result: dict):
     return fragment_to_molgraph(Fragment(atoms=molecule, name=build.rod.name))
 
 
-def _select_run(
+def _select_runs(
     topology: Topology, rod: RodFragment, rod_is_helical: bool
-) -> SlotRun | HelicalRun:
-    """Pick the run a rod occupies: a helical run matching the rod's
-    screw for a helical rod, else the first straight axial run.
+) -> list[SlotRun | HelicalRun]:
+    """The run(s) a rod occupies.
 
-    Symmetry-equivalent runs give equivalent frameworks, so the first
-    match is as good as any. A helical run must agree with the rod on
-    both node count (``screw_order``) and *signed* rotation - helicity
-    is chiral, so a left-handed screw never hosts a right-handed rod.
+    A straight rod takes one straight axial run. A helical rod takes
+    *every* helical run whose screw matches the rod's - one distinct run
+    per interleaved helix (etb has six, three of each hand). Runs are
+    matched on node count (``screw_order``) and screw *magnitude*; the
+    sign is handled per rod (an opposite-hand run hosts the reflected
+    rod), so a centrosymmetric net with both hands is filled from one
+    harvested rod. Runs are deduplicated by their node set, since
+    ``helical_runs`` reports a helix once per starting node.
     """
     if rod_is_helical:
-        matches = [
-            run
-            for run in helical_runs(topology)
-            if run.screw_order == rod.repeat.screw_order
-            and abs((run.screw_angle - rod.repeat.screw_angle + 180.0) % 360.0 - 180.0)
-            <= 5.0
-        ]
+
+        def _nodeset(a_run: HelicalRun) -> frozenset[int]:
+            return frozenset(
+                s
+                for s in a_run.slots
+                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+            )
+
+        seen: set[frozenset[int]] = set()
+        matches: list[SlotRun | HelicalRun] = []
+        for a_run in helical_runs(topology):
+            if a_run.screw_order != rod.repeat.screw_order:
+                continue
+            if abs(abs(a_run.screw_angle) - abs(rod.repeat.screw_angle)) > 5.0:
+                continue
+            ns = _nodeset(a_run)
+            if ns in seen:
+                continue
+            seen.add(ns)
+            matches.append(a_run)
         if matches:
-            return matches[0]
+            return matches
         # no matching helical run: a 2_1 (180 deg) screw still builds on
         # a straight run - a ditopic linker's arm sign-flip is a no-op,
         # so pcu hosts it - while a higher screw would fail the closure
@@ -518,7 +721,7 @@ def _select_run(
             f"Topology {topology.name!r} has no straight axial slot run "
             "(nor a matching helical one); rod building needs one."
         )
-    return runs[0]
+    return [runs[0]]
 
 
 def build_rod_framework(
@@ -597,42 +800,46 @@ def build_rod_framework(
     rod_is_helical = (
         rod.repeat.screw_order > 1 and abs(rod.repeat.screw_angle) > STRAIGHT_SCREW_TOL
     )
-    if run is None:
-        run = _select_run(topology, rod, rod_is_helical)
-    direction = np.asarray(run.direction)
-    if sorted(np.abs(direction).tolist()) != [0, 0, 1]:
-        raise AlignmentError(
-            "Rod building supports runs along a single cell axis for "
-            f"now (got direction {run.direction})."
+    runs = [run] if run is not None else _select_runs(topology, rod, rod_is_helical)
+    for a_run in runs:
+        direction = np.asarray(a_run.direction)
+        if sorted(np.abs(direction).tolist()) != [0, 0, 1]:
+            raise AlignmentError(
+                "Rod building supports runs along a single cell axis for "
+                f"now (got direction {a_run.direction})."
+            )
+        node_slots = [
+            s
+            for s in a_run.slots
+            if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        ]
+        # a straight run has one PoE-bearing node per period; a helical
+        # run has screw_order of them, filled 1:1 by the rod's repeats
+        expected_nodes = a_run.screw_order if isinstance(a_run, HelicalRun) else 1
+        if len(node_slots) != expected_nodes:
+            raise AlignmentError(
+                f"Rod building expects {expected_nodes} PoE-bearing node "
+                f"slot(s) on this run but found {len(node_slots)}."
+            )
+        node_arm_count = len(
+            topology.slots[node_slots[0]].atoms.indices_from_symbol("X")
         )
-    node_slots = [
-        s
-        for s in run.slots
-        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-    ]
-    # a straight run has one PoE-bearing node per period; a helical run
-    # has screw_order of them, filled 1:1 by the rod's chemical repeats
-    expected_nodes = run.screw_order if isinstance(run, HelicalRun) else 1
-    if len(node_slots) != expected_nodes:
-        raise AlignmentError(
-            f"Rod building expects {expected_nodes} PoE-bearing node "
-            f"slot(s) on this run but found {len(node_slots)}."
-        )
-    lateral_slots = [s for s in range(len(topology.slots)) if s not in run.slots]
+        if len(rod.arms) != node_arm_count - 2:
+            raise AlignmentError(
+                f"Rod {rod.name!r} carries {len(rod.arms)} arms per repeat "
+                f"but the run's node slot expects {node_arm_count - 2} "
+                "lateral connections."
+            )
+    # lateral (linker) slots are whatever no rod run claims; all ditopic
+    run_slots = {s for a_run in runs for s in a_run.slots}
+    lateral_slots = [s for s in range(len(topology.slots)) if s not in run_slots]
     for s in lateral_slots:
         if len(topology.slots[s].atoms.indices_from_symbol("X")) != 2:
             raise AlignmentError(
                 f"Every non-run slot must be 2-connected for now (slot {s} is not)."
             )
-    node_arm_count = len(topology.slots[node_slots[0]].atoms.indices_from_symbol("X"))
-    if len(rod.arms) != node_arm_count - 2:
-        raise AlignmentError(
-            f"Rod {rod.name!r} carries {len(rod.arms)} arms per repeat "
-            f"but the run's node slot expects {node_arm_count - 2} "
-            "lateral connections."
-        )
 
-    build = _RodBuild(topology, rod, linker, run)
+    build = _RodBuild(topology, rod, linker, runs if len(runs) > 1 else runs[0])
 
     # optimize: coarse rotation grid, refine the best with Nelder-Mead
     guess = build.initial_guess()
@@ -737,29 +944,36 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
     graph = networkx.Graph(cell=result["cell"], rod_build=True)
     n_atoms = len(build.rod.positions)
 
-    # rod atoms: typed once on the first repeat, replicated
+    # rod atoms: typed once on the first repeat, replicated across every
+    # repeat of every rod (a multi-rod net places one rod per helical
+    # run; each rod-repeat is its own slot so verify_net can tell them
+    # apart). Global atom ids match result["rod_positions"] indices, so
+    # the optimizer's matching (which uses those) wires up directly.
     rod_molgraph = _typed_repeat_molgraph(build, result)
     rod_types = [rod_molgraph.molecule[i].properties["ufftype"] for i in range(n_atoms)]
-    for n in range(build.n_repeats):
-        start = n * n_atoms
-        for i in range(n_atoms):
-            graph.add_node(
-                start + i,
-                symbol=build.rod.repeat.symbols[i],
-                coord=result["rod_positions"][start + i],
-                tag=0,
-                ufftype=rod_types[i],
-                slot=n,
-                sbu=build.rod.name,
-            )
-    for n in range(build.n_repeats):
-        start = n * n_atoms
-        for a, b, m in build.rod.bonds:
-            partner_start = ((n + m) % build.n_repeats) * n_atoms
-            graph.add_edge(start + a, partner_start + b, bond_order=1.0)
+    per_rod = build.n_repeats * n_atoms
+    for ri in range(build.n_rods):
+        for n in range(build.n_repeats):
+            start = ri * per_rod + n * n_atoms
+            for i in range(n_atoms):
+                graph.add_node(
+                    start + i,
+                    symbol=build.rod.repeat.symbols[i],
+                    coord=result["rod_positions"][start + i],
+                    tag=0,
+                    ufftype=rod_types[i],
+                    slot=ri * build.n_repeats + n,
+                    sbu=build.rod.name,
+                )
+    for ri in range(build.n_rods):
+        for n in range(build.n_repeats):
+            start = ri * per_rod + n * n_atoms
+            for a, b, m in build.rod.bonds:
+                partner_start = ri * per_rod + ((n + m) % build.n_repeats) * n_atoms
+                graph.add_edge(start + a, partner_start + b, bond_order=1.0)
 
     # linkers: one molgraph per placement for types, bonds and orders
-    offset = build.n_repeats * n_atoms
+    offset = build.n_rods * per_rod
     anchor_nodes: list[dict[int, int]] = []
     for p_index in range(len(result["placements"])):
         molgraph = _placed_linker_molgraph(build, p_index, result)
@@ -774,7 +988,7 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
                 coord=np.asarray(molecule[i].coords),
                 tag=0,
                 ufftype=molecule[i].properties["ufftype"],
-                slot=build.n_repeats + p_index,
+                slot=build.n_rods * build.n_repeats + p_index,
                 sbu=build.linker.name,
             )
             row_to_node[i] = offset + i

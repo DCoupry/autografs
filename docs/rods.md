@@ -167,6 +167,27 @@ mof.min_contact()                        # a clean, un-clashed structure
 mofgen.deconstruct(mof.structure).net_candidates   # ['unc'] — the same net
 ```
 
+### Cross-linked multi-rod nets (etb / MOF-74 proper)
+
+MOF-74's own net, `etb`, is not a single helix but **six interleaved 3₁
+helices** per cell, joined by ditopic linkers that bridge one helix to
+another. `build_rod` handles this directly: it finds every helical run,
+places one rod on each helix, and lets the linkers cross-link them. Two
+things make it work from a *single* harvested rod:
+
+- **Both handednesses.** `etb` is centrosymmetric — three helices spiral
+  each way. The opposite-hand helices are filled with the rod's
+  **enantiomer** (a reflection of the template), which is a proper copy
+  for an achiral metal-oxo rod, so one harvested rod fills all six.
+- **The linkers bridge rods, not repeats.** Every non-run slot is a
+  ditopic linker connecting a node on one helix to a node on another;
+  the optimizer's global arm↔anchor matching wires them across rods.
+
+A −Zn–O− rod built on `etb` gives six cross-linked helices that
+`verify_net(etb)` accepts and that identify as `etb`. (The idealized net
+is small, so a synthetic rod crowds it — `relax()` cleans the packing;
+the topology is exact.)
+
 ### Verifying the built net
 
 Passing `verify_net=True` (or calling `mof.verify_net(topology)` after
@@ -191,13 +212,11 @@ rod MOF, edit the linkers of the source structure and rebuild. See
 
 ## Scope & limitations
 
-Rod building currently covers single-axis runs with one rod species per
-run. **Cross-linked multi-rod nets** — where several interleaved helices
-share the same linkers, `etb` (MOF-74) itself being the canonical example
-— and mixed rod/finite mappings are future work: detection
-(`helical_runs`) and single-helix building (validated on `unc`) are in
-place, but the general multi-rod placement is not yet. Detection is also
-deliberately conservative about 2D layer nets (an in-plane zig-zag is not
+Rod building covers single-axis runs — straight, single-helix, and
+cross-linked multi-rod (`etb`) — with one rod species per net. Mixed
+rod/finite mappings (a rod net that also needs finite SBUs on some
+slots) and multi-axis "woven" rod packings are future work. Detection is
+also deliberately conservative about 2D layer nets (an in-plane zig-zag is not
 a 3D rod channel and is skipped).
 
 For the reverse direction and the rest of the inverse pipeline, see
