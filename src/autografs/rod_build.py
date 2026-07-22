@@ -254,33 +254,42 @@ def _species_of(linker: Fragment) -> _Species:
 
 
 def _pair_ports(
-    tips: np.ndarray, units: np.ndarray, cell: np.ndarray, inv: np.ndarray
+    tips: np.ndarray,
+    port_slot: np.ndarray,
+    budget: dict[tuple[int, int], int],
+    cell: np.ndarray,
+    inv: np.ndarray,
 ) -> np.ndarray:
-    """Pair every connection point with the nearest available partner.
+    """Pair every connection point with its nearest legitimate partner.
 
     Ports are the build's half-bonds - rod arm tips and SBU dummies -
-    and each pairs with exactly one other port belonging to a *different*
-    building unit. Pairing is greedy over ascending min-image separation:
-    a general min-weight perfect matching would be optimal but far too
-    slow inside the optimizer loop, and the blueprint puts the intended
-    partners nearest by a wide margin (a mispairing shows up as a large
-    residual, and the closure gate rejects it).
+    and each pairs with exactly one other. *Which* slots may bond is the
+    blueprint's business, not geometry's: ``budget`` carries one entry
+    per bonded slot pair of the blueprint's rod form, with the number of
+    bonds it expects. Geometry only decides which individual ports (and
+    hence which periodic images) realize them, greedily by ascending
+    min-image separation.
 
-    Greedy alone can paint itself into a corner - pair two linkers with
-    each other and leave a rod's arms with nothing to bond to - so a
-    candidate is only accepted while the *rest* can still pair up. Ports
-    form a complete multipartite graph (everything but same-unit pairs),
-    which has a perfect matching exactly when no unit holds more than
-    half the free ports, so the guard is one comparison per candidate.
-    It is a real constraint, not just a safety net: a rod carrying half
-    the ports forces every bond to be a rod bond.
+    Letting geometry choose the partners too - the obvious "pair whatever
+    is nearest" - is not good enough: the objective landscape over the
+    cell scale is then multi-modal, and its *global* minimum can be a
+    spurious pairing at a badly inflated cell, where unrelated ports
+    happen to meet. Spending the blueprint's budget instead makes the
+    built edge multiset equal the blueprint's by construction, so those
+    minima do not exist and a wrong cell simply reads as a large residual.
+
+    The budgets also make the matching complete for free: every slot's
+    budgets sum to its port count, so ports run out exactly when budgets
+    do.
 
     Parameters
     ----------
     tips : np.ndarray
         (p, 3) cartesian port positions.
-    units : np.ndarray
-        (p,) building-unit id per port; same-unit ports never pair.
+    port_slot : np.ndarray
+        (p,) blueprint slot each port belongs to.
+    budget : dict
+        (slot_a, slot_b) with slot_a <= slot_b -> number of bonds.
     cell, inv : np.ndarray
         The (3, 3) cell matrix and its inverse.
 
@@ -292,8 +301,9 @@ def _pair_ports(
     Raises
     ------
     AlignmentError
-        If the port count is odd, or one building unit carries more than
-        half of all connection points (no pairing exists at all).
+        If the port count is odd, or the budgets and the ports do not
+        add up (the rod and the linkers do not cover the blueprint's
+        connectivity).
     """
     n_ports = len(tips)
     if n_ports % 2:
@@ -302,47 +312,47 @@ def _pair_ports(
             "cannot pair up. Check the rod's arms against the run's node "
             "slots and each linker against its slot."
         )
-    labels = np.unique(units, return_inverse=True)[1]
-    counts = np.bincount(labels)
-    if 2 * int(counts.max()) > n_ports:
+    if sum(budget.values()) * 2 != n_ports:
         raise AlignmentError(
-            f"One building unit carries {int(counts.max())} of the build's "
-            f"{n_ports} connection points; they cannot all bond to another "
-            "unit. The rod and the linkers do not cover this blueprint's "
-            "connectivity."
+            f"The blueprint expects {sum(budget.values())} inter-unit bonds "
+            f"but the rod and the linkers bring {n_ports} connection points "
+            f"({n_ports // 2} bonds); they do not cover its connectivity."
         )
-    delta = tips[:, None, :] - tips[None, :, :]
+    rows, cols = np.triu_indices(n_ports, k=1)
+    slot_a = np.minimum(port_slot[rows], port_slot[cols])
+    slot_b = np.maximum(port_slot[rows], port_slot[cols])
+    allowed = np.array(
+        [(int(a), int(b)) in budget for a, b in zip(slot_a, slot_b, strict=True)]
+    )
+    rows, cols = rows[allowed], cols[allowed]
+    delta = tips[rows] - tips[cols]
     frac = delta @ inv
     frac -= np.round(frac)
-    distance = np.linalg.norm(frac @ cell, axis=2)
-    rows, cols = np.triu_indices(n_ports, k=1)
-    allowed = labels[rows] != labels[cols]
-    rows, cols = rows[allowed], cols[allowed]
-    order = np.argsort(distance[rows, cols], kind="stable")
+    distance = np.linalg.norm(frac @ cell, axis=1)
+    order = np.argsort(distance, kind="stable")
     free = np.ones(n_ports, dtype=bool)
-    remaining = n_ports
-    largest = int(counts.max())
+    remaining = dict(budget)
     pairs: list[tuple[int, int]] = []
     for index in order:
         i, j = int(rows[index]), int(cols[index])
         if not (free[i] and free[j]):
             continue
-        unit_i, unit_j = labels[i], labels[j]
-        counts[unit_i] -= 1
-        counts[unit_j] -= 1
-        # only the units just emptied by one can have been the largest
-        shrunk = counts[unit_i] + 1 == largest or counts[unit_j] + 1 == largest
-        new_largest = int(counts.max()) if shrunk else largest
-        if 2 * new_largest > remaining - 2:
-            counts[unit_i] += 1  # this pair would strand another unit
-            counts[unit_j] += 1
+        key = (
+            int(min(port_slot[i], port_slot[j])),
+            int(max(port_slot[i], port_slot[j])),
+        )
+        if not remaining[key]:
             continue
+        remaining[key] -= 1
         free[i] = free[j] = False
-        remaining -= 2
-        largest = new_largest
         pairs.append((i, j))
-        if not remaining:
+        if len(pairs) * 2 == n_ports:
             break
+    if len(pairs) * 2 != n_ports:  # pragma: no cover - the counts rule it out
+        raise AlignmentError(
+            f"{int(free.sum())} of {n_ports} connection points found no "
+            "partner allowed by the blueprint."
+        )
     return np.asarray(pairs)
 
 
@@ -365,7 +375,7 @@ class _RodBuild:
         self,
         topology: Topology,
         rod: RodFragment,
-        linkers: Fragment | dict[int, Fragment],
+        linkers: Fragment | dict[int, Fragment | None],
         run: SlotRun | HelicalRun | list[SlotRun | HelicalRun],
     ) -> None:
         self.rod = rod
@@ -445,7 +455,8 @@ class _RodBuild:
 
         # lateral (linker) slots: everything not claimed by *any* rod run.
         # Each takes its own SBU species - one uniform ditopic linker is
-        # just the common case (#168) - of any connectivity.
+        # just the common case (#168) - of any connectivity, or None to
+        # leave the slot empty so its neighbours bond directly.
         run_slots = {s for a_run in self.runs for s in a_run.slots}
         self.lateral_slot_indices = [
             s for s in range(len(topology.slots)) if s not in run_slots
@@ -455,11 +466,14 @@ class _RodBuild:
             if isinstance(linkers, dict)
             else dict.fromkeys(self.lateral_slot_indices, linkers)
         )
+        self.empty_slots = [s for s in self.lateral_slot_indices if per_slot[s] is None]
         self.species: list[_Species] = []
         species_index: dict[int, int] = {}  # id(fragment) -> species index
         self.lateral: list[_Lateral] = []
         for s in self.lateral_slot_indices:
             fragment = per_slot[s]
+            if fragment is None:
+                continue
             key = id(fragment)
             if key not in species_index:
                 species_index[key] = len(self.species)
@@ -524,6 +538,54 @@ class _RodBuild:
         # rods placed this build: one per helical run (etb: several),
         # a single rod otherwise
         self.n_rods = len(self.rod_specs) if self.helical else 1
+
+        # which blueprint node slot each rod repeat sits on: a helical
+        # run's nodes are screw images of one another in walk order, so
+        # repeat n fills the nth; a straight run reuses one node slot for
+        # every repeat of its supercell
+        self.repeat_slot: list[list[int]] = []
+        for a_run in self.runs:
+            nodes = [
+                s
+                for s in a_run.slots
+                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+            ]
+            self.repeat_slot.append(
+                nodes if self.helical else [nodes[0]] * self.n_repeats
+            )
+        self.port_budget = self._port_budget(topology)
+
+    def _port_budget(self, topology: Topology) -> dict[tuple[int, int], int]:
+        """How many bonds the blueprint expects between each slot pair.
+
+        Read off the blueprint's rod form - the runs' axial edge centers
+        and any emptied lateral slot already contracted away - minus the
+        edges that are the rods' *own* continuation (a node bonding
+        along its own run is an internal rod bond, not a connection
+        point). Multiplied by the number of copies a straight run's
+        supercell lays down.
+        """
+        from autografs.net import topology_rod_quotient_edges
+
+        run_of_node = {
+            slot: index
+            for index, slots in enumerate(self.repeat_slot)
+            for slot in slots
+        }
+        budget: dict[tuple[int, int], int] = {}
+        contracted = topology_rod_quotient_edges(
+            topology, list(self.runs), self.empty_slots
+        )
+        for (slot_a, slot_b, _voltage), count in contracted.items():
+            if (
+                slot_a in run_of_node
+                and slot_b in run_of_node
+                and run_of_node[slot_a] == run_of_node[slot_b]
+            ):
+                continue  # the rod's own continuation
+            key = (min(slot_a, slot_b), max(slot_a, slot_b))
+            budget[key] = budget.get(key, 0) + count * self.linker_copies
+        return budget
 
     # ------------------------------------------------------------------
     # parameterized geometry
@@ -718,9 +780,12 @@ class _RodBuild:
         tips = [tip for _, tip in arms]
         anchors = [rod_positions[atom_index] for atom_index, _ in arms]
         radii = [self._rod_radius[atom_index % n_atoms] for atom_index, _ in arms]
-        # unit id: rods are negative (each rod is one unit, whatever the
-        # repeat), linker placements take their own index
-        units = [-1 - atom_index // per_rod for atom_index, _ in arms]
+        # the blueprint slot behind each port: the node slot this rod
+        # repeat fills, or the lateral slot this linker sits on
+        slots = [
+            self.repeat_slot[atom_index // per_rod][(atom_index % per_rod) // n_atoms]
+            for atom_index, _ in arms
+        ]
         owners: list[tuple[int, ...]] = [
             (_ROD_PORT, atom_index) for atom_index, _ in arms
         ]
@@ -732,12 +797,14 @@ class _RodBuild:
                 tips.append(coords[dummy_row])
                 anchors.append(coords[anchor_row])
                 radii.append(float(species.anchor_radii[k]))
-                units.append(p_index)
+                slots.append(placement["slot"])
                 owners.append((_LINKER_PORT, p_index, anchor_row))
-        if not arms or len(tips) == len(arms):
+        if not arms:
             raise AlignmentError("Rod build has no connectable arms.")
 
-        pairs = _pair_ports(np.asarray(tips), np.asarray(units), cell, inv)
+        pairs = _pair_ports(
+            np.asarray(tips), np.asarray(slots), self.port_budget, cell, inv
+        )
         left, right = pairs[:, 0], pairs[:, 1]
         anchor_array = np.asarray(anchors)
         delta = (anchor_array[left] - anchor_array[right]) @ inv
@@ -778,6 +845,8 @@ class _RodBuild:
                 else float(np.linalg.norm(self.rod.positions[0][:2]))
             )
             scale0 = rod_radius / node_radius if node_radius > 1e-9 else 1.0
+        elif not self.lateral:
+            scale0 = 1.0  # nothing but the rod: the closure gate decides
         else:
             # scale: lateral node-to-node distance should fit two rod arms
             # plus the linker span between its dummies
@@ -976,9 +1045,9 @@ def _slot_adjacency(topology: Topology) -> dict[int, list[int]]:
 
 def _validate_linkers(
     topology: Topology,
-    linkers: Fragment | dict[Fragment | int, Fragment],
+    linkers: Fragment | dict[Fragment | int, Fragment | None],
     lateral_slots: list[int],
-) -> Fragment | dict[int, Fragment]:
+) -> Fragment | dict[int, Fragment | None]:
     """Normalize the lateral SBU mapping to one fragment per slot.
 
     Accepts a single Fragment (every lateral slot takes it - the common
@@ -986,11 +1055,19 @@ def _validate_linkers(
     key, covering a whole orbit) or by plain slot index, as
     ``Autografs.build`` does. Only the *lateral* slots need covering:
     the run slots are the rod's.
+
+    A slot may be mapped to ``None``, which leaves it **empty**: nothing
+    is placed and its two neighbours bond to each other directly. Real
+    rod MOFs need this - MOF-74's metal-oxo rod bonds straight onto the
+    4-connected DOBDC, while the blueprint (etb-e) decorates every edge
+    with a 2-connected slot the structure has no unit for (#168). Only a
+    2-connected slot can be emptied: contracting anything else is not a
+    pass-through.
     """
     if not isinstance(linkers, dict):
         return linkers
     lateral = set(lateral_slots)
-    per_slot: dict[int, Fragment] = {}
+    per_slot: dict[int, Fragment | None] = {}
     for key, value in linkers.items():  # slot types first, indices override
         if isinstance(key, int):
             continue
@@ -1015,15 +1092,25 @@ def _validate_linkers(
     if missing:
         raise AlignmentError(
             f"No linker given for lateral slot(s) {sorted(missing)} of "
-            f"{topology.name!r}; every non-run slot needs an SBU."
+            f"{topology.name!r}; every non-run slot needs an SBU (or None "
+            "to leave it empty)."
         )
+    for slot, value in per_slot.items():
+        if value is None:
+            degree = len(topology.slots[slot].atoms.indices_from_symbol("X"))
+            if degree != 2:
+                raise AlignmentError(
+                    f"Slot {slot} of {topology.name!r} is {degree}-connected; "
+                    "only a 2-connected slot can be left empty, since "
+                    "emptying it bonds its two neighbours directly."
+                )
     return per_slot
 
 
 def build_rod_framework(
     topology: Topology,
     rod: RodFragment,
-    linkers: Fragment | dict[Fragment | int, Fragment],
+    linkers: Fragment | dict[Fragment | int, Fragment | None],
     run: SlotRun | HelicalRun | None = None,
     max_rmsd: float = DEFAULT_MAX_RMSD,
     min_distance: float | None = 1.0,
@@ -1050,7 +1137,10 @@ def build_rod_framework(
         (a ``topology.mappings`` key) or slot index, as
         ``Autografs.build`` takes. Any connectivity is allowed; a
         polytopic SBU bonds to its lateral neighbours as well as to
-        the rod (#168).
+        the rod (#168). A 2-connected slot may be mapped to ``None``
+        to leave it **empty**, bonding its two neighbours directly -
+        how a real rod MOF binds its metal-oxo rod straight onto a
+        polytopic linker where the blueprint decorates that edge.
     run : SlotRun or None, optional
         Which run the rod occupies; the first detected run when None
         (symmetry-equivalent runs give equivalent frameworks).
@@ -1203,7 +1293,7 @@ def build_rod_framework(
             f"inter-unit bond deviates {worst_bond:.2f} A from its "
             f"covalent target (bond_tolerance={bond_tolerance})."
         )
-    worst_rmsd = max(p["rmsd"] for p in placed["placements"])
+    worst_rmsd = max((p["rmsd"] for p in placed["placements"]), default=0.0)
     if worst_rmsd > max_rmsd:
         raise AlignmentError(
             f"Linker arm alignment RMSD {worst_rmsd:.3f} exceeds "
@@ -1246,8 +1336,12 @@ def _assemble_graph(build: _RodBuild, result: dict, find_cutoffs, load_uff):
     from pymatgen.core.bonds import get_bond_order
 
     # rod_build marks the framework so tag/anchor-based editing ops
-    # (defects, flip, rotate, functionalize) refuse it - see editing._reject_rod
+    # (defects, flip, rotate, functionalize) refuse it - see editing._reject_rod.
+    # rod_empty_slots records the blueprint slots deliberately left empty,
+    # so net verification contracts them out of the blueprint too.
     graph = networkx.Graph(cell=result["cell"], rod_build=True)
+    if build.empty_slots:
+        graph.graph["rod_empty_slots"] = list(build.empty_slots)
     n_atoms = len(build.rod.positions)
 
     # rod atoms: typed once on the first repeat, replicated across every

@@ -103,6 +103,8 @@ def framework_to_dict(framework: Framework) -> dict:
     # working across a save/load round trip
     if graph.graph.get("rod_build"):
         data["rod_build"] = True
+        if graph.graph.get("rod_empty_slots"):
+            data["rod_empty_slots"] = list(graph.graph["rod_empty_slots"])
     return data
 
 
@@ -128,6 +130,8 @@ def framework_from_dict(data: dict) -> Framework:
         graph.graph["charge_method"] = data["charge_method"]
     if data.get("rod_build"):
         graph.graph["rod_build"] = True
+        if data.get("rod_empty_slots"):
+            graph.graph["rod_empty_slots"] = list(data["rod_empty_slots"])
     columns = zip(
         data["symbols"], data["coords"], data["tags"], data["ufftypes"], strict=True
     )

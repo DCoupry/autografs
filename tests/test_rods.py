@@ -269,7 +269,7 @@ def _etb_helical_rod(etb, scale=6.0):
     return rod, linker
 
 
-def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5):
+def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5, empty_decorations=False):
     """A rod plus *two* linker species hand-matched to etb-e (#168).
 
     etb-e is etb's edge net: the same six 3_1 helices, but each helix
@@ -289,7 +289,13 @@ def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5):
     the ditopic linker symmetric - an asymmetric one has no way to know
     which end faces the rod.
 
-    Returns (rod, ditopic, tetratopic, ditopic slots, tetratopic slots).
+    With ``empty_decorations`` the 2-connected slots are left empty
+    instead - how a real MOF-74 bonds, its rod binding straight onto
+    the tetratopic linker - and the tetratopic species is stretched to
+    span the whole gap on its own.
+
+    Returns (rod, ditopic, tetratopic, ditopic slots, tetratopic slots);
+    ``ditopic`` is None when the decorations are left empty.
     """
     from pymatgen.core.structure import Molecule
 
@@ -364,26 +370,36 @@ def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5):
     tetratopic_slots = [s for s in laterals if counts[s] == 4]
     arm_ditopic = float(np.linalg.norm(_slot_arms(etbe, ditopic_slots[0])[1][0]))
     arm_tetratopic = float(np.linalg.norm(_slot_arms(etbe, tetratopic_slots[0])[1][0]))
-    # bond budgets along the chain rod -> ditopic -> tetratopic
-    span_ditopic = (
-        (np.mean(lateral_lengths) + arm_ditopic) * scale - 2 * radius_c - arm_atom
-    )
-    span_tetratopic = (
-        (arm_ditopic + arm_tetratopic) * scale - 2 * radius_c - span_ditopic
-    )
-    ditopic = Fragment(
-        atoms=Molecule(
-            ["X", "C", "C", "X"],
-            [
-                [-arm_ditopic * scale, 0, 0],
-                [-span_ditopic, 0, 0],
-                [span_ditopic, 0, 0],
-                [arm_ditopic * scale, 0, 0],
-            ],
-            site_properties={"tags": [0, 0, 0, 0]},
-        ),
-        name="dit",
-    )
+    ditopic = None
+    if empty_decorations:
+        # nothing between the rod and the tetratopic linker: the whole
+        # node-to-linker span is the linker's own reach
+        span_tetratopic = (
+            (np.mean(lateral_lengths) + 2 * arm_ditopic + arm_tetratopic) * scale
+            - 2 * radius_c
+            - arm_atom
+        )
+    else:
+        # bond budgets along the chain rod -> ditopic -> tetratopic
+        span_ditopic = (
+            (np.mean(lateral_lengths) + arm_ditopic) * scale - 2 * radius_c - arm_atom
+        )
+        span_tetratopic = (
+            (arm_ditopic + arm_tetratopic) * scale - 2 * radius_c - span_ditopic
+        )
+        ditopic = Fragment(
+            atoms=Molecule(
+                ["X", "C", "C", "X"],
+                [
+                    [-arm_ditopic * scale, 0, 0],
+                    [-span_ditopic, 0, 0],
+                    [span_ditopic, 0, 0],
+                    [arm_ditopic * scale, 0, 0],
+                ],
+                site_properties={"tags": [0, 0, 0, 0]},
+            ),
+            name="dit",
+        )
     _, tetratopic_arms = _slot_arms(etbe, tetratopic_slots[0])
     units = tetratopic_arms / np.linalg.norm(tetratopic_arms, axis=1, keepdims=True)
     tetratopic = Fragment(
@@ -1132,6 +1148,77 @@ class TestMixedRodMappings:
         mapping = {s: ditopic for s in dit_slots} | {s: tetratopic for s in tet_slots}
         rod.arms = rod.arms[:1]
         with pytest.raises(Exception, match="expects 2 lateral connections"):
+            build_rod_framework(etbe, rod, mapping)
+
+
+class TestEmptyLateralSlots:
+    """Contracted (empty) lateral slots (#168). A real MOF-74 bonds its
+    metal-oxo rod straight onto the 4-connected DOBDC, while the
+    blueprint (etb-e) decorates that edge with a 2-connected slot the
+    structure has no unit for. Mapping such a slot to None leaves it
+    empty and bonds its two neighbours directly."""
+
+    @pytest.fixture(scope="class")
+    def etbe_build(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, _none, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(
+            etbe, scale=4.478, empty_decorations=True
+        )
+        mapping = dict.fromkeys(dit_slots) | {s: tetratopic for s in tet_slots}
+        return etbe, dit_slots, build_rod_framework(etbe, rod, mapping)
+
+    def test_builds_without_the_decorations(self, etbe_build):
+        etbe, dit_slots, built = etbe_build
+        # six rods of three repeats + nine tetratopic linkers, and
+        # nothing at all on the 36 decoration slots
+        assert set(built.slots.values()) == {"rod_etbe", "tet"}
+        assert len(built.slots) == 6 * 3 + 9
+        assert built.symbols.count("Zn") == 18
+        assert sorted(built.graph) == list(range(len(built)))
+        assert built.min_contact() > 1.0
+        assert built.graph.graph["rod_empty_slots"] == sorted(dit_slots)
+
+    def test_rod_bonds_the_polytopic_linker_directly(self, etbe_build):
+        _etbe, _dit, built = etbe_build
+        sbu = {n: d["sbu"] for n, d in built.graph.nodes(data=True)}
+        slot = {n: d["slot"] for n, d in built.graph.nodes(data=True)}
+        inter = [
+            frozenset((sbu[a], sbu[b]))
+            for a, b in built.graph.edges()
+            if slot[a] != slot[b]
+        ]
+        # 18 node repeats x 2 lateral arms, straight onto the linkers
+        assert inter.count(frozenset({"rod_etbe", "tet"})) == 36
+        assert inter.count(frozenset({"tet"})) == 0
+
+    def test_verification_contracts_the_empty_slots(self, etbe_build):
+        etbe, _dit, built = etbe_build
+        # the blueprint's own decorations are contracted away before the
+        # comparison, so the build still verifies against etb-e
+        built.verify_net(etbe)
+
+    def test_empty_slots_survive_save_and_supercell(self, etbe_build, tmp_path):
+        from autografs.framework import Framework
+
+        etbe, dit_slots, built = etbe_build
+        path = built.save(tmp_path / "rod.json")
+        reloaded = Framework.load(path)
+        assert reloaded.graph.graph["rod_empty_slots"] == sorted(dit_slots)
+        assert reloaded.is_rod
+        supercell = built.supercell((2, 1, 1))
+        assert supercell.graph.graph["rod_empty_slots"] == sorted(dit_slots)
+
+    def test_polytopic_slot_cannot_be_emptied(self, bundled_topologies):
+        # emptying a slot bonds its two neighbours; a 4-connected slot
+        # has no such pass-through
+        from autografs.rod_build import build_rod_framework
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, _tet, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        mapping = {s: ditopic for s in dit_slots} | dict.fromkeys(tet_slots)
+        with pytest.raises(Exception, match="only a 2-connected slot"):
             build_rod_framework(etbe, rod, mapping)
 
 

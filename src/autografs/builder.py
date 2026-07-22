@@ -1062,7 +1062,7 @@ class Autografs:
         self,
         topology: Topology,
         rod: autografs.rods.RodFragment,
-        linkers: Fragment | str | dict[Fragment | int, Fragment | str],
+        linkers: Fragment | str | dict[Fragment | int, Fragment | str | None],
         max_rmsd: float = autografs.rod_build.DEFAULT_MAX_RMSD,
         min_distance: float | None = 1.0,
         verify_net: bool = False,
@@ -1089,7 +1089,8 @@ class Autografs:
             name or Fragment) for all of them, or a mapping keyed by
             slot type or slot index, as :meth:`build` takes. Polytopic
             SBUs are allowed and bond to each other where the blueprint
-            says so.
+            says so; a 2-connected slot mapped to ``None`` is left empty
+            and its two neighbours bond directly.
         max_rmsd : float, optional
             Directional gate on each linker's arm alignment.
         min_distance : float or None, optional
@@ -1119,14 +1120,17 @@ class Autografs:
         >>> mof = mofgen.build_rod(mofgen.topologies["pcu"], rod, "Benzene_linear")
         """
 
-        def resolve(value: Fragment | str) -> Fragment:
+        def resolve(value: Fragment | str | None) -> Fragment | None:
             return self.sbu[value].copy() if isinstance(value, str) else value
 
-        resolved: Fragment | dict[Fragment | int, Fragment] = (
-            {key: resolve(value) for key, value in linkers.items()}
-            if isinstance(linkers, dict)
-            else resolve(linkers)
-        )
+        resolved: Fragment | dict[Fragment | int, Fragment | None]
+        if isinstance(linkers, dict):
+            resolved = {key: resolve(value) for key, value in linkers.items()}
+        else:
+            fragment = resolve(linkers)
+            if fragment is None:
+                raise ValueError("build_rod needs at least one linker species.")
+            resolved = fragment
         return autografs.rod_build.build_rod_framework(
             topology,
             rod,

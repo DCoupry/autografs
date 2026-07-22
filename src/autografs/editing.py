@@ -379,6 +379,10 @@ def replicated_graph(
     # rod-build editing guard must survive a supercell)
     if framework.graph.graph.get("rod_build"):
         combined.graph["rod_build"] = True
+        if framework.graph.graph.get("rod_empty_slots"):
+            combined.graph["rod_empty_slots"] = list(
+                framework.graph.graph["rod_empty_slots"]
+            )
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
     slot_base = (
         max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1
