@@ -180,6 +180,98 @@ def _unc_helical_rod(unc, scale=4.0):
     return rod, linker
 
 
+def _etb_helical_rod(etb, scale=6.0):
+    """A RodFragment matched to etb's 3_1 metal-oxo helix, plus a linker.
+
+    etb (MOF-74's net) is a cross-linked multi-rod net: six interleaved
+    3_1 helices per cell, three of each hand (etb is centrosymmetric),
+    joined by ditopic linkers that bridge helices of *opposite* hand.
+    One rod species fills all six - the enantiomer is placed on the
+    opposite-hand runs. The rod is derived from a +120 deg helix; each
+    3-connected node carries a single lateral arm. Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import (
+        _topology_slot_images,
+        helical_runs,
+        topology_quotient_edges,
+    )
+    from autografs.rods import RodFragment
+
+    cell = etb.cell.matrix
+    axis_hat = cell[2] / np.linalg.norm(cell[2])
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in etb.slots]
+    plus = next(
+        r for r in helical_runs(etb) if r.screw_order == 3 and r.screw_angle > 0
+    )
+    images = _topology_slot_images(etb)
+    centers = np.array(
+        [np.asarray(s.atoms.cart_coords).mean(axis=0) for s in etb.slots]
+    )
+    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
+    steps: dict[int, list] = {i: [] for i in range(len(centers))}
+    for (a, b, v), _ in topology_quotient_edges(etb).items():
+        for u, w, sg in ((a, b, 1), (b, a, -1)):
+            off = sg * np.asarray(v, float)
+            disp = wrapped[w] + off @ cell - wrapped[u]
+            if np.linalg.norm(disp) > 1e-9:
+                steps[u].append((w, disp))
+    pos = {plus.slots[0]: wrapped[plus.slots[0]]}
+    cur = plus.slots[0]
+    for nxt in plus.slots[1:]:
+        pos[nxt] = pos[cur] + next(d for w, d in steps[cur] if w == nxt)
+        cur = nxt
+
+    n0 = next(s for s in plus.slots if counts[s] > 2)
+    axis_pt = np.array(plus.axis_point)
+    rel0 = (pos[n0] - axis_pt) - ((pos[n0] - axis_pt) @ axis_hat) * axis_hat
+    radius = np.linalg.norm(rel0)
+    e1 = rel0 / radius
+    e2 = np.cross(axis_hat, e1)
+    basis = np.array([e1, e2, axis_hat])
+    lateral = np.array([d for w, d in steps[n0] if w not in set(plus.slots)])
+    arm_dir = (lateral[0] @ basis.T) / np.linalg.norm(lateral[0])
+
+    chemical = float(plus.period / 3) * scale
+    r_zn = radius * scale
+    r_o = r_zn * 0.45  # inner bridge, clear of the outward linkers
+    half = np.radians(plus.screw_angle) / 2.0
+    positions = np.array(
+        [
+            [r_zn, 0.0, 0.0],
+            [r_o * np.cos(half), r_o * np.sin(half), chemical / 2],
+        ]
+    )
+    repeat = RodRepeat(
+        symbols=["Zn", "O"],
+        axial=np.array([0.0, chemical / 2]),
+        radial=np.array([r_zn, r_o]),
+        angular=np.array([0.0, half]),
+        repeat_length=chemical,
+        screw_order=3,
+        screw_angle=float(plus.screw_angle),
+        n_connections=1,
+    )
+    rod = RodFragment(
+        repeat=repeat,
+        positions=positions,
+        arms=[(0, arm_dir * 1.2)],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_etb",
+    )
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [[-1.8, 0, 0], [-0.7, 0, 0], [0.7, 0, 0], [1.8, 0, 0]],
+            site_properties={"tags": [1, 0, 0, 2]},
+        ),
+        name="cc",
+    )
+    return rod, linker
+
+
 class TestPillarCanonicalization:
     def test_single_repeat(self, mofgen):
         repeat = _pillar_repeat(mofgen)
@@ -746,6 +838,59 @@ class TestGeneralHelicalBuild:
         rod.repeat.screw_angle = 120.0
         with pytest.raises(Exception, match="helical|run"):
             build_rod_framework(unc, rod, linker)
+
+
+class TestCrossLinkedMultiRodBuild:
+    """Rod Stage C: cross-linked multi-rod nets. etb (MOF-74's net) is
+    six interleaved 3_1 helices per cell, three of each hand, joined by
+    ditopic linkers that bridge helices of opposite hand - one rod per
+    helix, with the enantiomer placed on the opposite-hand runs."""
+
+    def test_etb_builds_six_cross_linked_rods(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        etb = bundled_topologies["etb"]
+        rod, linker = _etb_helical_rod(etb)
+        # the synthetic fixture crowds etb's small cell (as the other
+        # helical fixtures do); relax the contact gate - relax() cleans
+        # it - and check the topology, which is what matters
+        built = build_rod_framework(etb, rod, linker, min_distance=None)
+        # six -Zn-O- rods (3 repeats each) + nine X-C-C-X cross-linkers
+        assert built.symbols.count("Zn") == 18
+        assert built.symbols.count("O") == 18
+        assert built.symbols.count("C") == 18
+        assert built.is_rod
+        assert sorted(built.graph) == list(range(len(built)))
+        # 18 rod-repeat slots (6 rods x 3) + 9 linker slots
+        assert len(set(built.slots)) == 27
+        # it realizes etb's cross-linked net (all six runs' PoE form)
+        built.verify_net(etb)
+
+    def test_etb_build_identifies_as_etb(self, bundled_topologies):
+        from autografs.net import framework_quotient_edges, identify_net
+        from autografs.rod_build import build_rod_framework
+
+        etb = bundled_topologies["etb"]
+        rod, linker = _etb_helical_rod(etb)
+        built = build_rod_framework(etb, rod, linker, min_distance=None)
+        # 18 three-connected nodes + 9 two-connected linkers: etb
+        matches = identify_net(framework_quotient_edges(built), bundled_topologies)
+        assert matches == ["etb"]
+
+    def test_etb_places_both_handednesses(self, bundled_topologies):
+        # etb is centrosymmetric: the six helices come in both hands. The
+        # placement reflects the rod onto the opposite-hand runs, so the
+        # built Zn helices split into +120 and -120 screws.
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        etb = bundled_topologies["etb"]
+        rod, linker = _etb_helical_rod(etb)
+        build = _RodBuild(etb, rod, linker, _select_runs(etb, rod, True))
+        assert build.n_rods == 6
+        reflected = [spec["reflect"] for spec in build.rod_specs]
+        # three helices of each hand -> three rods reflected, three not
+        assert reflected.count(True) == 3
+        assert reflected.count(False) == 3
 
 
 class TestRodEditingGuards:

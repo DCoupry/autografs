@@ -302,22 +302,42 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
         coordination sequences and no run agrees.
     """
     built = net_signature(framework_quotient_edges(framework), contract=False)
-    runs: list[SlotRun | HelicalRun] = [*axial_runs(topology), *helical_runs(topology)]
-    if not runs:
+    # candidate rod-form quotients: helical runs grouped by screw order
+    # (a net can carry several - unc has a 2_1 and a 4_1 over the same
+    # nodes - and only one order is the rod's; a cross-linked multi-rod
+    # net like etb has one rod per helix, all the same order), or each
+    # straight axial run on its own (pcu-family)
+    by_order: dict[int, list[HelicalRun]] = {}
+    seen: dict[int, set[frozenset[int]]] = {}
+    for run in helical_runs(topology):
+        nodes = frozenset(
+            s
+            for s in run.slots
+            if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        )
+        if nodes in seen.setdefault(run.screw_order, set()):
+            continue
+        seen[run.screw_order].add(nodes)
+        by_order.setdefault(run.screw_order, []).append(run)
+    candidates: list[list[SlotRun | HelicalRun]] = [
+        list(group) for group in by_order.values()
+    ]
+    candidates.extend([run] for run in axial_runs(topology))
+    if not candidates:
         raise NetMismatchError(
             f"Topology {topology.name!r} has no axial or helical slot run; "
             f"rod framework {framework.name!r} cannot be verified against it."
         )
-    for run in runs:
+    for run_group in candidates:
         blueprint = net_signature(
-            topology_rod_quotient_edges(topology, run), contract=False
+            topology_rod_quotient_edges(topology, run_group), contract=False
         )
         if built == blueprint:
             return
     raise NetMismatchError(
         f"Rod framework {framework.name!r} does not realize topology "
         f"{topology.name!r}: its points-of-extension signature matches no "
-        f"axial or helical run of the blueprint (checked {len(runs)})."
+        f"rod run(s) of the blueprint (checked {len(candidates)})."
     )
 
 
@@ -1011,9 +1031,10 @@ def helical_runs(
 
 
 def topology_rod_quotient_edges(
-    topology: Topology, run: SlotRun | HelicalRun
+    topology: Topology,
+    run: SlotRun | HelicalRun | list[SlotRun | HelicalRun],
 ) -> Counter[Edge]:
-    """The blueprint's rod-form labeled quotient graph on one run.
+    """The blueprint's rod-form labeled quotient graph on its rod run(s).
 
     The forward mirror of deconstruct's points-of-extension expansion:
     the run's axial edge-center slots (its members with two connections)
@@ -1025,27 +1046,31 @@ def topology_rod_quotient_edges(
     bonds are likewise recorded PoE-to-PoE rather than through an edge
     center - the basis of rod net verification (see _verify_rod_net).
 
+    A cross-linked multi-rod net (etb) passes *all* its helical runs; the
+    edge centers of every run are contracted, leaving each helix's node
+    PoEs joined by the linkers that bridge different helices.
+
     Parameters
     ----------
     topology : Topology
         The blueprint.
-    run : SlotRun or HelicalRun
-        The straight or helical run the rod occupies.
+    run : SlotRun or HelicalRun or list
+        The rod run(s) the framework occupies.
 
     Returns
     -------
     Counter[Edge]
         The rod-form labeled quotient as a canonical edge multiset.
     """
+    runs = run if isinstance(run, list) else [run]
+    run_slots = {s for a_run in runs for s in a_run.slots}
     node_slots = {
         s
-        for s in run.slots
+        for s in run_slots
         if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
     }
     adjacency = _adjacency(topology_quotient_edges(topology))
-    for slot in run.slots:
-        if slot in node_slots:
-            continue
+    for slot in run_slots - node_slots:
         halves = adjacency.get(slot)
         if halves is None or len(halves) != 2:
             continue  # not a plain 2-connected edge center; leave it be
