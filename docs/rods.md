@@ -293,8 +293,41 @@ net offers several (`bbe` spirals 2₁ along `a` and `b` with different
 periods), the busiest period is built and the other runs' slots stay
 lateral, needing linkers like any other slot.
 
-Runs along a diagonal (⟨011⟩ and friends) are still out of scope: they
-would pin a *combination* of cell parameters.
+### Channels that close on several cells
+
+A helix need not come back onto itself after one cell. `twt`'s channel
+advances `c`/3 and turns 60° per node, so translating it by `c` lands on
+a *half-turn-rotated* copy of itself; it only closes after **two** cells,
+and its run direction is ⟨002⟩ rather than ⟨001⟩. `fnt`, `uom`, `uoo`,
+`fne`, `src` and `twt-e` do the same; `mdf`-family nets close on three.
+
+Nothing about the cell parametrization changes — the channel still runs
+along a single cell axis — but the pinned parameter is the run period
+**divided by** that multiple:
+
+```python
+mof = mofgen.build_rod(mofgen.topologies["twt"], rod_6_1, linker)
+mof.structure.lattice.abc[2]   # 6 × chemical repeat ÷ 2, not × 6
+```
+
+The picture behind the division: one cell holds *all six* of the run's
+node slots, filled by **two interleaved passes** of the same rod half a
+turn apart, rather than one pass of a rod six repeats long. Because the
+two passes are a lattice translation apart in height but not in azimuth,
+neither is the other's periodic image, and the six repeats stay distinct.
+
+Some nets describe one channel *both* ways — `nlr` reports a ⟨001⟩ and a
+⟨002⟩ walk over the same node slots — and run selection deduplicates by
+node set, keeping the shorter description, so those build exactly as
+before. Where the two are genuinely different channels (`mdf`'s ⟨003⟩
+helices do not share nodes with its ⟨001⟩ ones), the usual policy
+applies: the busiest set of runs is built, ties going to the shorter
+period, and `run=` forces the other.
+
+Runs along a *diagonal* (⟨011⟩ and friends, ~110 nets) are still out of
+scope: their period is a **combination** of cell parameters, so it cannot
+be substituted into a cell row and has to enter the optimizer as a
+constraint on the free parameters instead.
 
 ### Verifying the built net
 
@@ -320,12 +353,24 @@ rod MOF, edit the linkers of the source structure and rebuild. See
 
 ## Scope & limitations
 
-Rod building covers single-axis runs — straight, single-helix, and
-cross-linked multi-rod (`etb`) — with one rod species per net. Mixed
-rod/finite mappings (a rod net that also needs finite SBUs on some
-slots) and multi-axis "woven" rod packings are future work. Detection is
-also deliberately conservative about 2D layer nets (an in-plane zig-zag is not
-a 3D rod channel and is skipped).
+Rod building covers runs along a **cell axis**, with one rod species per
+net: straight (single-node and multi-node), single-helix, cross-linked
+multi-rod (`etb`), multi-axis woven (`bmn`), and — since #173 — channels
+that close only after several cells along their axis (`twt`). Lateral
+slots take a per-slot mapping of finite SBUs of any connectivity, or
+`None` to leave a 2-connected slot empty.
+
+What is left out:
+
+- runs along a lattice **diagonal** (⟨011⟩ and friends), whose period is
+  a combination of cell parameters rather than one of them;
+- a *straight* run closing on several cells — none exists in the library
+  (every axis-multiple run is helical), and the straight path supercells
+  whole blueprint periods, so it is refused rather than mis-built;
+- more than one rod species per net.
+
+Detection is also deliberately conservative about 2D layer nets (an
+in-plane zig-zag is not a 3D rod channel and is skipped).
 
 For the reverse direction and the rest of the inverse pipeline, see
 [Deconstruction](deconstruction.md).

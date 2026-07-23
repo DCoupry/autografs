@@ -33,8 +33,16 @@ grouped into **axis families**, each pinning its own cell parameter and
 carrying its own rotation and axial phase (#168); a fully woven packing
 pins all three axes, which determines the cell outright. One rod pins
 every axis it runs along to the same length, so only runs of equal
-period can be woven together. Runs along a lattice *diagonal* stay out
-of scope — they would pin a combination of cell parameters.
+period can be woven together.
+
+A channel need not close after one cell: twt's helix advances c/3 and
+turns 60 degrees per node, so a translation by c lands on a half-turn
+rotated copy and the run closes on ``(0, 0, 2)``. Such a run is still
+axis-parallel and the pin is simply *divided* by that multiple - one
+cell then holds two interleaved passes of the same rod rather than one
+pass of it (#173, see ``_run_axis``). Runs along a lattice *diagonal*
+stay out of scope: their period is a combination of cell parameters
+rather than one of them, so it cannot be substituted into a cell row.
 
 A straight run's nodes can be collinear yet *turn*: cds alternates two
 4-connected nodes 90 degrees apart, so the rod that fills it is a 4_1
@@ -125,6 +133,41 @@ def _unit_rows(vectors: np.ndarray) -> np.ndarray:
     if np.any(norms < 1e-9):
         raise AlignmentError("Degenerate (zero-length) arm vector.")
     return np.asarray(vectors / norms)
+
+
+def _run_axis(run: SlotRun | HelicalRun) -> tuple[int, int]:
+    """(cell axis a run follows, how many cells one of its periods spans).
+
+    A run's ``direction`` is the lattice generator it closes on. Usually
+    that is a unit axis vector and its period *is* the cell parameter.
+    A helical run may instead close only after **several** cells: its
+    screw carries the channel onto a differently-oriented copy of itself
+    each cell and it comes back onto the original only after ``multiple``
+    of them, giving a direction like ``(0, 0, 2)`` (twt's 6_1 channel
+    turns 180 degrees per c; uom, uoo, fne, fnt and twt-e do the same,
+    src along all three cubic axes, and mdf-family nets close on
+    ``(0, 0, 3)``). The channel still runs along one cell axis, so the
+    axis pin is simply divided by the multiple - the cell holds one
+    period's worth of repeats spread over ``multiple`` interleaved
+    copies of the rod rather than a single pass of it (#173).
+
+    Raises
+    ------
+    AlignmentError
+        For a run along a lattice *diagonal*, whose period is a
+        combination of cell parameters rather than one of them, so it
+        cannot be expressed as a pinned cell row (#173).
+    """
+    vector = np.asarray(run.direction, dtype=int)
+    if np.count_nonzero(vector) != 1:
+        raise AlignmentError(
+            "Rod building supports runs along a cell axis for now (got "
+            f"direction {run.direction}). A run along a lattice diagonal "
+            "pins a combination of cell parameters, which the cell "
+            "parametrization cannot express."
+        )
+    axis_index = int(np.argmax(np.abs(vector)))
+    return axis_index, int(abs(vector[axis_index]))
 
 
 def _slot_geometry(slot, blueprint: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -236,7 +279,7 @@ def _run_nodes(topology: Topology, run: SlotRun | HelicalRun) -> _RunNodes:
     walk frame, which is the order a rod's repeats are laid down in.
     """
     cell = np.asarray(topology.cell.matrix, dtype=float)
-    axis_index = int(np.argmax(np.abs(np.asarray(run.direction))))
+    axis_index, _multiple = _run_axis(run)
     axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
     seed = np.array([1.0, 0.0, 0.0])
     if abs(float(seed @ axis_hat)) > 0.9:
@@ -570,9 +613,21 @@ class _RodBuild:
         # parameter and carries its own transverse frame and placement
         # freedoms; a single-axis build is just the one-family case.
         by_axis: dict[int, list[SlotRun | HelicalRun]] = {}
+        multiples: dict[int, int] = {}
         for a_run in self.runs:
-            axis = int(np.argmax(np.abs(np.asarray(a_run.direction))))
+            axis, multiple = _run_axis(a_run)
             by_axis.setdefault(axis, []).append(a_run)
+            # runs sharing an axis are chosen for a shared period, and on
+            # one axis the period *is* the multiple times the cell
+            # parameter - so they close on the same number of cells.
+            # Guarded anyway: mixing them would want two different
+            # lengths for the one parameter
+            if multiples.setdefault(axis, multiple) != multiple:  # pragma: no cover
+                raise AlignmentError(
+                    f"Runs along axis {axis} of {topology.name!r} close on "
+                    f"{multiples[axis]} and {multiple} cells; one rod cannot "
+                    "pin that axis to both lengths."
+                )
         self.families: list[dict] = []
         for axis_index in sorted(by_axis):
             axis_hat = blueprint[axis_index] / np.linalg.norm(blueprint[axis_index])
@@ -589,6 +644,9 @@ class _RodBuild:
                     "e1": e1,
                     "e2": np.cross(axis_hat, e1),
                     "runs": by_axis[axis_index],
+                    # cells one of this family's run periods spans: the
+                    # pinned parameter is the period divided by it (#173)
+                    "multiple": multiples[axis_index],
                 }
             )
         self.n_families = len(self.families)
@@ -597,6 +655,7 @@ class _RodBuild:
         self.axis_hat = self.families[0]["axis_hat"]
         self.e1 = self.families[0]["e1"]
         self.e2 = self.families[0]["e2"]
+        self.axis_multiple = self.families[0]["multiple"]
 
         # the reference node repeat 0 is placed on: the first along the
         # axis, since the repeats are laid down in axial order
@@ -779,21 +838,32 @@ class _RodBuild:
     def cell(self, scale: float) -> np.ndarray:
         """The cell at this scale, with every rod-bearing axis pinned.
 
-        A family's axis length is fixed by its rods (``n_repeats`` x the
-        chemical repeat); ``scale`` only stretches whatever axes carry
-        no rod. A fully woven packing pins all three and leaves nothing
-        for scale to do.
+        A family's run period is fixed by its rods (``n_repeats`` x the
+        chemical repeat); the *cell parameter* is that period divided by
+        the number of cells the run closes on, which is one for all but
+        the axis-multiple runs (#173). ``scale`` only stretches whatever
+        axes carry no rod, so a fully woven packing pins all three and
+        leaves nothing for it to do.
         """
         cell = self.blueprint * scale
         for family in self.families:
-            cell[family["axis_index"]] = family["axis_hat"] * self.axis_length
+            cell[family["axis_index"]] = family["axis_hat"] * (
+                self.axis_length / family["multiple"]
+            )
         return cell
 
     def _cell_one_period(self, scale: float) -> np.ndarray:
         """The cell of ONE blueprint period, which holds
-        ``nodes_per_period`` of the rod's chemical repeats."""
+        ``nodes_per_period`` of the rod's chemical repeats.
+
+        Only the straight path uses this, and a straight run always
+        closes on a single cell (``axis_multiple`` is one there), so one
+        period is one cell along the axis.
+        """
         cell = self.blueprint * scale
-        cell[self.axis_index] = self.axis_hat * (self.nodes_per_period * self.period)
+        cell[self.axis_index] = self.axis_hat * (
+            self.nodes_per_period * self.period / self.axis_multiple
+        )
         return cell
 
     def _embed(self, local: np.ndarray, theta: float, family: dict) -> np.ndarray:
@@ -1439,23 +1509,31 @@ def build_rod_framework(
     run_slots = {s for a_run in runs for s in a_run.slots}
     adjacency = _slot_adjacency(topology)
     for a_run in runs:
-        direction = np.asarray(a_run.direction)
         # each run must follow one cell axis (several *different* axes
         # across runs is fine - that is a woven packing); a diagonal run
         # would pin a combination of cell parameters, which the cell
-        # parametrization cannot express
-        if sorted(np.abs(direction).tolist()) != [0, 0, 1]:
-            raise AlignmentError(
-                "Rod building supports runs along a cell axis for now "
-                f"(got direction {a_run.direction})."
-            )
-        if not isinstance(a_run, HelicalRun) and any(
-            other.direction != a_run.direction for other in runs
-        ):
-            raise AlignmentError(
-                "Woven (multi-axis) rod packings are supported for helical "
-                "runs only; a straight run is supercelled along its own axis."
-            )
+        # parametrization cannot express. A run that closes only after
+        # several cells along its axis is still axis-parallel: the pin
+        # is divided by that multiple (#173).
+        _axis_index, multiple = _run_axis(a_run)
+        if not isinstance(a_run, HelicalRun):
+            if any(other.direction != a_run.direction for other in runs):
+                raise AlignmentError(
+                    "Woven (multi-axis) rod packings are supported for "
+                    "helical runs only; a straight run is supercelled along "
+                    "its own axis."
+                )
+            if multiple != 1:
+                # the straight path supercells whole blueprint periods,
+                # and a period spanning several cells would need the
+                # lateral slots replicated per cell instead. No library
+                # net has such a run (every axis-multiple one is
+                # helical), so this stays out rather than untested.
+                raise AlignmentError(
+                    f"Straight run of {topology.name!r} closes on "
+                    f"{multiple} cells (direction {a_run.direction}); only "
+                    "helical runs are supported across several cells."
+                )
         node_slots = _node_slots(topology, a_run)
         if isinstance(a_run, HelicalRun):
             # a helical run's nodes are the screw's own orbit, filled
