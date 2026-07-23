@@ -305,10 +305,11 @@ class TestBuildIsolation:
         Fragment keys against the mapping keys, so mappings keyed purely
         by slot index were always rejected as unfilled."""
         topo = synthetic_mofgen.topologies["linear_topo"]
-        validated = synthetic_mofgen._validate_mappings(
+        validated, empty = synthetic_mofgen._validate_mappings(
             topology=topo, mappings={0: "lin_sbu", 1: "lin_sbu"}
         )
         assert sorted(validated.keys()) == [0, 1]
+        assert empty == []
 
     def test_unfilled_slots_raise(self, synthetic_mofgen):
         """Partially covered topologies are rejected with the missing
@@ -498,11 +499,12 @@ class TestValidateMappings:
             if len(sbu_dict) == len(topo.mappings) and all(sbu_dict.values()):
                 # Create string mappings
                 string_mappings = {k: v[0] for k, v in sbu_dict.items()}
-                result = mofgen._validate_mappings(topo, string_mappings)
+                result, empty = mofgen._validate_mappings(topo, string_mappings)
 
                 # All values should be Fragment objects
                 for v in result.values():
                     assert isinstance(v, Fragment)
+                assert empty == []
                 break
         else:
             pytest.skip("No fully mappable topology in the library")
