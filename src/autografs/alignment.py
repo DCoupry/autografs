@@ -76,6 +76,51 @@ _CUBE_ROTATIONS: np.ndarray = np.array(
     ]
 )
 
+
+def _axis_angle(axis: tuple[float, float, float], angle: float) -> np.ndarray:
+    """Rotation matrix about an (unnormalized) axis by angle radians."""
+    x, y, z = np.asarray(axis, dtype=float) / np.linalg.norm(axis)
+    c, s = np.cos(angle), np.sin(angle)
+    return np.array(
+        [
+            [c + x * x * (1 - c), x * y * (1 - c) - z * s, x * z * (1 - c) + y * s],
+            [y * x * (1 - c) + z * s, c + y * y * (1 - c), y * z * (1 - c) - x * s],
+            [z * x * (1 - c) - y * s, z * y * (1 - c) + x * s, c + z * z * (1 - c)],
+        ]
+    )
+
+
+# The cube rotations alone are a trap for high-symmetry arm sets
+# (#178): if the arms' own rotation group H contains the start set,
+# every start is the same alternation problem modulo a relabelling of
+# the arms - starts S and S*h (h in H) produce identical trajectories -
+# so a cuboctahedral 12-arm set (H = the full octahedral group)
+# collapses all 24 starts into ONE, and UiO-66's node scored 0.363
+# against fcu's identical slot when the true optimum is 0. The number
+# of *effective* starts is the number of distinct right-cosets S*H, so
+# the fix is starts in cosets the cube set cannot reach: generic twists
+# with axes on a golden spiral and irrational-fraction angles, sharing
+# no symmetry axis with any crystallographic arm set. Each twist is one
+# guaranteed-distinct coset even in the worst case; low-symmetry arms
+# just see a few more (cheap) starts, and the early exit keeps easy
+# matches fast.
+_GOLDEN = (1.0 + np.sqrt(5.0)) / 2.0
+_EXTRA_TWISTS: np.ndarray = np.array(
+    [
+        _axis_angle(
+            (
+                np.cos(2 * np.pi * k / _GOLDEN) * np.sqrt(1 - z * z),
+                np.sin(2 * np.pi * k / _GOLDEN) * np.sqrt(1 - z * z),
+                z,
+            ),
+            angle=2 * np.pi * (k + 1) / (_GOLDEN * 12.0),
+        )
+        for k, z in ((k, -1 + 2 * (k + 0.5) / 12.0) for k in range(12))
+    ]
+)
+
+_START_ROTATIONS: np.ndarray = np.concatenate([_CUBE_ROTATIONS, _EXTRA_TWISTS])
+
 # Iterations of the assignment <-> rotation refinement per start
 _MATCH_ITERATIONS = 8
 
@@ -131,7 +176,7 @@ def match_directions(
     if len(arms) != n:
         raise AlignmentError(f"Cannot match {len(arms)} arms onto {n} slot dummies.")
     best: tuple[float, np.ndarray, np.ndarray] | None = None
-    for start in _CUBE_ROTATIONS:
+    for start in _START_ROTATIONS:
         rotation = start
         # impossible assignment: never equal to a real permutation, so
         # the first iteration always refines

@@ -20,6 +20,26 @@ TETRAHEDRON = np.array(
 
 SQUARE = np.array([[1, 0, 0], [0, 1, 0], [-1, 0, 0], [0, -1, 0]], dtype=float)
 
+# the 12 vertices of a cuboctahedron: the arm shape of a 12-connected
+# fcu node (UiO-66's Zr6), whose rotation group IS the octahedral group
+CUBOCTAHEDRON = np.array(
+    [
+        [1, 1, 0],
+        [1, -1, 0],
+        [-1, 1, 0],
+        [-1, -1, 0],
+        [1, 0, 1],
+        [1, 0, -1],
+        [-1, 0, 1],
+        [-1, 0, -1],
+        [0, 1, 1],
+        [0, 1, -1],
+        [0, -1, 1],
+        [0, -1, -1],
+    ],
+    dtype=float,
+) / np.sqrt(2)
+
 
 class TestKabsch:
     def test_recovers_known_rotation(self):
@@ -88,6 +108,51 @@ class TestMatchDirections:
             np.testing.assert_array_equal(rotation, results[0][0])
             np.testing.assert_array_equal(perm, results[0][1])
             assert rmsd == results[0][2]
+
+    def test_cuboctahedron_matches_itself_exactly(self):
+        """#178: a shape whose rotation group IS the octahedral group
+        collapses every cube-rotation start into one - the generic
+        twist starts must still find the exact match. This is UiO-66's
+        12-c node against fcu's slot, which used to score 0.363 and be
+        rejected as incompatible."""
+        rotation = rotation_z(0.9)
+        rotated = CUBOCTAHEDRON[np.random.default_rng(5).permutation(12)]
+        _, _, rmsd = match_directions(rotated @ rotation.T, CUBOCTAHEDRON)
+        assert rmsd < 1e-6
+
+    def test_octahedron_still_matches(self):
+        """The easy high-symmetry case must not regress."""
+        octahedron = np.array(
+            [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]],
+            dtype=float,
+        )
+        _, _, rmsd = match_directions(octahedron @ rotation_z(0.4).T, octahedron)
+        assert rmsd < 1e-6
+
+    def test_icosahedral_arms_match(self):
+        """A 12-arm icosahedral star (rotation group disjoint from the
+        cubic starts in a different way) also matches itself."""
+        phi = (1 + np.sqrt(5)) / 2
+        icosahedron = np.array(
+            [
+                [0, 1, phi],
+                [0, -1, phi],
+                [0, 1, -phi],
+                [0, -1, -phi],
+                [1, phi, 0],
+                [-1, phi, 0],
+                [1, -phi, 0],
+                [-1, -phi, 0],
+                [phi, 0, 1],
+                [phi, 0, -1],
+                [-phi, 0, 1],
+                [-phi, 0, -1],
+            ],
+            dtype=float,
+        )
+        icosahedron /= np.linalg.norm(icosahedron, axis=1, keepdims=True)
+        _, _, rmsd = match_directions(icosahedron @ rotation_z(0.6).T, icosahedron)
+        assert rmsd < 1e-6
 
 
 class TestCellParametrization:
