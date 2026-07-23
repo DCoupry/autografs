@@ -42,7 +42,10 @@ Two numbers come out, and their separation is the point:
 fragments (gated by exact net verification) and records the realized
 cell, closing the loop on the volume-ratio prediction above. Coverage
 is much lower than the measurement itself - most structures have no
-compatible fragment-to-slot mapping - so it is off by default.
+compatible fragment-to-slot mapping - so it is off by default. A
+2-connected slot type that no harvested fragment fits is rebuilt
+**empty** (#179), which is what brings the edge-decorated nets
+(``tbo``-class) into scoring range at all.
 
 Deterministic (no sampling, sorted corpus order); machine-readable JSON
 out plus a summary table on stdout.
@@ -200,7 +203,25 @@ def blueprint_centers(topology) -> dict[int, np.ndarray]:
 
 
 def _candidate_mappings(topology, fragments):
-    """Fragment-per-slot-type assignments compatible by geometry."""
+    """Fragment-per-slot-type assignments compatible by geometry.
+
+    A 2-connected slot type that *nothing* fits is offered as **empty**
+    (#179) rather than abandoning the net. That is not a fallback of
+    convenience: many blueprints subdivide their edges with
+    2-connected centers the real material does not have - HKUST-1
+    bonds its paddlewheels straight onto BTC while ``tbo`` decorates
+    every edge - and an absent decoration is exactly what a
+    contracted-tier identification means. Without this, the whole
+    edge-decorated family (``tbo``-class, and the ``n_free`` 3-5 nets
+    that carry the free proportions #174 is about) can never rebuild
+    faithfully inside the benchmark, so relaxation has nothing real to
+    be scored against.
+
+    Emptying is offered only where nothing fits, never as an extra
+    option alongside a fitting fragment: it would multiply the
+    combination count for nets that already build, and a decoration
+    the material *does* have should be placed.
+    """
     slot_types = list(topology.mappings)
     options = []
     for slot_type in slot_types:
@@ -208,7 +229,9 @@ def _candidate_mappings(topology, fragments):
             f for f in fragments.values() if f.has_compatible_symmetry(slot_type)
         ]
         if not fitting:
-            return
+            if len(slot_type.atoms.indices_from_symbol("X")) != 2:
+                return  # only 2-connected slots may be emptied
+            fitting = [None]
         options.append(fitting)
     combos = itertools.product(*options)
     for combo in itertools.islice(combos, MAX_MAPPINGS_PER_NET):
@@ -222,9 +245,9 @@ def is_buildable(topology, fragments) -> bool:
     right topology, right composition, wrong packing. A structure whose
     units cannot be placed on the blueprint's slots at all fails for an
     unrelated reason (a square-planar node measured against a
-    tetrahedral dia slot, or a net whose edge centers no real unit
-    fills) and its reduced lengths say nothing about the embedding.
-    Same geometric test the builder applies, before any cell work.
+    tetrahedral dia slot) and its reduced lengths say nothing about the
+    embedding. Same geometric test the builder applies, before any cell
+    work - including the empty-slot option for undecorated edges.
     """
     return next(_candidate_mappings(topology, fragments), None) is not None
 
@@ -249,10 +272,15 @@ def bond_residuals(framework) -> dict:
     for node_a, node_b in graph.edges():
         data_a = graph.nodes[node_a]
         data_b = graph.nodes[node_b]
-        if data_a.get("slot") == data_b.get("slot"):
-            continue  # internal to one SBU: fixed by the fragment, not the cell
         delta = np.asarray(data_a["coord"], float) - np.asarray(data_b["coord"], float)
-        delta -= np.round(delta @ inverse) @ cell
+        crossing = np.round(delta @ inverse)
+        if data_a.get("slot") == data_b.get("slot") and not np.any(crossing):
+            # internal to one SBU: fixed by the fragment, not the cell.
+            # A same-slot bond that *does* cross is a unit bonded to its
+            # own periodic image - real, and what emptied edge centers
+            # produce (#179), so it must be measured.
+            continue
+        delta -= crossing @ cell
         target = CovalentRadius.radius.get(
             data_a["symbol"], 0.0
         ) + CovalentRadius.radius.get(data_b["symbol"], 0.0)
@@ -296,6 +324,9 @@ def _rebuild(
             / (experimental.volume / len(experimental) * result.n_periodic_components),
             "min_contact": framework.min_contact(),
             "bond_residual": bond_residuals(framework),
+            # which blueprint slots were rebuilt empty, so a result on
+            # an edge-decorated net is interpretable
+            "empty_slots": sorted(framework.graph.graph.get("empty_slots", ())),
             # a compatible mapping is not necessarily the *right* one -
             # a net with several interchangeable slot types can take a
             # fragment in the wrong place. Only a rebuild that

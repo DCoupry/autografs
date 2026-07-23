@@ -169,6 +169,66 @@ def test_embedding_reports_failures_as_data(mofgen, embedding, tmp_path):
     assert payload["summary"]["n_measured"] == 0
 
 
+class TestEmbeddingEmptySlotFallback:
+    """#179 in the benchmark: a 2-connected slot type nothing fits is
+    offered empty, which is what brings edge-decorated nets (tbo-class,
+    where #174's free proportions live) into scoring range."""
+
+    def test_undecorated_edges_are_offered_empty(self, mofgen, embedding):
+        """Only a 6-connected node harvested: pcu's edge centers have
+        no candidate, so the mapping must empty them rather than
+        abandon the net."""
+        topology = mofgen.topologies["pcu"]
+        fragments = {"node": mofgen.sbu["Zn_mof5_octahedral"]}
+
+        mappings = list(embedding._candidate_mappings(topology, fragments))
+
+        assert mappings, "net abandoned instead of emptying its edge centers"
+        assert embedding.is_buildable(topology, fragments)
+        for mapping in mappings:
+            emptied = [k for k, v in mapping.items() if v is None]
+            assert len(emptied) == 1
+            assert len(emptied[0].atoms.indices_from_symbol("X")) == 2
+
+    def test_unfittable_node_still_abandons_the_net(self, mofgen, embedding):
+        """Only a ditopic linker harvested: pcu's 6-connected slot has
+        no candidate and cannot be emptied, so the net is refused."""
+        topology = mofgen.topologies["pcu"]
+        fragments = {"linker": mofgen.sbu["Benzene_linear"]}
+
+        assert list(embedding._candidate_mappings(topology, fragments)) == []
+        assert not embedding.is_buildable(topology, fragments)
+
+    def test_emptying_is_not_offered_when_something_fits(self, mofgen, embedding):
+        """A decoration the material does have must be placed, and the
+        combination count must not inflate."""
+        topology = mofgen.topologies["pcu"]
+        fragments = {
+            "node": mofgen.sbu["Zn_mof5_octahedral"],
+            "linker": mofgen.sbu["Benzene_linear"],
+        }
+
+        for mapping in embedding._candidate_mappings(topology, fragments):
+            assert None not in mapping.values()
+
+
+def test_embedding_bond_residuals_count_self_image_bonds(mofgen, embedding):
+    """With edge centers empty a node bonds its own periodic image;
+    those are the only inter-unit bonds left, so skipping same-slot
+    pairs outright would report no residuals at all."""
+    topology = mofgen.topologies["pcu"]
+    mappings = {}
+    for key in topology.mappings:
+        conn = len(key.atoms.indices_from_symbol("X"))
+        mappings[key] = "Zn_mof5_octahedral" if conn == 6 else None
+    framework = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
+
+    residuals = embedding.bond_residuals(framework)
+
+    assert residuals, "self-image bonds were skipped as intra-SBU"
+    assert residuals["n_bonds"] == 3  # one direct bond per cell axis
+
+
 def test_embedding_scores_only_what_the_pipeline_would_build(
     mofgen, embedding, mof5, tmp_path
 ):
