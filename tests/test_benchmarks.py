@@ -71,6 +71,29 @@ def test_roundtrip_closes_on_a_built_framework(mofgen, roundtrip, tmp_path):
     assert record["rebuilt_net"] == "pcu"
 
 
+def test_roundtrip_gates_on_composition(mofgen, roundtrip, tmp_path):
+    """#180: verify_net alone is not evidence the right material was
+    built. A mixed-linker pcu framework deconstructs to two ditopic
+    fragments, but candidate_mappings assigns one fragment per slot
+    type - every rebuild is topologically pcu yet chemically wrong,
+    and the composition gate must say so instead of scoring 'closed'."""
+    topology = mofgen.topologies["pcu"]
+    mappings = {}
+    for key in topology.mappings:
+        conn = len(key.atoms.indices_from_symbol("X"))
+        mappings[key] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[conn]
+    # one edge overridden: a 2:1 linker mix. Phenazine spans the same
+    # 4.2 A as benzene, so the cubic cell serves both bonds and the
+    # build is chemically clean - only the composition differs.
+    mappings[3] = "Phenazine_linear"
+    mixed = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
+    mixed.write_cif(tmp_path / "mixed.cif")
+
+    payload = roundtrip.run([tmp_path / "mixed.cif"], mofgen, max_rmsd=0.5)
+
+    assert payload["outcomes"] == {"closed_wrong_composition": 1}
+
+
 def test_roundtrip_reports_failures_as_data(mofgen, roundtrip, tmp_path):
     """A non-framework input lands in the failure taxonomy, not a raise."""
     from pymatgen.core.lattice import Lattice
