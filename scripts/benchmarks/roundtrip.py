@@ -2,10 +2,20 @@
 
 For every structure in a corpus, deconstruct it, then try to rebuild it
 from its own extracted fragments on every identified net candidate,
-gating the rebuild with the exact net-verification gate. The per-
-structure outcome taxonomy is the point - failures are data:
+gating the rebuild with the exact net-verification gate AND a
+composition gate: verify_net proves the graph realizes the net, but a
+net with interchangeable slot types happily accepts a fragment on the
+wrong orbit, building a topologically correct framework that is not
+the input material - measured on CoRE MOF, half the verified rebuilds
+were (#180). Only a rebuild that also reproduces the experimental
+reduced formula closes the loop. The per-structure outcome taxonomy is
+the point - failures are data:
 
-- ``closed``            rebuild passed verify_net on some candidate
+- ``closed``            rebuild passed verify_net AND reproduced the
+                        experimental reduced formula
+- ``closed_wrong_composition``  verified rebuilds exist, but none with
+                        the right formula - topologically closed,
+                        chemically not the same material
 - ``rebuild_failed``    every candidate/mapping combination was gated
 - ``no_mapping``        no compatible fragment-to-slot assignment
 - ``rod``               identified, but contains 1-periodic units the
@@ -84,13 +94,15 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
         record["outcome"] = "unidentified"
         record["seconds"] = time.perf_counter() - t0
         return record
+    experimental_formula = result.structure.composition.reduced_formula
     saw_mapping = False
+    saw_verified = False
     for net in result.net_candidates:
         topology = mofgen.topologies[net]
         for mappings in candidate_mappings(topology, result.fragments):
             saw_mapping = True
             try:
-                mofgen.build(
+                framework = mofgen.build(
                     topology,
                     mappings=mappings,
                     max_rmsd=max_rmsd,
@@ -98,11 +110,22 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
                 )
             except AutografsError:
                 continue
+            saw_verified = True
+            # the reduced formula is invariant to supercell choice and
+            # interpenetration fold, so it compares across cells
+            built_formula = framework.structure.composition.reduced_formula
+            if built_formula != experimental_formula:
+                continue  # right topology, wrong material - keep trying
             record["outcome"] = "closed"
             record["rebuilt_net"] = net
             record["seconds"] = time.perf_counter() - t0
             return record
-    record["outcome"] = "rebuild_failed" if saw_mapping else "no_mapping"
+    if saw_verified:
+        record["outcome"] = "closed_wrong_composition"
+    elif saw_mapping:
+        record["outcome"] = "rebuild_failed"
+    else:
+        record["outcome"] = "no_mapping"
     record["seconds"] = time.perf_counter() - t0
     return record
 
