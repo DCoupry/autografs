@@ -324,10 +324,41 @@ helices do not share nodes with its ⟨001⟩ ones), the usual policy
 applies: the busiest set of runs is built, ties going to the shorter
 period, and `run=` forces the other.
 
-Runs along a *diagonal* (⟨011⟩ and friends, ~110 nets) are still out of
-scope: their period is a **combination** of cell parameters, so it cannot
-be substituted into a cell row and has to enter the optimizer as a
-constraint on the free parameters instead.
+### Runs along a lattice diagonal
+
+Some nets run their rod channels down a lattice diagonal rather than a
+cell axis — ⟨011⟩ mostly, then ⟨111⟩ and a scattering of ⟨112⟩ and
+⟨012⟩; 112 library nets in all. `bcu`'s eight-connected nodes chain
+along all four body diagonals of its cubic cell.
+
+Here the pinned quantity `|direction @ cell|` is a **combination** of
+cell parameters, not one of them, so it cannot be substituted into a
+cell row. Instead the whole cell is stretched along the run's own
+direction to the rod's length, leaving one free scale perpendicular to
+it:
+
+```python
+mof = mofgen.build_rod(mofgen.topologies["bcu"], rod, linker)
+mof.structure.lattice.angles   # rhombohedral — the cubic blueprint distorted
+```
+
+That distortion is the honest answer, not a defect: a rod running down
+one body diagonal genuinely singles that diagonal out, and the cell
+should stop being cubic. The map keeps two properties the rest of the
+pipeline relies on — the run's period is exactly the rod's length at
+*every* scale, and the run *direction* never moves, so the transverse
+frame, the screw axis and the arm embedding stay scale-invariant.
+
+Diagonal runs are always straight (a helical run is detected along one
+cell axis by construction), and 91% of them chain enough
+points-of-extension per period that no supercell is needed. The rest are
+refused: stacking periods along a diagonal is a supercell
+**transformation** — a sublattice basis — rather than the axis path's
+row scale.
+
+An axis-parallel and a diagonal family cannot be mixed in one build: a
+diagonal pin stretches the whole cell along its own direction, which
+cannot also leave a cell row free for the other to pin.
 
 ### Verifying the built net
 
@@ -353,17 +384,18 @@ rod MOF, edit the linkers of the source structure and rebuild. See
 
 ## Scope & limitations
 
-Rod building covers runs along a **cell axis**, with one rod species per
-net: straight (single-node and multi-node), single-helix, cross-linked
-multi-rod (`etb`), multi-axis woven (`bmn`), and — since #173 — channels
-that close only after several cells along their axis (`twt`). Lateral
-slots take a per-slot mapping of finite SBUs of any connectivity, or
-`None` to leave a 2-connected slot empty.
+Rod building covers straight (single-node and multi-node), single-helix,
+cross-linked multi-rod (`etb`) and multi-axis woven (`bmn`) runs, along
+a **cell axis** or a **lattice diagonal**, with one rod species per net.
+A channel may close only after several cells along its axis (`twt`).
+Lateral slots take a per-slot mapping of finite SBUs of any
+connectivity, or `None` to leave a 2-connected slot empty.
 
 What is left out:
 
-- runs along a lattice **diagonal** (⟨011⟩ and friends), whose period is
-  a combination of cell parameters rather than one of them;
+- a run needing a supercell **along a diagonal** — a sublattice basis
+  rather than a row scale (9% of the library's diagonal runs);
+- mixing an axis-parallel and a diagonal family in one build;
 - a *straight* run closing on several cells — none exists in the library
   (every axis-multiple run is helical), and the straight path supercells
   whole blueprint periods, so it is refused rather than mis-built;
@@ -371,6 +403,15 @@ What is left out:
 
 Detection is also deliberately conservative about 2D layer nets (an
 in-plane zig-zag is not a 3D rod channel and is skipped).
+
+A diagonal build has only one free cell parameter, so whether it closes
+depends on the blueprint's proportions across the run. Driven from one
+generic synthetic rod recipe, the 19 supercell-free diagonal runs of the
+library nets under 40 slots come out: **13** build, verify and identify;
+**2** close but realize a *different* net — the greedy pairing picks
+periodic images the blueprint does not, which is exactly what
+`verify_net=True` is there to catch — and **4** miss the closure gate by
+0.4–0.6 Å. Pass `verify_net=True` on diagonal builds.
 
 For the reverse direction and the rest of the inverse pipeline, see
 [Deconstruction](deconstruction.md).

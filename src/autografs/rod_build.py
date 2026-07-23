@@ -40,9 +40,17 @@ turns 60 degrees per node, so a translation by c lands on a half-turn
 rotated copy and the run closes on ``(0, 0, 2)``. Such a run is still
 axis-parallel and the pin is simply *divided* by that multiple - one
 cell then holds two interleaved passes of the same rod rather than one
-pass of it (#173, see ``_run_axis``). Runs along a lattice *diagonal*
-stay out of scope: their period is a combination of cell parameters
-rather than one of them, so it cannot be substituted into a cell row.
+pass of it (#173, see ``_run_axis``).
+
+A run may also follow a lattice **diagonal** (bcu chains along its body
+diagonals). Its period ``|direction @ cell|`` is a *combination* of cell
+parameters, so the pin cannot be substituted into a cell row: instead
+the whole cell is stretched along the run's own direction to the rod's
+length, leaving one free scale perpendicular to it (#173, see
+``_RodBuild.cell``). The cell's symmetry drops, which is right - a rod
+down one body diagonal singles that diagonal out - and the two things
+the rest of the pipeline needs hold at every scale: the run's period is
+exactly the rod's length, and the run *direction* does not move.
 
 A straight run's nodes can be collinear yet *turn*: cds alternates two
 4-connected nodes 90 degrees apart, so the rod that fills it is a 4_1
@@ -135,39 +143,55 @@ def _unit_rows(vectors: np.ndarray) -> np.ndarray:
     return np.asarray(vectors / norms)
 
 
-def _run_axis(run: SlotRun | HelicalRun) -> tuple[int, int]:
+def _run_direction(run: SlotRun | HelicalRun, cell: np.ndarray) -> np.ndarray:
+    """Unit cartesian direction a run advances along, in a given cell.
+
+    ``run.direction`` is the lattice generator one period closes on, so
+    the run advances along ``direction @ cell`` whether that is a cell
+    row (the common case), a multiple of one (#173), or a lattice
+    diagonal. The scale-invariance matters: the cell parametrization
+    stretches the run direction and everything perpendicular to it
+    separately, so this direction is the same at every scale.
+    """
+    vector = np.asarray(run.direction, dtype=float) @ cell
+    norm = float(np.linalg.norm(vector))
+    if norm < 1e-9:  # pragma: no cover - a run closes on a nonzero generator
+        raise AlignmentError(f"Run direction {run.direction} is degenerate.")
+    return np.asarray(vector / norm)
+
+
+def _run_axis(run: SlotRun | HelicalRun) -> tuple[int | None, int]:
     """(cell axis a run follows, how many cells one of its periods spans).
 
     A run's ``direction`` is the lattice generator it closes on. Usually
-    that is a unit axis vector and its period *is* the cell parameter.
-    A helical run may instead close only after **several** cells: its
-    screw carries the channel onto a differently-oriented copy of itself
-    each cell and it comes back onto the original only after ``multiple``
-    of them, giving a direction like ``(0, 0, 2)`` (twt's 6_1 channel
-    turns 180 degrees per c; uom, uoo, fne, fnt and twt-e do the same,
-    src along all three cubic axes, and mdf-family nets close on
-    ``(0, 0, 3)``). The channel still runs along one cell axis, so the
-    axis pin is simply divided by the multiple - the cell holds one
-    period's worth of repeats spread over ``multiple`` interleaved
-    copies of the rod rather than a single pass of it (#173).
+    that is a unit axis vector and its period *is* the cell parameter,
+    so the pin substitutes straight into that cell row.
 
-    Raises
-    ------
-    AlignmentError
-        For a run along a lattice *diagonal*, whose period is a
-        combination of cell parameters rather than one of them, so it
-        cannot be expressed as a pinned cell row (#173).
+    Two things complicate it, and the axis index plus the multiple are
+    what tell them apart:
+
+    - a helical run may close only after **several** cells along its
+      axis. Its screw carries the channel onto a differently-oriented
+      copy of itself each cell and it returns to the original only after
+      ``multiple`` of them, giving a direction like ``(0, 0, 2)`` (twt's
+      6_1 channel turns 180 degrees per c; uom, uoo, fne, fnt, twt-e and
+      src do the same, and mdf-family nets close on ``(0, 0, 3)``). The
+      channel still follows one cell axis, so the pin is simply divided
+      by the multiple - the cell then holds one period's worth of
+      repeats spread over ``multiple`` interleaved copies of the rod
+      rather than a single pass of it (#173).
+    - a run along a lattice **diagonal** has no cell row at all. Its
+      axis index is ``None``, and the pin becomes a stretch of the whole
+      cell along the run's own direction rather than a substitution
+      (see ``_RodBuild.cell``). ``multiple`` is the direction's gcd,
+      which is one for every diagonal run in the library.
     """
     vector = np.asarray(run.direction, dtype=int)
+    nonzero = np.abs(vector[vector != 0])
+    multiple = int(np.gcd.reduce(nonzero)) if nonzero.size else 1
     if np.count_nonzero(vector) != 1:
-        raise AlignmentError(
-            "Rod building supports runs along a cell axis for now (got "
-            f"direction {run.direction}). A run along a lattice diagonal "
-            "pins a combination of cell parameters, which the cell "
-            "parametrization cannot express."
-        )
-    axis_index = int(np.argmax(np.abs(vector)))
-    return axis_index, int(abs(vector[axis_index]))
+        return None, multiple
+    return int(np.argmax(np.abs(vector))), multiple
 
 
 def _slot_geometry(slot, blueprint: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -279,8 +303,7 @@ def _run_nodes(topology: Topology, run: SlotRun | HelicalRun) -> _RunNodes:
     walk frame, which is the order a rod's repeats are laid down in.
     """
     cell = np.asarray(topology.cell.matrix, dtype=float)
-    axis_index, _multiple = _run_axis(run)
-    axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+    axis_hat = _run_direction(run, cell)
     seed = np.array([1.0, 0.0, 0.0])
     if abs(float(seed @ axis_hat)) > 0.9:
         seed = np.array([0.0, 1.0, 0.0])
@@ -607,30 +630,19 @@ class _RodBuild:
         )
         self.axis_length = self.n_repeats * self.period
 
-        # runs grouped into *axis families* - a woven packing spirals
+        # runs grouped into *direction families* - a woven packing spirals
         # along several cell axes at once (bmn: six 4_1 helices, two per
-        # axis, covering every node slot). Each family pins its own cell
-        # parameter and carries its own transverse frame and placement
-        # freedoms; a single-axis build is just the one-family case.
-        by_axis: dict[int, list[SlotRun | HelicalRun]] = {}
-        multiples: dict[int, int] = {}
+        # axis, covering every node slot). Each family pins its own share
+        # of the cell and carries its own transverse frame and placement
+        # freedoms; a single-direction build is just the one-family case.
+        by_direction: dict[tuple[int, int, int], list[SlotRun | HelicalRun]] = {}
         for a_run in self.runs:
-            axis, multiple = _run_axis(a_run)
-            by_axis.setdefault(axis, []).append(a_run)
-            # runs sharing an axis are chosen for a shared period, and on
-            # one axis the period *is* the multiple times the cell
-            # parameter - so they close on the same number of cells.
-            # Guarded anyway: mixing them would want two different
-            # lengths for the one parameter
-            if multiples.setdefault(axis, multiple) != multiple:  # pragma: no cover
-                raise AlignmentError(
-                    f"Runs along axis {axis} of {topology.name!r} close on "
-                    f"{multiples[axis]} and {multiple} cells; one rod cannot "
-                    "pin that axis to both lengths."
-                )
+            by_direction.setdefault(a_run.direction, []).append(a_run)
         self.families: list[dict] = []
-        for axis_index in sorted(by_axis):
-            axis_hat = blueprint[axis_index] / np.linalg.norm(blueprint[axis_index])
+        for direction in sorted(by_direction):
+            a_run = by_direction[direction][0]
+            axis_index, multiple = _run_axis(a_run)
+            axis_hat = _run_direction(a_run, blueprint)
             # transverse orthonormal pair the rod's local x/y embed along
             seed = np.array([1.0, 0.0, 0.0])
             if abs(float(seed @ axis_hat)) > 0.9:
@@ -639,18 +651,42 @@ class _RodBuild:
             e1 /= np.linalg.norm(e1)
             self.families.append(
                 {
+                    # None for a diagonal run: there is no cell row to
+                    # substitute the pin into (#173)
                     "axis_index": axis_index,
                     "axis_hat": axis_hat,
                     "e1": e1,
                     "e2": np.cross(axis_hat, e1),
-                    "runs": by_axis[axis_index],
+                    "runs": by_direction[direction],
                     # cells one of this family's run periods spans: the
                     # pinned parameter is the period divided by it (#173)
-                    "multiple": multiples[axis_index],
+                    "multiple": multiple,
+                    # a diagonal family stretches the blueprint along its
+                    # own direction by this factor instead (see cell())
+                    "pin_scale": self.axis_length
+                    / float(
+                        np.linalg.norm(np.asarray(direction, dtype=float) @ blueprint)
+                    ),
                 }
             )
+        if len({f["axis_index"] is None for f in self.families}) > 1:
+            raise AlignmentError(
+                f"Runs of {topology.name!r} mix cell-axis and diagonal "
+                "directions; a diagonal pin stretches the whole cell along "
+                "its own direction, which cannot also leave a cell row free."
+            )
+        pinned = [f["axis_index"] for f in self.families if f["axis_index"] is not None]
+        if len(set(pinned)) != len(pinned):  # pragma: no cover
+            # runs are selected for a shared period, and on one axis the
+            # period *is* the multiple times the cell parameter, so two
+            # families never land on the same row. Guarded because the
+            # second would silently overwrite the first's pin.
+            raise AlignmentError(
+                f"Two run directions of {topology.name!r} pin the same cell "
+                "axis to different lengths; one rod cannot satisfy both."
+            )
         self.n_families = len(self.families)
-        # the primary family's frame, for the single-axis code paths
+        # the primary family's frame, for the single-direction code paths
         self.axis_index = self.families[0]["axis_index"]
         self.axis_hat = self.families[0]["axis_hat"]
         self.e1 = self.families[0]["e1"]
@@ -836,30 +872,55 @@ class _RodBuild:
     # ------------------------------------------------------------------
 
     def cell(self, scale: float) -> np.ndarray:
-        """The cell at this scale, with every rod-bearing axis pinned.
+        """The cell at this scale, with every rod-bearing direction pinned.
 
         A family's run period is fixed by its rods (``n_repeats`` x the
-        chemical repeat); the *cell parameter* is that period divided by
-        the number of cells the run closes on, which is one for all but
-        the axis-multiple runs (#173). ``scale`` only stretches whatever
-        axes carry no rod, so a fully woven packing pins all three and
-        leaves nothing for it to do.
+        chemical repeat). How that enters the cell depends on the run's
+        direction:
+
+        - along a **cell axis**, the period is that cell parameter times
+          the number of cells the run closes on, so the pin substitutes
+          straight into the row (divided by the multiple, #173).
+          ``scale`` then stretches the other rows freely, and a fully
+          woven packing pins all three and leaves nothing for it to do.
+        - along a **diagonal** there is no row to substitute into: the
+          pinned quantity ``|direction @ cell|`` is a combination of
+          cell parameters. Instead the whole cell is stretched by
+          ``pin_scale`` along the run's own direction and by ``scale``
+          perpendicular to it. That map fixes the run's period exactly
+          (the period vector is parallel to the run, so only
+          ``pin_scale`` acts on it) while leaving the run direction
+          itself untouched at every scale - so the transverse frame,
+          the screw axis and the arm embedding are all scale-invariant
+          as before. It lowers the cell's symmetry, which is right: a
+          rod running down one body diagonal of bcu genuinely picks
+          that diagonal out.
         """
         cell = self.blueprint * scale
         for family in self.families:
-            cell[family["axis_index"]] = family["axis_hat"] * (
-                self.axis_length / family["multiple"]
-            )
+            axis_index = family["axis_index"]
+            if axis_index is not None:
+                cell[axis_index] = family["axis_hat"] * (
+                    self.axis_length / family["multiple"]
+                )
+                continue
+            axis_hat = family["axis_hat"]
+            along = self.blueprint @ axis_hat  # each row's share of the pin
+            cell = cell + np.outer(along, axis_hat) * (family["pin_scale"] - scale)
         return cell
 
     def _cell_one_period(self, scale: float) -> np.ndarray:
         """The cell of ONE blueprint period, which holds
         ``nodes_per_period`` of the rod's chemical repeats.
 
-        Only the straight path uses this, and a straight run always
-        closes on a single cell (``axis_multiple`` is one there), so one
-        period is one cell along the axis.
+        Only the straight path uses this. A straight run along a cell
+        axis always closes on a single cell (``axis_multiple`` is one
+        there), so one period is one cell along that axis; a diagonal
+        run is only built when no supercell is needed, so one period is
+        the whole cell.
         """
+        if self.axis_index is None:
+            return self.cell(scale)
         cell = self.blueprint * scale
         cell[self.axis_index] = self.axis_hat * (
             self.nodes_per_period * self.period / self.axis_multiple
@@ -1127,6 +1188,15 @@ class _RodBuild:
                 else float(np.linalg.norm(self.rod.positions[0][:2]))
             )
             scale0 = rod_radius / node_radius if node_radius > 1e-9 else 1.0
+        elif self.axis_index is None:
+            # a diagonal run already fixes the size through its own pin,
+            # so the natural start is the blueprint's *own* proportions
+            # at that size: scale == pin_scale makes the map isotropic.
+            # The perpendicular estimate below cannot be used here - it
+            # measures a home-cell separation, which for a diagonal is
+            # not the bonded one and lands the optimizer in the wrong
+            # basin entirely (fcu 2.1 against a true 5.9).
+            scale0 = float(self.families[0]["pin_scale"])
         elif not self.lateral:
             scale0 = 1.0  # nothing but the rod: the closure gate decides
         else:
@@ -1509,13 +1579,12 @@ def build_rod_framework(
     run_slots = {s for a_run in runs for s in a_run.slots}
     adjacency = _slot_adjacency(topology)
     for a_run in runs:
-        # each run must follow one cell axis (several *different* axes
-        # across runs is fine - that is a woven packing); a diagonal run
-        # would pin a combination of cell parameters, which the cell
-        # parametrization cannot express. A run that closes only after
-        # several cells along its axis is still axis-parallel: the pin
-        # is divided by that multiple (#173).
-        _axis_index, multiple = _run_axis(a_run)
+        # a run follows a cell axis (several *different* ones across
+        # runs is fine - that is a woven packing), possibly closing only
+        # after a multiple of cells along it, or a lattice diagonal
+        # (#173). Which it is decides how the period enters the cell;
+        # see _RodBuild.cell.
+        axis_index, multiple = _run_axis(a_run)
         if not isinstance(a_run, HelicalRun):
             if any(other.direction != a_run.direction for other in runs):
                 raise AlignmentError(
@@ -1523,7 +1592,7 @@ def build_rod_framework(
                     "helical runs only; a straight run is supercelled along "
                     "its own axis."
                 )
-            if multiple != 1:
+            if axis_index is not None and multiple != 1:
                 # the straight path supercells whole blueprint periods,
                 # and a period spanning several cells would need the
                 # lateral slots replicated per cell instead. No library
@@ -1535,6 +1604,25 @@ def build_rod_framework(
                     "helical runs are supported across several cells."
                 )
         node_slots = _node_slots(topology, a_run)
+        if axis_index is None:
+            # a diagonal run: the build must fit in one blueprint cell.
+            # Stacking periods along a diagonal is a genuine supercell
+            # *transformation* (a sublattice basis), not the axis path's
+            # row scale, so a run that needs one stays out. 91% of the
+            # library's diagonal runs chain enough nodes per period not
+            # to need it.
+            copies, _repeats = _repeat_counts(
+                max(len(node_slots), 1), rod.repeat.screw_order
+            )
+            if copies != 1:
+                raise AlignmentError(
+                    f"The diagonal run {a_run.direction} of {topology.name!r} "
+                    f"carries {len(node_slots)} point-of-extension node(s) per "
+                    f"period, so rod {rod.name!r} would need {copies} periods "
+                    "stacked along the diagonal - a supercell transformation "
+                    "rod building does not do. A run chaining more nodes per "
+                    "period (or a rod of lower screw order) needs none."
+                )
         if isinstance(a_run, HelicalRun):
             # a helical run's nodes are the screw's own orbit, filled
             # 1:1 by the rod's repeats

@@ -451,6 +451,94 @@ def _twt_axis_multiple_rod(twt, scale=6.0):
     return rod, linker
 
 
+def _diagonal_run(topology):
+    """The topology's first straight run along a lattice diagonal."""
+    from autografs.net import axial_runs
+
+    return next(
+        run
+        for run in axial_runs(topology)
+        if np.count_nonzero(np.asarray(run.direction)) > 1
+    )
+
+
+def _bcu_diagonal_rod(bcu, scale=6.0):
+    """A screwless rod matched to bcu's <111> body-diagonal run (#173).
+
+    bcu's eight-connected nodes chain along all four body diagonals. A
+    run down one of them carries two nodes per period - so no supercell
+    is needed - and consumes two of each node's eight connections,
+    leaving six lateral arms for the ditopic linkers on the six
+    remaining slots.
+
+    The diagonal is the point: its period is |direction @ cell|, a
+    combination of cell parameters rather than one of them, so the pin
+    stretches the whole cell along the run instead of substituting into
+    a row. Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.rod_build import _run_direction, _run_nodes
+    from autografs.rods import RodFragment
+
+    radius_c, radius_zn = 0.75, 1.22
+    cell = np.asarray(bcu.cell.matrix)
+    run = _diagonal_run(bcu)
+    axis_hat = _run_direction(run, cell)
+    seed = np.array([1.0, 0.0, 0.0])
+    if abs(float(seed @ axis_hat)) > 0.9:
+        seed = np.array([0.0, 1.0, 0.0])
+    e1 = seed - (seed @ axis_hat) * axis_hat
+    e1 /= np.linalg.norm(e1)
+    basis = np.array([e1, np.cross(axis_hat, e1), axis_hat])
+
+    nodes = _run_nodes(bcu, run)
+    _center, node_arms = _slot_arms(bcu, nodes.slots[0])
+    units = node_arms / np.linalg.norm(node_arms, axis=1, keepdims=True)
+    # the run itself consumes the two arms along its own direction
+    lateral = np.abs(units @ axis_hat) < 0.99
+    arm_node = float(np.linalg.norm(node_arms[lateral][0]))
+
+    chemical = float(run.period / len(nodes.slots)) * scale
+    # the metal sits on the run's own line (a straight run's nodes are
+    # collinear), with a bridging atom off it
+    positions = np.array([[0.0, 0.0, 0.0], [0.3 * scale, 0.0, chemical / 2]])
+    rod = RodFragment(
+        repeat=RodRepeat(
+            symbols=["Zn", "O"],
+            axial=positions[:, 2].copy(),
+            radial=np.linalg.norm(positions[:, :2], axis=1),
+            angular=np.arctan2(positions[:, 1], positions[:, 0]),
+            repeat_length=chemical,
+            screw_order=1,
+            screw_angle=0.0,
+            n_connections=int(lateral.sum()),
+        ),
+        positions=positions,
+        arms=[(0, (u @ basis.T) * (arm_node * scale)) for u in units[lateral]],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_bcu",
+    )
+    laterals = [s for s in range(len(bcu.slots)) if s not in set(run.slots)]
+    arm_lateral = float(np.linalg.norm(_slot_arms(bcu, laterals[0])[1][0]))
+    span = (arm_node + arm_lateral) * scale - radius_zn - radius_c
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [
+                [-arm_lateral * scale, 0, 0],
+                [-span, 0, 0],
+                [span, 0, 0],
+                [arm_lateral * scale, 0, 0],
+            ],
+            site_properties={"tags": [0, 0, 0, 0]},
+        ),
+        name="cc",
+    )
+    return rod, linker
+
+
 def _multipoe_run(topology):
     """The topology's axis-aligned straight run with several PoE nodes."""
     from autografs.net import axial_runs
@@ -1677,18 +1765,13 @@ class TestAxisMultipleRuns:
         mdf = bundled_topologies["mdf"]
         assert {_run_axis(r) for r in helical_runs(mdf)} == {(2, 1), (2, 3)}
 
-    def test_diagonal_run_still_refused(self, bundled_topologies):
-        # the remaining #173 scope: a run along a lattice diagonal pins a
-        # combination of cell parameters, not one of them
-        from autografs.net import axial_runs
+    def test_a_diagonal_has_no_cell_axis(self, bundled_topologies):
+        # the other #173 case: a diagonal run follows no cell row at all,
+        # so it reports None and takes the stretched-cell path instead
         from autografs.rod_build import _run_axis
 
         bcu = bundled_topologies["bcu"]
-        diagonal = next(
-            r for r in axial_runs(bcu) if sorted(map(abs, r.direction)) == [1, 1, 1]
-        )
-        with pytest.raises(Exception, match="lattice diagonal"):
-            _run_axis(diagonal)
+        assert _run_axis(_diagonal_run(bcu)) == (None, 1)
 
     def test_builds_and_realizes_twt(self, twt_build):
         from autografs.net import framework_quotient_edges, identify_net
@@ -1779,6 +1862,104 @@ class TestAxisMultipleRuns:
         )
         with pytest.raises(Exception, match="closes on 2 cells"):
             build_rod_framework(pcu, rod, linker, run=doubled)
+
+
+class TestDiagonalRuns:
+    """Runs along a lattice diagonal (#173).
+
+    A diagonal run's period is ``|direction @ cell|`` - a *combination*
+    of cell parameters, not one of them - so the pin cannot be
+    substituted into a cell row the way an axis-parallel one is.
+    Instead the whole cell is stretched along the run's own direction to
+    the pinned length, leaving one free scale perpendicular to it. That
+    lowers the cell's symmetry, which is right: a rod running down one
+    body diagonal of bcu genuinely singles that diagonal out.
+
+    bcu is the smallest clean case - eight-connected nodes, two per run
+    period so no supercell is needed, six ditopic laterals."""
+
+    @pytest.fixture(scope="class")
+    def bcu_build(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        bcu = bundled_topologies["bcu"]
+        rod, linker = _bcu_diagonal_rod(bcu)
+        return bcu, rod, build_rod_framework(bcu, rod, linker)
+
+    def test_builds_and_realizes_bcu(self, bcu_build):
+        from autografs.net import framework_quotient_edges, identify_net
+
+        bcu, _rod, built = bcu_build
+        # two repeats of the -Zn-O- chain + one linker per lateral slot
+        assert built.symbols.count("Zn") == 2
+        assert built.symbols.count("O") == 2
+        assert built.symbols.count("C") == 12
+        assert len(built.slots) == 2 + 6
+        assert sorted(built.graph) == list(range(len(built)))
+        assert built.min_contact() > 1.0
+        built.verify_net(bcu)
+        assert identify_net(framework_quotient_edges(built), {"bcu": bcu}) == ["bcu"]
+
+    def test_the_pin_holds_at_every_scale(self, bundled_topologies):
+        # the defining property of the diagonal map: the free scale can
+        # do what it likes perpendicular to the run, but |direction @
+        # cell| stays exactly the rod's length, and the run direction
+        # itself never moves (the transverse frame depends on it)
+        from autografs.rod_build import _RodBuild, _run_direction
+
+        bcu = bundled_topologies["bcu"]
+        rod, linker = _bcu_diagonal_rod(bcu)
+        run = _diagonal_run(bcu)
+        build = _RodBuild(bcu, rod, linker, run)
+        assert build.families[0]["axis_index"] is None
+        direction = np.asarray(run.direction, dtype=float)
+        for scale in (0.5, 1.0, 2.0, 7.5):
+            cell = build.cell(scale)
+            assert np.linalg.norm(direction @ cell) == pytest.approx(build.axis_length)
+            assert _run_direction(run, cell) == pytest.approx(build.axis_hat)
+
+    def test_the_cell_is_stretched_along_the_run(self, bcu_build):
+        # bcu's blueprint is cubic; pinning one body diagonal to the
+        # rod's length while the rest scales freely makes it
+        # rhombohedral. A single isotropic scale could not have done it
+        _bcu, rod, built = bcu_build
+        angles = np.asarray(built.structure.lattice.angles)
+        assert np.abs(angles - 90.0).max() > 0.1
+        # and the pinned quantity is the rod's own length
+        period = np.linalg.norm(
+            np.asarray(_diagonal_run(_bcu).direction, dtype=float) @ built.cell
+        )
+        assert period == pytest.approx(2 * rod.repeat.repeat_length)
+
+    def test_supercell_along_a_diagonal_refused(self, mofgen, bundled_topologies):
+        # hxl's diagonal run carries a single node per period, so a rod
+        # would need two periods stacked - a supercell *transformation*
+        # along the diagonal, not the axis path's row scale
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        hxl = bundled_topologies["hxl"]
+        with pytest.raises(Exception, match="supercell transformation"):
+            build_rod_framework(hxl, rod, linker, run=_diagonal_run(hxl))
+
+    def test_axis_and_diagonal_runs_cannot_be_mixed(self, bundled_topologies):
+        # a diagonal pin stretches the whole cell along its own
+        # direction, so it cannot also leave a cell row free for an
+        # axis-parallel family to pin
+        from autografs.net import axial_runs
+        from autografs.rod_build import _RodBuild
+
+        ccu = bundled_topologies["ccu"]
+        runs = axial_runs(ccu)
+        axis = next(r for r in runs if np.count_nonzero(r.direction) == 1)
+        diagonal = next(r for r in runs if np.count_nonzero(r.direction) > 1)
+        rod, linker = _bcu_diagonal_rod(bundled_topologies["bcu"])
+        with pytest.raises(Exception, match="mix cell-axis and diagonal"):
+            _RodBuild(ccu, rod, linker, [axis, diagonal])
 
 
 class TestEmptyLateralSlots:
