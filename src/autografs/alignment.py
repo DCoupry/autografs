@@ -49,6 +49,8 @@ from autografs.fragment import Fragment
 from autografs.topology import Topology
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from autografs.symmetry import OrbitDisplacements
 
 __all__ = [
@@ -678,6 +680,7 @@ def prepare_build(
     topology: Topology,
     mappings: dict[int, Fragment],
     relax_embedding: bool = False,
+    empty_slots: Iterable[int] = (),
 ) -> BuildPlan:
     """Precompute all geometry for building one framework.
 
@@ -687,13 +690,18 @@ def prepare_build(
         The blueprint; not modified.
     mappings : dict[int, Fragment]
         Slot index to (private) SBU fragment, as produced by
-        Autografs._validate_mappings.
+        Autografs._validate_mappings. Slots listed in ``empty_slots``
+        must be absent.
     relax_embedding : bool, optional
         Add the blueprint's symmetry-allowed slot displacements as
         optimizer degrees of freedom (see autografs.symmetry), with
         the anchor-direction terms joining the objective. Fully pinned
         nets (pcu and most high-symmetry blueprints) have nothing to
         relax and keep the legacy objective exactly.
+    empty_slots : iterable of int, optional
+        2-connected slots deliberately left empty (#179): each one's
+        two neighbours bond directly, the pair's periodic offset
+        chained through the absent slot's dummy positions.
 
     Returns
     -------
@@ -703,8 +711,10 @@ def prepare_build(
     Raises
     ------
     AlignmentError
-        If an SBU's dummy count does not match its slot's.
+        If an SBU's dummy count does not match its slot's, if an empty
+        slot is not 2-connected, or if two empty slots are adjacent.
     """
+    empty_slots = set(empty_slots)
     blueprint = topology.cell
     placements: list[SlotPlacement] = []
     # tag -> list of (placement index, target index, fractional position)
@@ -769,6 +779,41 @@ def prepare_build(
             tag_sites.setdefault(tag, []).append((index, target_index, frac))
 
     pairs: list[tuple[int, int, int, int, np.ndarray]] = []
+    # an emptied 2-connected slot bonds its two neighbours directly
+    # (#179, the finite mirror of rod_build's contracted slots): its
+    # two tags are bridged into one pair, with the periodic offset
+    # chained through the absent slot's own dummy positions, and the
+    # far dummy re-tagged so the graph builder bonds the pair.
+    for slot_index in sorted(empty_slots):
+        slot = topology.slots[slot_index]
+        dummy_idx = [
+            i for i, site in enumerate(slot.atoms) if site.specie.symbol == "X"
+        ]
+        if len(dummy_idx) != 2:
+            raise AlignmentError(
+                f"Slot {slot_index} of {topology.name!r} has "
+                f"{len(dummy_idx)} connections; only 2-connected slots "
+                "can be left empty."
+            )
+        empty_frac = blueprint.get_fractional_coords(slot.atoms.cart_coords[dummy_idx])
+        tag_a, tag_b = (int(slot.atoms[i].properties["tags"]) for i in dummy_idx)
+        side_a = tag_sites.pop(tag_a, [])
+        side_b = tag_sites.pop(tag_b, [])
+        if len(side_a) != 1 or len(side_b) != 1:
+            raise AlignmentError(
+                f"Empty slot {slot_index} of {topology.name!r} needs "
+                "exactly one mapped neighbour on each side; an "
+                "adjacent slot is missing or also empty."
+            )
+        (index_a, target_a, frac_a) = side_a[0]
+        (index_b, target_b, frac_b) = side_b[0]
+        # each neighbour's dummy coincides with one of the empty slot's
+        # dummies up to a lattice translation; the direct bond crosses
+        # the difference of those two translations
+        offset = np.round(frac_a - empty_frac[0]) - np.round(frac_b - empty_frac[1])
+        pairs.append((index_a, target_a, index_b, target_b, offset))
+        # one shared tag, so fragments_to_networkx bonds the two anchors
+        placements[index_b].tags[target_b] = tag_a
     unpaired = 0
     for tag, entries in sorted(tag_sites.items()):
         if len(entries) == 1:
@@ -800,9 +845,23 @@ def prepare_build(
     )
     slot_disp = None
     if relax_embedding:
+        from dataclasses import replace as dataclass_replace
+
         from autografs.symmetry import orbit_displacements
 
         slot_disp = orbit_displacements(topology)
+        if empty_slots:
+            # an orbit whose every slot is empty has no placement to
+            # move: its parameters would be flat directions the
+            # optimizer wanders in, so pin it
+            members: dict[int, set[int]] = {}
+            for slot, orbit in enumerate(slot_disp.orbit_of_slot):
+                members.setdefault(orbit, set()).add(slot)
+            bases = {
+                orbit: (np.zeros((0, 3)) if members[orbit] <= empty_slots else basis)
+                for orbit, basis in slot_disp.bases.items()
+            }
+            slot_disp = dataclass_replace(slot_disp, bases=bases)
         if slot_disp.n_free:
             logger.debug(
                 f"Embedding relaxation on {topology.name!r}: "

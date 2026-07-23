@@ -70,6 +70,28 @@ mof = mofgen.build(
 mappings = {node_type: "sbu_A", edge_type: "linker_1", 7: "linker_2"}
 ```
 
+### Empty slots
+
+Many blueprints subdivide their edges with 2-connected slots (RCSR's
+`EDGE_CENTER` convention), but real materials often bond node to linker
+directly — HKUST-1 bonds its Cu paddlewheels straight onto BTC, while the
+`tbo` blueprint decorates every edge. Mapping a slot (or a whole slot type) to
+`None` leaves it deliberately empty: its two neighbours bond directly, and the
+cell optimizer targets one covalent bond between their anchors.
+
+```python
+tbo = mofgen.topologies["tbo"]
+mappings = {four_c: "my_paddlewheel", three_c: "my_btc", two_c: None}
+mof = mofgen.build(tbo, mappings=mappings, verify_net=True)
+```
+
+Only 2-connected slots may be emptied. `verify_net` compares against the
+blueprint with the emptied slots contracted, so the topological gate still
+applies, and the marker survives save/load and supercells. This is the finite
+mirror of the rod pipeline's contracted lateral slots, and it is what lets
+structures that identify on the *contracted* tier (the tell-tale of an absent
+edge decoration) rebuild as the materials they are.
+
 ### Embedding relaxation
 
 A build normally places every SBU at its blueprint slot centre and varies only
