@@ -9,12 +9,14 @@ of rod deconstruction:
 - the rod must carry its internal bond graph (``bonds``, recorded at
   harvest since Stage C1); helical rods are supported since the
   screw-aware bond recording (#158);
-- the run follows a single cell axis: a *straight* run
-  (``autografs.net.axial_runs``) has one PoE-bearing slot per period,
-  supercelled ``n_repeats`` up; a *helical* run
+- the run follows a single cell axis. A *helical* run
   (``autografs.net.helical_runs``, a MOF-74 / etb-class screw) has
   ``screw_order`` node slots that the rod's chemical repeats fill 1:1
-  by the screw operation, no supercell (#158);
+  by the screw operation, no supercell (#158). A *straight* run
+  (``autografs.net.axial_runs``) usually has one PoE-bearing slot per
+  period and is supercelled up, but may **chain several** — 66 library
+  nets do — in which case the period already holds that many repeats
+  (#168);
 - the non-run (*lateral*) slots take a **per-slot mapping** of finite
   SBUs of any connectivity — one ditopic species everywhere is just
   the common case, and a single Fragment still means exactly that
@@ -33,6 +35,13 @@ pins all three axes, which determines the cell outright. One rod pins
 every axis it runs along to the same length, so only runs of equal
 period can be woven together. Runs along a lattice *diagonal* stay out
 of scope — they would pin a combination of cell parameters.
+
+A straight run's nodes can be collinear yet *turn*: cds alternates two
+4-connected nodes 90 degrees apart, so the rod that fills it is a 4_1
+screw even though nothing about the run's geometry is helical
+(``_run_nodes`` measures that turn from the nodes' own arm directions,
+which is the only place it shows up — their centres sit on the axis,
+where a positional screw fit is degenerate).
 
 What is structurally different from the finite-SBU pipeline:
 
@@ -135,17 +144,19 @@ def _slot_geometry(slot, blueprint: np.ndarray) -> tuple[np.ndarray, np.ndarray]
     return center @ inv, arms @ inv
 
 
-def _unwrapped_node_frac(topology: Topology, run: HelicalRun) -> np.ndarray:
-    """Fractional coord of a helical run's first node, unwrapped along
-    the run's own walk so it lies on the same cylinder as
-    ``run.axis_point``.
+def _unwrapped_run_positions(
+    topology: Topology, run: SlotRun | HelicalRun
+) -> dict[int, np.ndarray]:
+    """Cartesian position of every slot on a run, unwrapped along the
+    run's own walk rather than taken from its home cell.
 
     ``helical_runs`` derives ``axis_point`` from the *unwrapped* walk
-    (nodes accumulated step by step from ``run.slots[0]``); a node's
+    (slots accumulated step by step from ``run.slots[0]``); a slot's
     home-cell image can be a perpendicular-wrapped copy sitting well off
     that cylinder, which would place the rod at the wrong radius and
-    azimuth. Walking the run the same way puts the reference node back on
-    the axis line's cylinder.
+    azimuth. Walking the run the same way puts every slot back on the
+    run's own line or cylinder - which is also the only frame in which
+    a run's nodes can be ordered along the axis.
     """
     from autografs.net import _topology_slot_images, topology_quotient_edges
 
@@ -173,12 +184,154 @@ def _unwrapped_node_frac(topology: Topology, run: HelicalRun) -> np.ndarray:
         disp = next(d for w, d in steps[cur] if w == nxt)
         pos[nxt] = pos[cur] + disp
         cur = nxt
-    node0 = next(
+    return pos
+
+
+def _node_slots(topology: Topology, run: SlotRun | HelicalRun) -> list[int]:
+    """The run's point-of-extension slots (more than two connections)."""
+    return [
         s
         for s in run.slots
         if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+    ]
+
+
+def _unwrapped_node_frac(topology: Topology, run: HelicalRun) -> np.ndarray:
+    """Fractional coord of a helical run's first node, unwrapped."""
+    cell = np.asarray(topology.cell.matrix, dtype=float)
+    positions = _unwrapped_run_positions(topology, run)
+    node0 = _node_slots(topology, run)[0]
+    return np.asarray(positions[node0] @ np.linalg.inv(cell))
+
+
+@dataclass(frozen=True)
+class _RunNodes:
+    """How a run's point-of-extension nodes sit along its axis.
+
+    A rod's chemical repeats are evenly spaced by construction and each
+    is a screw image of the last, so a run can host a rod only if its
+    nodes are spaced the same way. ``rotations`` holds every angle that
+    carries one node's lateral arm directions onto the next's - several
+    when the arm set has its own rotational symmetry, none when the
+    nodes simply do not line up under any rotation.
+    """
+
+    slots: tuple[int, ...]  # in axial order
+    even: bool  # equally spaced, k per run period
+    rotations: tuple[float, ...]  # degrees, ascending; empty if none fits
+
+
+# a run's node spacing and its arm rotations are compared at these
+# tolerances: blueprint coordinates carry roundtrip noise, and the
+# library's idealized angles land within a degree or so
+_SPACING_TOL = 1e-3
+_ROTATION_TOL = 2.0
+_ROTATION_STEP = 0.25
+
+
+def _run_nodes(topology: Topology, run: SlotRun | HelicalRun) -> _RunNodes:
+    """Order a run's nodes along its axis and measure the screw between.
+
+    See :class:`_RunNodes`. Nodes are ordered in the run's own unwrapped
+    walk frame, which is the order a rod's repeats are laid down in.
+    """
+    cell = np.asarray(topology.cell.matrix, dtype=float)
+    axis_index = int(np.argmax(np.abs(np.asarray(run.direction))))
+    axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+    seed = np.array([1.0, 0.0, 0.0])
+    if abs(float(seed @ axis_hat)) > 0.9:
+        seed = np.array([0.0, 1.0, 0.0])
+    e1 = seed - (seed @ axis_hat) * axis_hat
+    e1 /= np.linalg.norm(e1)
+    e2 = np.cross(axis_hat, e1)
+
+    positions = _unwrapped_run_positions(topology, run)
+    nodes = sorted(_node_slots(topology, run), key=lambda s: positions[s] @ axis_hat)
+    heights = np.array([float(positions[s] @ axis_hat) for s in nodes])
+    gaps = np.diff(heights)
+    even = bool(
+        len(nodes) == 1
+        or (
+            np.allclose(gaps, gaps[0], atol=_SPACING_TOL)
+            and abs(gaps[0] * len(nodes) - run.period) < _SPACING_TOL
+        )
     )
-    return np.asarray(pos[node0] @ np.linalg.inv(cell))
+
+    azimuths = []
+    for slot in nodes:
+        _center, frac_arms = _slot_geometry(topology.slots[slot], cell)
+        units = _unit_rows(frac_arms @ cell)
+        lateral = units[np.abs(units @ axis_hat) < 0.9]
+        if not len(lateral):
+            return _RunNodes(tuple(nodes), even, ())
+        azimuths.append(np.sort(np.degrees(np.arctan2(lateral @ e2, lateral @ e1))))
+    if len({len(a) for a in azimuths}) > 1:
+        return _RunNodes(tuple(nodes), even, ())
+
+    def wrapped(angles: np.ndarray) -> np.ndarray:
+        return np.sort((angles + 180.0) % 360.0 - 180.0)
+
+    # score every rotation by how well it carries each node's arm set
+    # onto the next's, the last onto the first included: the run closes
+    # on its own period
+    grid = np.arange(0.0, 360.0, _ROTATION_STEP)
+    scores = np.array(
+        [
+            max(
+                float(
+                    np.abs(
+                        wrapped(azimuths[i] + angle)
+                        - wrapped(azimuths[(i + 1) % len(nodes)])
+                    ).max()
+                )
+                for i in range(len(nodes))
+            )
+            for angle in grid
+        ]
+    )
+    # keep one representative per contiguous band of fitting angles: the
+    # tolerance makes a whole neighbourhood fit, and only its best
+    # member is the rotation the blueprint actually holds
+    fits = scores <= _ROTATION_TOL
+    rotations = []
+    start = None
+    for index in range(len(grid) + 1):
+        inside = bool(fits[index % len(grid)]) and index < len(grid)
+        if inside and start is None:
+            start = index
+        elif not inside and start is not None:
+            band = slice(start, index)
+            rotations.append(float(grid[band][int(np.argmin(scores[band]))]))
+            start = None
+    return _RunNodes(tuple(nodes), even, tuple(rotations))
+
+
+def _screw_fits(nodes: _RunNodes, screw_angle: float) -> bool:
+    """Does a rod turning ``screw_angle`` per repeat fit these nodes?"""
+    target = screw_angle % 360.0
+    return any(
+        min(abs(rotation - target), 360.0 - abs(rotation - target)) <= _ROTATION_TOL
+        for rotation in nodes.rotations
+    )
+
+
+def _repeat_counts(nodes_per_period: int, screw_order: int) -> tuple[int, int]:
+    """(blueprint periods to stack, rod repeats laid down) for a run.
+
+    One blueprint period already holds ``nodes_per_period`` of the rod's
+    chemical repeats - one per point-of-extension node. Enough periods
+    are stacked to close the rod's screw and to reach at least two
+    repeats, so a continuation bond is always a distinct node pair
+    rather than a parallel edge.
+
+    The familiar cases fall out: a one-node straight run (pcu) stacks
+    two periods for two repeats, a helical run's period already holds
+    its whole screw so it stacks one, and a straight run chaining k
+    nodes needs no supercell at all once k is two or more (#168).
+    """
+    wanted = max(2, screw_order)
+    copies = max(1, -(-wanted // nodes_per_period))
+    return copies, nodes_per_period * copies
 
 
 def _linker_anchor_rows(linker: Fragment) -> list[int]:
@@ -400,12 +553,15 @@ class _RodBuild:
         blueprint = np.asarray(topology.cell.matrix, dtype=float)
         self.blueprint = blueprint
         self.period = float(rod.repeat.repeat_length)
-        # repeats placed along the axis: enough to close the screw (a
-        # multiple of the screw order) and at least two, so a
-        # continuation bond is always a distinct node pair rather than
-        # a parallel edge. A straight rod (order 1) uses two.
         self.screw_rad = np.radians(rod.repeat.screw_angle)
-        self.n_repeats = max(2, rod.repeat.screw_order)
+        # how many of the rod's repeats one blueprint period already
+        # holds: the run's point-of-extension node count. A helical run
+        # has screw_order of them; a straight run usually one, but 66
+        # library nets chain several per period (#168).
+        self.nodes_per_period = len(_node_slots(topology, primary))
+        self.copies, self.n_repeats = _repeat_counts(
+            self.nodes_per_period, rod.repeat.screw_order
+        )
         self.axis_length = self.n_repeats * self.period
 
         # runs grouped into *axis families* - a woven packing spirals
@@ -442,14 +598,10 @@ class _RodBuild:
         self.e1 = self.families[0]["e1"]
         self.e2 = self.families[0]["e2"]
 
-        def _node_slots(a_run: SlotRun | HelicalRun) -> list[int]:
-            return [
-                s
-                for s in a_run.slots
-                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-            ]
-
-        self.node_slot_index = _node_slots(primary)[0]
+        # the reference node repeat 0 is placed on: the first along the
+        # axis, since the repeats are laid down in axial order
+        self.run_nodes = _run_nodes(topology, primary)
+        self.node_slot_index = self.run_nodes.slots[0]
         self.node_center_frac, _node_arms = _slot_geometry(
             topology.slots[self.node_slot_index], blueprint
         )
@@ -548,10 +700,12 @@ class _RodBuild:
         )
         self.orbit_position = {orbit: k for k, orbit in enumerate(distinct)}
         self.n_orbits = len(distinct)
-        # linker copies per lateral slot: a helical blueprint already
-        # enumerates every lateral slot of the period (one linker each);
-        # a straight one holds a single period, supercelled n_repeats up
-        self.linker_copies = 1 if self.helical else self.n_repeats
+        # linker copies per lateral slot, one per blueprint period the
+        # build stacks: a helical blueprint is already the full period
+        # (one linker each), a straight one holding a single node is
+        # supercelled n_repeats up, and one holding k of them needs only
+        # n_repeats / k copies (#168)
+        self.linker_copies = self.copies
 
         self._rod_radius = [_covalent_radius(symbol) for symbol in rod.repeat.symbols]
         self._arm_rows = [row for row, _ in rod.arms]
@@ -572,20 +726,18 @@ class _RodBuild:
 
         # which blueprint node slot each rod repeat sits on: a helical
         # run's nodes are screw images of one another in walk order, so
-        # repeat n fills the nth; a straight run reuses one node slot for
-        # every repeat of its supercell. Indexed like rod_specs, i.e.
-        # grouped by axis family.
+        # repeat n fills the nth; a straight run's are taken in axial
+        # order and the sequence repeats once per stacked period.
+        # Indexed like rod_specs, i.e. grouped by axis family.
         self.repeat_slot: list[list[int]] = []
         ordered = [a_run for family in self.families for a_run in family["runs"]]
         for a_run in ordered:
-            nodes = [
-                s
-                for s in a_run.slots
-                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-            ]
-            self.repeat_slot.append(
-                nodes if self.helical else [nodes[0]] * self.n_repeats
+            nodes = (
+                _node_slots(topology, a_run)
+                if self.helical
+                else list(_run_nodes(topology, a_run).slots)
             )
+            self.repeat_slot.append(nodes * (self.n_repeats // len(nodes)))
         self.port_budget = self._port_budget(topology)
 
     def _port_budget(self, topology: Topology) -> dict[tuple[int, int], int]:
@@ -638,8 +790,10 @@ class _RodBuild:
         return cell
 
     def _cell_one_period(self, scale: float) -> np.ndarray:
+        """The cell of ONE blueprint period, which holds
+        ``nodes_per_period`` of the rod's chemical repeats."""
         cell = self.blueprint * scale
-        cell[self.axis_index] = self.axis_hat * self.period
+        cell[self.axis_index] = self.axis_hat * (self.nodes_per_period * self.period)
         return cell
 
     def _embed(self, local: np.ndarray, theta: float, family: dict) -> np.ndarray:
@@ -813,7 +967,9 @@ class _RodBuild:
             for n in range(self.linker_copies):
                 placements.append(
                     {
-                        "coords": screw(linker0, n),
+                        # a copy is one blueprint period further along,
+                        # i.e. nodes_per_period of the rod's own steps
+                        "coords": screw(linker0, n * self.nodes_per_period),
                         "species": lateral.species,
                         "slot": lateral.slot_index,
                         "rmsd": rmsd,
@@ -1103,6 +1259,16 @@ def _select_runs(
             f"Topology {topology.name!r} has no straight axial slot run "
             "(nor a matching helical one); rod building needs one."
         )
+    # a straight run chaining several nodes per period only hosts a rod
+    # whose own screw matches the turn between them (#168), so prefer a
+    # run this rod actually fits; falling back to the first keeps the
+    # rejection message about the run the caller most likely meant
+    for straight in runs:
+        nodes = _run_nodes(topology, straight)
+        if len(nodes.slots) == 1 or (
+            nodes.even and _screw_fits(nodes, rod.repeat.screw_angle)
+        ):
+            return [straight]
     return [runs[0]]
 
 
@@ -1290,19 +1456,42 @@ def build_rod_framework(
                 "Woven (multi-axis) rod packings are supported for helical "
                 "runs only; a straight run is supercelled along its own axis."
             )
-        node_slots = [
-            s
-            for s in a_run.slots
-            if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-        ]
-        # a straight run has one PoE-bearing node per period; a helical
-        # run has screw_order of them, filled 1:1 by the rod's repeats
-        expected_nodes = a_run.screw_order if isinstance(a_run, HelicalRun) else 1
-        if len(node_slots) != expected_nodes:
-            raise AlignmentError(
-                f"Rod building expects {expected_nodes} PoE-bearing node "
-                f"slot(s) on this run but found {len(node_slots)}."
-            )
+        node_slots = _node_slots(topology, a_run)
+        if isinstance(a_run, HelicalRun):
+            # a helical run's nodes are the screw's own orbit, filled
+            # 1:1 by the rod's repeats
+            if len(node_slots) != a_run.screw_order:
+                raise AlignmentError(
+                    f"Rod building expects {a_run.screw_order} PoE-bearing "
+                    f"node slot(s) on this helical run but found "
+                    f"{len(node_slots)}."
+                )
+        elif len(node_slots) > 1:
+            # a straight run chaining several nodes per period holds
+            # that many of the rod's repeats (#168). The rod's repeats
+            # are evenly spaced and each is a screw image of the last,
+            # so the run's nodes have to be arranged the same way.
+            nodes = _run_nodes(topology, a_run)
+            if not nodes.even:
+                raise AlignmentError(
+                    f"The {len(node_slots)} node slots of this run of "
+                    f"{topology.name!r} are not evenly spaced along its "
+                    "axis; a rod's chemical repeats are, so none can fill "
+                    "them."
+                )
+            if not nodes.rotations:
+                raise AlignmentError(
+                    f"The {len(node_slots)} node slots of this run of "
+                    f"{topology.name!r} are not related by a constant "
+                    "rotation about its axis; no single rod can fill them."
+                )
+            if not _screw_fits(nodes, rod.repeat.screw_angle):
+                turns = ", ".join(f"{r:.1f}" for r in nodes.rotations)
+                raise AlignmentError(
+                    f"Rod {rod.name!r} turns {rod.repeat.screw_angle:.1f} deg "
+                    f"per repeat but this run of {topology.name!r} turns "
+                    f"{turns} deg between consecutive node slots."
+                )
         for node in node_slots:
             # lateral connections of a node = its degree minus the
             # connections the run itself consumes (its continuation).

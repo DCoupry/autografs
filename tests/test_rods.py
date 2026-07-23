@@ -363,6 +363,109 @@ def _bmn_woven_rod(bmn, scale=6.53):
     return rod, linker
 
 
+def _multipoe_run(topology):
+    """The topology's axis-aligned straight run with several PoE nodes."""
+    from autografs.net import axial_runs
+    from autografs.rod_build import _node_slots
+
+    return next(
+        run
+        for run in axial_runs(topology)
+        if len(_node_slots(topology, run)) > 1
+        and sorted(np.abs(np.asarray(run.direction)).tolist()) == [0, 0, 1]
+    )
+
+
+def _cds_multipoe_rod(cds, scale=5.0, bridge_radius=0.35):
+    """A rod matched to cds's two-node straight run, plus a linker.
+
+    cds chains *two* point-of-extension nodes per period on one straight
+    run - the multi-PoE case (#168) - and turns 90 degrees between them,
+    so the rod filling it is a 4_1 screw whose repeats land on alternate
+    nodes. Its metal sits on the run's own line (the nodes are collinear
+    by construction) with an off-axis bridging atom, which is what makes
+    the screw real rather than a relabelling.
+
+    Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import axial_runs
+    from autografs.rod_build import _node_slots, _run_nodes
+    from autografs.rods import RodFragment
+
+    radius_c, radius_zn = 0.75, 1.22
+    cell = np.asarray(cds.cell.matrix)
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in cds.slots]
+    run = next(
+        r
+        for r in axial_runs(cds)
+        if len(_node_slots(cds, r)) > 1
+        and sorted(np.abs(np.asarray(r.direction)).tolist()) == [0, 0, 1]
+    )
+    nodes = _run_nodes(cds, run)
+    axis_index = int(np.argmax(np.abs(np.asarray(run.direction))))
+    axis_hat = cell[axis_index] / np.linalg.norm(cell[axis_index])
+    seed = np.array([1.0, 0.0, 0.0])
+    if abs(seed @ axis_hat) > 0.9:
+        seed = np.array([0.0, 1.0, 0.0])
+    e1 = seed - (seed @ axis_hat) * axis_hat
+    e1 /= np.linalg.norm(e1)
+    basis = np.array([e1, np.cross(axis_hat, e1), axis_hat])
+
+    _center, node_arms = _slot_arms(cds, nodes.slots[0])
+    units = node_arms / np.linalg.norm(node_arms, axis=1, keepdims=True)
+    lateral = np.abs(units @ axis_hat) < 0.9
+    arm_node = float(np.linalg.norm(node_arms[lateral][0]))
+
+    rotation = nodes.rotations[0]
+    chemical = float(run.period / len(nodes.slots)) * scale
+    half = np.radians(rotation) / 2.0
+    bridge = bridge_radius * scale
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [bridge * np.cos(half), bridge * np.sin(half), chemical / 2],
+        ]
+    )
+    rod = RodFragment(
+        repeat=RodRepeat(
+            symbols=["Zn", "O"],
+            axial=positions[:, 2].copy(),
+            radial=np.linalg.norm(positions[:, :2], axis=1),
+            angular=np.arctan2(positions[:, 1], positions[:, 0]),
+            repeat_length=chemical,
+            # the repeats close onto a pure translation after a full turn
+            screw_order=int(round(360.0 / rotation)),
+            screw_angle=float(rotation),
+            n_connections=int(lateral.sum()),
+        ),
+        positions=positions,
+        arms=[(0, (u @ basis.T) * (arm_node * scale)) for u in units[lateral]],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_cds",
+    )
+    laterals = [s for s in range(len(cds.slots)) if s not in set(run.slots)]
+    arm_lateral = float(np.linalg.norm(_slot_arms(cds, laterals[0])[1][0]))
+    span = (arm_node + arm_lateral) * scale - radius_zn - radius_c
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [
+                [-arm_lateral * scale, 0, 0],
+                [-span, 0, 0],
+                [span, 0, 0],
+                [arm_lateral * scale, 0, 0],
+            ],
+            site_properties={"tags": [0, 0, 0, 0]},
+        ),
+        name="cc",
+    )
+    assert counts[nodes.slots[0]] == 4  # two run connections, two lateral
+    return rod, linker
+
+
 def _etbe_mixed_mapping(etbe, scale=7.43, arm_atom=1.5, empty_decorations=False):
     """A rod plus *two* linker species hand-matched to etb-e (#168).
 
@@ -1243,6 +1346,142 @@ class TestMixedRodMappings:
         rod.arms = rod.arms[:1]
         with pytest.raises(Exception, match="expects 2 lateral connections"):
             build_rod_framework(etbe, rod, mapping)
+
+
+class TestMultiPoERuns:
+    """Straight runs chaining several point-of-extension nodes per
+    period (#168). 66 library nets do; their nodes hold one of the
+    rod's chemical repeats each, so the blueprint period already holds
+    k of them and the rod's own screw has to match the turn between
+    consecutive nodes. cds is the smallest: two 4-connected nodes per
+    period, 90 degrees apart."""
+
+    @pytest.fixture(scope="class")
+    def cds_build(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        cds = bundled_topologies["cds"]
+        rod, linker = _cds_multipoe_rod(cds)
+        return cds, build_rod_framework(cds, rod, linker)
+
+    def test_builds_and_realizes_cds(self, cds_build):
+        from autografs.net import framework_quotient_edges, identify_net
+
+        cds, built = cds_build
+        # four repeats of a -Zn-O- 4_1 screw + one linker per lateral
+        # slot per stacked period
+        assert built.symbols.count("Zn") == 4
+        assert built.symbols.count("O") == 4
+        assert built.symbols.count("C") == 8
+        assert len(built.slots) == 4 + 4
+        assert sorted(built.graph) == list(range(len(built)))
+        assert built.min_contact() > 1.0
+        built.verify_net(cds)
+        assert identify_net(framework_quotient_edges(built), {"cds": cds}) == ["cds"]
+
+    def test_repeats_land_on_alternate_nodes(self, bundled_topologies):
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        cds = bundled_topologies["cds"]
+        rod, linker = _cds_multipoe_rod(cds)
+        build = _RodBuild(cds, rod, linker, _select_runs(cds, rod, False)[0])
+        assert build.nodes_per_period == 2
+        # a 4_1 rod needs four repeats, so two periods are stacked
+        assert (build.copies, build.n_repeats) == (2, 4)
+        assert build.linker_copies == 2
+        # repeat n fills the nth node along the axis, wrapping per period
+        first, second = build.repeat_slot[0][:2]
+        assert first != second
+        assert build.repeat_slot == [[first, second, first, second]]
+
+    def test_repeat_arithmetic(self):
+        # one blueprint period holds nodes_per_period repeats; enough
+        # periods are stacked to close the screw and reach two repeats
+        from autografs.rod_build import _repeat_counts
+
+        assert _repeat_counts(1, 1) == (2, 2)  # pcu: today's behaviour
+        assert _repeat_counts(1, 2) == (2, 2)  # a 2_1 rod on pcu
+        assert _repeat_counts(2, 1) == (1, 2)  # k=2: no supercell at all
+        assert _repeat_counts(2, 4) == (2, 4)  # cds: a 4_1 rod over two
+        assert _repeat_counts(3, 6) == (2, 6)
+        assert _repeat_counts(4, 1) == (1, 4)
+        assert _repeat_counts(3, 3) == (1, 3)  # a helical run's own period
+
+    def test_run_node_detection(self, bundled_topologies):
+        from autografs.rod_build import _run_nodes
+
+        def analyse(name):
+            topo = bundled_topologies[name]
+            return _run_nodes(topo, _multipoe_run(topo))
+
+        # cds turns 90 degrees per node, either sense (its arm pair is
+        # centrosymmetric, so +90 and -90 both carry it over)
+        assert analyse("cds").rotations == pytest.approx((90.0, 270.0))
+        # kag's nodes keep their orientation: a screwless rod fits
+        kag = analyse("kag")
+        assert kag.even and 0.0 in kag.rotations
+        # btu's nodes are not evenly spaced, cdl's do not share a turn
+        assert not analyse("btu").even
+        assert analyse("cdl").rotations == ()
+
+    def test_uneven_nodes_rejected(self, bundled_topologies):
+        # btu chains two nodes per period but not at equal spacing, and
+        # a rod's chemical repeats only come at equal spacing
+        from autografs.rod_build import build_rod_framework
+
+        cds = bundled_topologies["cds"]
+        rod, linker = _cds_multipoe_rod(cds)
+        btu = bundled_topologies["btu"]
+        with pytest.raises(Exception, match="not evenly spaced"):
+            build_rod_framework(btu, rod, linker, run=_multipoe_run(btu))
+
+    def test_unrelated_node_orientations_rejected(self, bundled_topologies):
+        # cdl's four nodes per period turn 0, 90, 0, 90 degrees: no
+        # single screw carries each onto the next
+        from autografs.rod_build import build_rod_framework
+
+        cds = bundled_topologies["cds"]
+        rod, linker = _cds_multipoe_rod(cds)
+        cdl = bundled_topologies["cdl"]
+        with pytest.raises(Exception, match="constant rotation"):
+            build_rod_framework(cdl, rod, linker, run=_multipoe_run(cdl))
+
+    def test_rod_screw_must_match_the_runs_turn(self, bundled_topologies):
+        # a screwless rod cannot fill nodes that turn 90 degrees apart
+        from autografs.rod_build import build_rod_framework
+
+        cds = bundled_topologies["cds"]
+        rod, linker = _cds_multipoe_rod(cds)
+        rod.repeat.screw_order = 1
+        rod.repeat.screw_angle = 0.0
+        with pytest.raises(Exception, match="per repeat but this run"):
+            build_rod_framework(cds, rod, linker, run=_multipoe_run(cds))
+
+    def test_a_screwless_rod_takes_another_run(self, bundled_topologies):
+        # cds also carries two one-node runs; a rod that cannot fill the
+        # two-node one is offered those instead of being refused
+        from autografs.rod_build import _node_slots, _select_runs
+
+        cds = bundled_topologies["cds"]
+        rod, _linker = _cds_multipoe_rod(cds)
+        rod.repeat.screw_order = 1
+        rod.repeat.screw_angle = 0.0
+        chosen = _select_runs(cds, rod, False)
+        assert len(_node_slots(cds, chosen[0])) == 1
+
+    def test_single_node_runs_are_unchanged(self, mofgen):
+        # the pcu path keeps stacking two periods for two repeats
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        pcu = mofgen.topologies["pcu"]
+        build = _RodBuild(pcu, rod, linker, _select_runs(pcu, rod, False)[0])
+        assert build.nodes_per_period == 1
+        assert (build.copies, build.n_repeats, build.linker_copies) == (2, 2, 2)
 
 
 class TestWovenMultiAxisBuild:
