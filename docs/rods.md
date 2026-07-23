@@ -243,6 +243,34 @@ MOF-74 arrangement as it actually bonds, rod → ditopic → tetratopic
 bridge → ditopic → rod. It builds with two lateral species, clears the
 default contact gate unrelaxed, and identifies as `etb-e`.
 
+### Several nodes per period
+
+A straight run usually carries one point-of-extension node per period,
+and the rod is supercelled along it. 66 library nets instead **chain
+several** — `cds` alternates two 4-connected nodes per period — and each
+of those nodes holds one of the rod's chemical repeats, so the blueprint
+period already contains *k* of them and no supercell may be needed at
+all.
+
+Two things have to line up, and both are checked:
+
+- the nodes must be **evenly spaced** along the axis, because a rod's
+  chemical repeats are;
+- consecutive nodes must be related by a **constant rotation** about the
+  axis, and the rod's own screw must match it. This is subtler than it
+  looks: a run can be perfectly straight — its slot *centres* collinear —
+  while the slots' *orientations* turn. `cds` turns 90° per node, so it
+  wants a 4₁ rod even though nothing about the run's geometry is helical.
+
+```python
+mof = mofgen.build_rod(mofgen.topologies["cds"], rod_4_1, linker)
+mof.verify_net(mofgen.topologies["cds"])
+```
+
+Where a rod does not fit a multi-node run, `build_rod` offers it the
+blueprint's other runs rather than refusing outright — `cds` also carries
+two one-node runs, which a screwless rod fills happily.
+
 ### Woven (multi-axis) packings
 
 Some nets spiral along several cell axes at once. `bmn` is the clean
