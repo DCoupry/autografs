@@ -206,12 +206,17 @@ def framework_quotient_edges(
     for u, v in graph.edges():
         slot_u = graph.nodes[u]["slot"]
         slot_v = graph.nodes[v]["slot"]
-        if slot_u == slot_v:
-            continue
         delta = np.asarray(graph.nodes[u]["coord"], dtype=float) - np.asarray(
             graph.nodes[v]["coord"], dtype=float
         )
         shift = np.round(delta @ inv_cell).astype(int)
+        if slot_u == slot_v and not np.any(shift):
+            # a bond internal to one placed SBU (coords are unwrapped,
+            # so intra-fragment bonds never cross a boundary). A
+            # same-slot bond WITH a crossing is a genuine quotient
+            # self-loop - a unit bonding its own periodic image, which
+            # emptied edge-center slots make real (#179)
+            continue
         edges[_canonical(slot_u, slot_v, images[slot_v] + shift - images[slot_u])] += 1
     return edges
 
@@ -250,8 +255,12 @@ def verify_net(framework: Framework, topology: Topology) -> None:
     if framework.is_rod:
         _verify_rod_net(framework, topology)
         return
+    # slots deliberately left empty (#179) exist in the blueprint but
+    # not in the build; contract them out of the blueprint's quotient
+    # so both sides describe the same net
+    empty_slots = set(framework.graph.graph.get("empty_slots", ()))
     built_slots = set(framework.slots)
-    blueprint_slots = set(range(len(topology)))
+    blueprint_slots = set(range(len(topology))) - empty_slots
     if built_slots != blueprint_slots:
         raise NetMismatchError(
             f"Framework {framework.name!r} fills slots "
@@ -259,6 +268,8 @@ def verify_net(framework: Framework, topology: Topology) -> None:
             f"slots {sorted(blueprint_slots)}."
         )
     blueprint = topology_quotient_edges(topology)
+    if empty_slots:
+        blueprint = _contract_slots(blueprint, empty_slots)
     # both quotient graphs use the blueprint's slot images: one shared
     # gauge, so equal nets compare equal edge-for-edge (see
     # _topology_slot_images)
@@ -277,6 +288,37 @@ def verify_net(framework: Framework, topology: Topology) -> None:
         f"{topology.name!r} ({'; '.join(details)}). Edges are "
         "(slot_a, slot_b, periodic image voltage)."
     )
+
+
+def _contract_slots(edges: Counter[Edge], slots: set[int]) -> Counter[Edge]:
+    """Contract specific 2-coordinated vertices out of a quotient graph.
+
+    The targeted cousin of _prune_and_contract's 2-coordination rule:
+    each listed vertex's two half-edges are spliced into one direct
+    edge between its neighbours, chaining the voltages. Used to bring
+    a blueprint down to the form a build with deliberately emptied
+    slots realizes (#179).
+    """
+    adjacency = _adjacency(edges)
+    for slot in sorted(slots):
+        halves = adjacency.get(slot)
+        if halves is None or len(halves) != 2 or slot in {n for n, _ in halves}:
+            raise NetMismatchError(
+                f"Cannot contract slot {slot}: not a 2-coordinated "
+                "vertex of the blueprint's quotient graph."
+            )
+        (nb_a, v_a), (nb_b, v_b) = halves
+        adjacency[nb_a].remove((slot, _negate(v_a)))
+        adjacency[nb_b].remove((slot, _negate(v_b)))
+        adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
+        adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
+        del adjacency[slot]
+    contracted: Counter[Edge] = Counter()
+    for node, halves in adjacency.items():
+        for neighbor, voltage in halves:
+            contracted[_canonical(node, neighbor, np.asarray(voltage))] += 1
+    # every edge was seen from both ends
+    return Counter({edge: mult // 2 for edge, mult in contracted.items()})
 
 
 def _verify_rod_net(framework: Framework, topology: Topology) -> None:

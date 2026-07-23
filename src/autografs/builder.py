@@ -80,6 +80,7 @@ def build_framework(
     min_distance: float | None = None,
     verify_net: bool = False,
     relax_embedding: bool = False,
+    empty_slots: Iterable[int] = (),
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -110,6 +111,9 @@ def build_framework(
         Embedding relaxation (#174): free the blueprint's
         symmetry-allowed slot displacements alongside the cell and add
         anchor-direction terms to the objective; see Autografs.build.
+    empty_slots : iterable of int, optional
+        2-connected slots deliberately left empty (#179); see
+        Autografs.build.
 
     Returns
     -------
@@ -117,8 +121,12 @@ def build_framework(
         The built framework.
     """
     t0 = time.time()
+    empty_slots = sorted(set(empty_slots))
     plan = autografs.alignment.prepare_build(
-        topology, mappings, relax_embedding=relax_embedding
+        topology,
+        mappings,
+        relax_embedding=relax_embedding,
+        empty_slots=empty_slots,
     )
     x0 = plan.initial_parameters()
     if refine_cell and plan.has_pairs:
@@ -165,6 +173,10 @@ def build_framework(
     graph = autografs.utils.fragments_to_networkx(
         best_alignment, cell=lattice.matrix, slots=sorted(mappings)
     )
+    if empty_slots:
+        # verify_net contracts these on the blueprint side, and
+        # framework_io / replicated_graph keep the marker alive
+        graph.graph["empty_slots"] = list(empty_slots)
     framework = Framework(graph, name=topology.name)
     if min_distance is not None:
         contact = framework.min_contact(cutoff=min_distance)
@@ -574,13 +586,15 @@ class Autografs:
                             restored += 1
                         else:
                             pending_idx.append(i)
+                # enumeration never empties slots, so only the filled
+                # mapping (element 0) is consumed here
                 validated_iter = (
                     (
                         i,
                         self._validate_mappings(
                             topology=topology,
                             mappings=dict(zip(slot_types, choices[i], strict=True)),
-                        ),
+                        )[0],
                     )
                     for i in pending_idx
                 )
@@ -642,7 +656,7 @@ class Autografs:
     def build(
         self,
         topology: Topology,
-        mappings: dict[Fragment | int, Fragment | str],
+        mappings: Mapping[Fragment | int, Fragment | str | None],
         refine_cell: bool = True,
         verbose: bool = False,
         max_rmsd: float | None = None,
@@ -657,8 +671,15 @@ class Autografs:
         ----------
         topology : Topology
             the topology to consider
-        mappings : dict[Fragment | int, Fragment | str]
-            the mappings to go from a slot to a compatible SBU
+        mappings : dict[Fragment | int, Fragment | str | None]
+            the mappings to go from a slot to a compatible SBU. A slot
+            (or slot type) mapped to None is deliberately left
+            **empty** (#179): its two neighbours bond directly, the
+            way a real material bonds node to linker where the
+            blueprint decorates the edge with a 2-connected center
+            (HKUST-1 on tbo). Only 2-connected slots may be emptied;
+            verify_net compares against the blueprint with those slots
+            contracted, so the gate still applies.
         refine_cell : bool, optional
             If True, optimizes the cell parameters so that bonded dummy
             pairs coincide, by default True. The analytic starting cell
@@ -721,7 +742,9 @@ class Autografs:
         ValueError
             If the mappings leave topology slots unfilled.
         """
-        validated = self._validate_mappings(topology=topology, mappings=mappings)
+        validated, empty_slots = self._validate_mappings(
+            topology=topology, mappings=mappings
+        )
         if verbose:
             logger.info("Starting building process:")
             logger.info(f"\tTopology =  {topology}")
@@ -729,6 +752,8 @@ class Autografs:
                 {slot: sbu.name for slot, sbu in validated.items()}
             )
             logger.info(f"\tMappings =  {formatted_mappings}")
+            if empty_slots:
+                logger.info(f"\tEmpty slots =  {empty_slots}")
             logger.info("Aligning with cell scaling...")
         return build_framework(
             topology,
@@ -739,42 +764,52 @@ class Autografs:
             min_distance=min_distance,
             verify_net=verify_net,
             relax_embedding=relax_embedding,
+            empty_slots=empty_slots,
         )
 
     def _validate_mappings(
-        self, topology: Topology, mappings: dict[Fragment | int, Fragment | str]
-    ) -> dict[int, Fragment]:
+        self,
+        topology: Topology,
+        mappings: Mapping[Fragment | int, Fragment | str | None],
+    ) -> tuple[dict[int, Fragment], list[int]]:
         """Validate and normalize the slot-to-fragment mappings.
 
         Converts string SBU names to Fragment objects and ensures all
-        topology slots have corresponding mappings.
+        topology slots have corresponding mappings. A slot (or slot
+        type) mapped to None is deliberately left empty (#179): its
+        two neighbours bond directly, the way a real material bonds
+        node to linker where the blueprint decorates the edge with a
+        2-connected center. Only 2-connected slots may be emptied.
 
         Parameters
         ----------
         topology : Topology
             The topology blueprint being filled.
-        mappings : dict[Fragment | int, Fragment | str]
-            User-provided mappings from slot identifiers to SBU names or objects.
+        mappings : dict[Fragment | int, Fragment | str | None]
+            User-provided mappings from slot identifiers to SBU names
+            or objects, or None to leave the slot(s) empty.
 
         Returns
         -------
-        dict[int, Fragment]
+        tuple[dict[int, Fragment], list[int]]
             Normalized mappings from slot indices to private Fragment
-            copies. Neither the input dict nor the library fragments
-            are aliased: alignment mutates fragments in place, and
-            shared references would corrupt the SBU library.
+            copies, and the sorted indices of the emptied slots.
+            Neither the input dict nor the library fragments are
+            aliased: alignment mutates fragments in place, and shared
+            references would corrupt the SBU library.
 
         Raises
         ------
         ValueError
-            If any topology slot is left uncovered by the mappings.
+            If any topology slot is left uncovered by the mappings, or
+            an emptied slot is not 2-connected.
         """
 
         def to_fragment(value: Fragment | str) -> Fragment:
             return self.sbu[value] if isinstance(value, str) else value
 
         # slot-type keys first, so that index keys override them
-        true_mappings: dict[int, Fragment] = {}
+        true_mappings: dict[int, Fragment | None] = {}
         for k, v in mappings.items():
             if not isinstance(k, int):
                 if k not in topology.mappings:
@@ -785,17 +820,27 @@ class Autografs:
                         "Use the keys from list_building_units(sieve=...) "
                         "or plain slot indices."
                     )
-                fragment = to_fragment(v)
+                fragment = None if v is None else to_fragment(v)
                 for i in topology.mappings[k]:
-                    true_mappings[i] = fragment.copy()
+                    true_mappings[i] = None if fragment is None else fragment.copy()
         for k, v in mappings.items():
             if isinstance(k, int):
-                true_mappings[k] = to_fragment(v).copy()
+                true_mappings[k] = None if v is None else to_fragment(v).copy()
         all_indices = set(itertools.chain(*topology.mappings.values()))
         missing = all_indices - true_mappings.keys()
         if missing:
             raise ValueError(f"Unfilled slots in mappings: {sorted(missing)}")
-        return true_mappings
+        empty = sorted(i for i, v in true_mappings.items() if v is None)
+        for i in empty:
+            n_connections = len(topology.slots[i].atoms.indices_from_symbol("X"))
+            if n_connections != 2:
+                raise ValueError(
+                    f"Slot {i} of {topology.name!r} is "
+                    f"{n_connections}-connected; only 2-connected slots "
+                    "can be left empty."
+                )
+        filled = {i: v for i, v in true_mappings.items() if v is not None}
+        return filled, empty
 
     def _setup_sbu(self, xyzfile: str | None = None) -> None:
         """Load Secondary Building Units from XYZ files.

@@ -383,6 +383,8 @@ def replicated_graph(
             combined.graph["rod_empty_slots"] = list(
                 framework.graph.graph["rod_empty_slots"]
             )
+    if framework.graph.graph.get("empty_slots"):
+        combined.graph["empty_slots"] = list(framework.graph.graph["empty_slots"])
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
     slot_base = (
         max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1

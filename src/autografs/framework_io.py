@@ -105,6 +105,10 @@ def framework_to_dict(framework: Framework) -> dict:
         data["rod_build"] = True
         if graph.graph.get("rod_empty_slots"):
             data["rod_empty_slots"] = list(graph.graph["rod_empty_slots"])
+    # finite empty-slot marker (#179): verify_net contracts these on
+    # the blueprint side, so it must survive a save/load round trip
+    if graph.graph.get("empty_slots"):
+        data["empty_slots"] = list(graph.graph["empty_slots"])
     return data
 
 
@@ -132,6 +136,8 @@ def framework_from_dict(data: dict) -> Framework:
         graph.graph["rod_build"] = True
         if data.get("rod_empty_slots"):
             graph.graph["rod_empty_slots"] = list(data["rod_empty_slots"])
+    if data.get("empty_slots"):
+        graph.graph["empty_slots"] = list(data["empty_slots"])
     columns = zip(
         data["symbols"], data["coords"], data["tags"], data["ufftypes"], strict=True
     )
