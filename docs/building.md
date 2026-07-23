@@ -70,6 +70,31 @@ mof = mofgen.build(
 mappings = {node_type: "sbu_A", edge_type: "linker_1", 7: "linker_2"}
 ```
 
+### Embedding relaxation
+
+A build normally places every SBU at its blueprint slot centre and varies only
+the cell's free parameters, so the *proportions* of the structure are whatever
+the net's idealized (maximum-symmetry, near-equal-edge) embedding chose. For
+high-symmetry nets those are exact by symmetry — pcu, dia, fcu and friends
+have nothing to choose — but lower-symmetry nets inherit proportions that can
+be measurably wrong for real chemistry: no single cell parameter can give a
+long linker and a short one each the room they need.
+
+```python
+mof = mofgen.build(topology, mappings, relax_embedding=True)
+```
+
+frees the slot centres as extra optimization degrees of freedom — one
+displacement per crystallographic orbit, restricted to the directions the
+site's symmetry allows, so the net's declared symmetry is preserved by
+construction — and adds anchor-direction terms to the objective so each bond
+leaves its anchors along the direction the SBU's own chemistry points. Fully
+pinned nets (their embedding is already exact by symmetry) have nothing to
+relax and build exactly as without the flag; for the rest, the topology of
+the output is unchanged (`verify_net` applies as usual) while the packing
+follows the SBUs instead of the idealization. Off by default; the geometry
+of default builds is unchanged.
+
 ## Batch enumeration
 
 `build_all` attempts every compatible SBU combination on every (or a subset

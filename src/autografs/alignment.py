@@ -35,6 +35,7 @@ import functools
 import itertools
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pymatgen.analysis.local_env import CovalentRadius
@@ -46,6 +47,9 @@ from autografs import plane_groups
 from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
+
+if TYPE_CHECKING:
+    from autografs.symmetry import OrbitDisplacements
 
 __all__ = [
     "kabsch",
@@ -339,6 +343,11 @@ class SlotPlacement:
     # dummy's nearest real atom); paired anchors bond in the output
     anchor_vecs: np.ndarray  # (n, 3) anchor positions minus center, cartesian
     anchor_radii: np.ndarray  # (n,) anchor covalent radii, Angstrom
+    # per arm: unit anchor -> dummy direction in the SBU frame - the
+    # bond direction the SBU's own chemistry wants (the dummy sits
+    # along the bond), distinct from the centroid-based arm direction
+    # for a bulky node
+    bond_units: np.ndarray  # (n, 3)
     # arm assignment (perm) computed at the reference cell
     arm_for_target: np.ndarray
 
@@ -354,6 +363,23 @@ class SlotPlacement:
         center = self.frac_center @ matrix
         ordered = self.anchor_vecs[self.arm_for_target]
         return np.asarray(center + ordered @ rotation.T)
+
+    def placed_geometry(
+        self, matrix: np.ndarray, shift: np.ndarray | None = None
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Anchor positions and placed bond directions (target order).
+
+        ``shift`` is an optional fractional displacement of the slot
+        centre (embedding relaxation); the SBU moves rigidly with its
+        centre, so arms and rotation are unaffected.
+        """
+        rotation, _ = self.rotation_for(matrix)
+        center = self.frac_center @ matrix
+        if shift is not None:
+            center = center + shift @ matrix
+        anchors = center + self.anchor_vecs[self.arm_for_target] @ rotation.T
+        directions = self.bond_units[self.arm_for_target] @ rotation.T
+        return np.asarray(anchors), np.asarray(directions)
 
 
 @dataclass
@@ -373,10 +399,38 @@ class BuildPlan:
     blueprint_abc: np.ndarray  # (3,)
     angles: tuple[float, float, float]
     cell_param: CellParametrization
+    # embedding relaxation (#174): symmetry-allowed slot displacements,
+    # appended to the parameter vector after the cell block. None keeps
+    # the legacy fixed-slot behavior and objective bit-for-bit.
+    slot_disp: OrbitDisplacements | None = None
 
     @property
     def has_pairs(self) -> bool:
         return bool(self.pairs)
+
+    @property
+    def n_slot_free(self) -> int:
+        return 0 if self.slot_disp is None else self.slot_disp.n_free
+
+    def split(self, params: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        """Cell block and slot block of the packed parameter vector."""
+        params = np.asarray(params, dtype=float)
+        n_cell = self.cell_param.n_free
+        return params[:n_cell], params[n_cell:]
+
+    def _shifts(self, slot_free: np.ndarray) -> np.ndarray | None:
+        """Per-topology-slot fractional displacements, or None.
+
+        None also for a relaxation-enabled plan on a fully pinned
+        blueprint: with no displacement to select between, the
+        augmented objective has nothing to steer and measurably makes
+        the cell-only compromise worse (it trades bond closure against
+        the unresolvable arm mismatch), so pinned nets keep the legacy
+        objective exactly - flag or no flag.
+        """
+        if self.slot_disp is None or self.slot_disp.n_free == 0:
+            return None
+        return self.slot_disp.expand(slot_free)
 
     @functools.cached_property
     def _blueprint_matrix(self) -> np.ndarray:
@@ -423,7 +477,9 @@ class BuildPlan:
             abc_guess = self.blueprint_abc * (arms / slot_arms)
         else:
             abc_guess = self.blueprint_abc * (required / current)
-        return self.cell_param.seed(abc_guess)
+        seed = self.cell_param.seed(abc_guess)
+        # slot displacements start at the idealized embedding
+        return np.concatenate([seed, np.zeros(self.n_slot_free)])
 
     def _pair_bond_length(
         self, index_a: int, target_a: int, index_b: int, target_b: int
@@ -436,26 +492,62 @@ class BuildPlan:
             + pb.anchor_radii[pb.arm_for_target[target_b]]
         )
 
-    def residual(self, free: np.ndarray) -> float:
-        """RMS deviation of paired anchor distances from their bond
-        lengths at these parameters."""
-        matrix = self.matrix_for(free)
-        positions = [p.anchor_positions(matrix) for p in self.placements]
+    def residual(self, params: np.ndarray) -> float:
+        """RMS objective at these parameters, in Angstrom.
+
+        Fixed slots (no embedding relaxation): the RMS deviation of
+        paired anchor distances from their covalent bond lengths -
+        the legacy objective, bit-for-bit.
+
+        With slot displacements active, two direction terms join each
+        pair's closure gap: the deviation of the bond vector from a
+        bond-length step along each end's own placed anchor-to-dummy
+        direction. Bond closure alone cannot select between the many
+        closures a displaced net admits (a freed periodic net is
+        generically floppy) - the direction terms encode the approach
+        direction the SBU's chemistry wants, which is what the
+        idealized embedding gets wrong (#174). All three terms are
+        lengths, so no weighting is needed.
+        """
+        cell_free, slot_free = self.split(params)
+        matrix = self.matrix_for(cell_free)
+        shifts = self._shifts(slot_free)
+        if shifts is None:
+            positions = [p.anchor_positions(matrix) for p in self.placements]
+            total = 0.0
+            for index_a, target_a, index_b, target_b, offset in self.pairs:
+                delta = (
+                    positions[index_a][target_a]
+                    - positions[index_b][target_b]
+                    - offset @ matrix
+                )
+                gap = float(np.sqrt(delta @ delta)) - self._pair_bond_length(
+                    index_a, target_a, index_b, target_b
+                )
+                total += gap * gap
+            return float(np.sqrt(total / len(self.pairs)))
+        geometries = [
+            p.placed_geometry(matrix, shifts[p.slot_index]) for p in self.placements
+        ]
         total = 0.0
         for index_a, target_a, index_b, target_b, offset in self.pairs:
-            delta = (
-                positions[index_a][target_a]
-                - positions[index_b][target_b]
-                - offset @ matrix
-            )
-            gap = float(np.sqrt(delta @ delta)) - self._pair_bond_length(
-                index_a, target_a, index_b, target_b
-            )
-            total += gap * gap
-        return float(np.sqrt(total / len(self.pairs)))
+            anchors_a, directions_a = geometries[index_a]
+            anchors_b, directions_b = geometries[index_b]
+            # bond vector from anchor a to anchor b's paired image
+            bond = anchors_b[target_b] + offset @ matrix - anchors_a[target_a]
+            length = float(np.sqrt(bond @ bond))
+            target = self._pair_bond_length(index_a, target_a, index_b, target_b)
+            gap = length - target
+            # a bond-length step along each end's own bond direction is
+            # where the partner anchor should sit; the deviation is a
+            # length, zero when the bond leaves both anchors dead-on
+            miss_a = bond - length * directions_a[target_a]
+            miss_b = -bond - length * directions_b[target_b]
+            total += gap * gap + float(miss_a @ miss_a) + float(miss_b @ miss_b)
+        return float(np.sqrt(total / (3 * len(self.pairs))))
 
     def finalize(
-        self, free: np.ndarray
+        self, params: np.ndarray
     ) -> tuple[list[Fragment], Lattice, dict[int, float]]:
         """Place every SBU rigidly in the final cell.
 
@@ -463,7 +555,8 @@ class BuildPlan:
         final cell, then maps each SBU's atoms with the resulting rigid
         rotation + translation. Atoms keep their internal geometry;
         dummies receive the tags of their assigned slot dummies so the
-        graph builder can bond paired fragments.
+        graph builder can bond paired fragments. Slot displacements
+        (when active) shift each SBU's centre; the unit stays rigid.
 
         Returns
         -------
@@ -471,8 +564,10 @@ class BuildPlan:
             Aligned fragments, the final lattice, and the per-slot
             directional RMSD (dimensionless shape mismatch).
         """
-        lattice = Lattice.from_parameters(*self.cell_param.expand(free))
+        cell_free, slot_free = self.split(params)
+        lattice = Lattice.from_parameters(*self.cell_param.expand(cell_free))
         matrix = lattice.matrix
+        shifts = self._shifts(slot_free)
         fragments: list[Fragment] = []
         slot_rmsds: dict[int, float] = {}
         for placement in self.placements:
@@ -480,7 +575,10 @@ class BuildPlan:
             rotation, perm, rmsd = match_directions(directions, placement.arm_units)
             placement.arm_for_target = perm
             slot_rmsds[placement.slot_index] = rmsd
-            center = placement.frac_center @ matrix
+            frac_center = placement.frac_center
+            if shifts is not None:
+                frac_center = frac_center + shifts[placement.slot_index]
+            center = frac_center @ matrix
             sbu = placement.sbu
             coords = (
                 sbu.atoms.cart_coords - placement.sbu_center
@@ -531,7 +629,11 @@ def _find_anchors(
     return vecs, radii
 
 
-def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPlan:
+def prepare_build(
+    topology: Topology,
+    mappings: dict[int, Fragment],
+    relax_embedding: bool = False,
+) -> BuildPlan:
     """Precompute all geometry for building one framework.
 
     Parameters
@@ -541,6 +643,12 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
     mappings : dict[int, Fragment]
         Slot index to (private) SBU fragment, as produced by
         Autografs._validate_mappings.
+    relax_embedding : bool, optional
+        Add the blueprint's symmetry-allowed slot displacements as
+        optimizer degrees of freedom (see autografs.symmetry), with
+        the anchor-direction terms joining the objective. Fully pinned
+        nets (pcu and most high-symmetry blueprints) have nothing to
+        relax and keep the legacy objective exactly.
 
     Returns
     -------
@@ -580,6 +688,14 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
         arm_lengths = np.linalg.norm(arm_vectors, axis=1)
         arm_units = _unit(arm_vectors)
         anchor_vecs, anchor_radii = _find_anchors(sbu, sbu_dummy_idx, sbu_center)
+        # anchor -> dummy: the bond direction the SBU wants; dummy-only
+        # fixtures (anchor == dummy) fall back to the centroid arm
+        bond_vectors = arm_vectors - anchor_vecs
+        bond_norms = np.linalg.norm(bond_vectors, axis=1, keepdims=True)
+        degenerate = bond_norms[:, 0] < 1e-6
+        bond_units = np.where(
+            degenerate[:, None], arm_units, bond_vectors / np.maximum(bond_norms, 1e-12)
+        )
 
         frac_arms = slot_frac - frac_center
         # reference assignment at the blueprint cell
@@ -597,6 +713,7 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
             dummy_indices=sbu_dummy_idx,
             anchor_vecs=anchor_vecs,
             anchor_radii=anchor_radii,
+            bond_units=bond_units,
             arm_for_target=perm,
         )
         index = len(placements)
@@ -636,10 +753,22 @@ def prepare_build(topology: Topology, mappings: dict[int, Fragment]) -> BuildPla
         blueprint_angles=angles,
         is_2d=getattr(topology, "is_2d", False),
     )
+    slot_disp = None
+    if relax_embedding:
+        from autografs.symmetry import orbit_displacements
+
+        slot_disp = orbit_displacements(topology)
+        if slot_disp.n_free:
+            logger.debug(
+                f"Embedding relaxation on {topology.name!r}: "
+                f"{slot_disp.n_free} slot parameters over "
+                f"{len(slot_disp.bases)} orbits."
+            )
     return BuildPlan(
         placements=placements,
         pairs=pairs,
         blueprint_abc=abc,
         angles=angles,
         cell_param=cell_param,
+        slot_disp=slot_disp,
     )
