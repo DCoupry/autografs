@@ -363,6 +363,94 @@ def _bmn_woven_rod(bmn, scale=6.53):
     return rod, linker
 
 
+def _twt_axis_multiple_rod(twt, scale=6.0):
+    """A rod matched to twt's 6_1 channel, which closes on *two* cells.
+
+    twt's helix advances c/3 and turns 60 degrees per node, so
+    translating it by c lands on a 180-degree-rotated copy of itself and
+    it only comes back onto itself after 2c: its run direction is
+    ``(0, 0, 2)`` (#173). One cell therefore holds all six of the run's
+    node slots, filled by two interleaved passes of the same rod, and
+    the pinned cell parameter is the run period *divided by two*.
+
+    Each node is 3-connected (two along its own helix, one out), so the
+    rod carries a single arm per repeat and twt's three 2-connected
+    slots take a ditopic linker. Returns (rod, linker).
+    """
+    from pymatgen.core.structure import Molecule
+
+    from autografs.fragment import Fragment
+    from autografs.net import helical_runs
+    from autografs.rods import RodFragment
+
+    radius_c, radius_zn = 0.75, 1.22
+    cell = np.asarray(twt.cell.matrix)
+    counts = [len(s.atoms.indices_from_symbol("X")) for s in twt.slots]
+    run = next(r for r in helical_runs(twt) if r.screw_order == 6)
+    axis_hat = cell[2] / np.linalg.norm(cell[2])
+    pos, steps = _unwrapped_walk(twt, run)
+
+    n0 = next(s for s in run.slots if counts[s] > 2)
+    axis_point = np.asarray(run.axis_point)
+    rel0 = (pos[n0] - axis_point) - ((pos[n0] - axis_point) @ axis_hat) * axis_hat
+    radius = float(np.linalg.norm(rel0))
+    basis = np.array([rel0 / radius, np.cross(axis_hat, rel0 / radius), axis_hat])
+
+    _, node_arms = _slot_arms(twt, n0)
+    lateral = next(d for w, d in steps[n0] if w not in set(run.slots))
+    unit = lateral / np.linalg.norm(lateral)
+    arm_node = float(
+        np.linalg.norm(max(node_arms, key=lambda a: (a / np.linalg.norm(a)) @ unit))
+    )
+
+    chemical = float(run.period / run.screw_order) * scale
+    half = np.radians(run.screw_angle) / 2.0
+    metal_radius = radius * scale
+    positions = np.array(
+        [
+            [metal_radius, 0.0, 0.0],
+            [
+                metal_radius * 0.45 * np.cos(half),
+                metal_radius * 0.45 * np.sin(half),
+                chemical / 2,
+            ],
+        ]
+    )
+    rod = RodFragment(
+        repeat=RodRepeat(
+            symbols=["Zn", "O"],
+            axial=positions[:, 2].copy(),
+            radial=np.linalg.norm(positions[:, :2], axis=1),
+            angular=np.arctan2(positions[:, 1], positions[:, 0]),
+            repeat_length=chemical,
+            screw_order=run.screw_order,
+            screw_angle=float(run.screw_angle),
+            n_connections=1,
+        ),
+        positions=positions,
+        arms=[(0, (unit @ basis.T) * (arm_node * scale))],
+        bonds=[(0, 1, 0), (1, 0, 1)],
+        name="rod_twt",
+    )
+    laterals = [s for s in range(len(twt.slots)) if s not in set(run.slots)]
+    arm_lateral = float(np.linalg.norm(_slot_arms(twt, laterals[0])[1][0]))
+    span = (arm_node + arm_lateral) * scale - radius_zn - radius_c
+    linker = Fragment(
+        atoms=Molecule(
+            ["X", "C", "C", "X"],
+            [
+                [-arm_lateral * scale, 0, 0],
+                [-span, 0, 0],
+                [span, 0, 0],
+                [arm_lateral * scale, 0, 0],
+            ],
+            site_properties={"tags": [0, 0, 0, 0]},
+        ),
+        name="cc",
+    )
+    return rod, linker
+
+
 def _multipoe_run(topology):
     """The topology's axis-aligned straight run with several PoE nodes."""
     from autografs.net import axial_runs
@@ -1551,6 +1639,146 @@ class TestWovenMultiAxisBuild:
         rod.repeat.screw_angle = 180.0
         chosen = _select_runs(bbe, rod, True)
         assert len({round(run.period, 4) for run in chosen}) == 1
+
+
+class TestAxisMultipleRuns:
+    """Runs that close only after several cells along their axis (#173).
+
+    A helical channel whose screw does not bring it back onto itself in
+    one cell closes on a direction like ``(0, 0, 2)``. It is still
+    axis-parallel - nothing about the cell parametrization changes - but
+    the pinned parameter is the run period *divided by* that multiple,
+    because one cell holds several interleaved passes of the same rod
+    rather than a single pass. Thirteen library nets carry such a run;
+    for seven of them it is the channel's only description, and twt is
+    the smallest (fnt, uom, uoo, fne, src and twt-e are the rest)."""
+
+    @pytest.fixture(scope="class")
+    def twt_build(self, bundled_topologies):
+        from autografs.rod_build import build_rod_framework
+
+        twt = bundled_topologies["twt"]
+        rod, linker = _twt_axis_multiple_rod(twt)
+        return twt, rod, build_rod_framework(twt, rod, linker)
+
+    def test_run_axis_reads_the_multiple(self, bundled_topologies):
+        from autografs.net import helical_runs
+        from autografs.rod_build import _run_axis
+
+        twt = bundled_topologies["twt"]
+        run = next(r for r in helical_runs(twt) if r.screw_order == 6)
+        assert run.direction == (0, 0, 2)
+        assert _run_axis(run) == (2, 2)
+        # the ordinary case is unchanged: multiple one along its axis
+        etb = bundled_topologies["etb"]
+        assert {_run_axis(r) for r in helical_runs(etb)} == {(2, 1)}
+        # and mdf carries channels closing on three cells along c,
+        # alongside separate single-cell ones
+        mdf = bundled_topologies["mdf"]
+        assert {_run_axis(r) for r in helical_runs(mdf)} == {(2, 1), (2, 3)}
+
+    def test_diagonal_run_still_refused(self, bundled_topologies):
+        # the remaining #173 scope: a run along a lattice diagonal pins a
+        # combination of cell parameters, not one of them
+        from autografs.net import axial_runs
+        from autografs.rod_build import _run_axis
+
+        bcu = bundled_topologies["bcu"]
+        diagonal = next(
+            r for r in axial_runs(bcu) if sorted(map(abs, r.direction)) == [1, 1, 1]
+        )
+        with pytest.raises(Exception, match="lattice diagonal"):
+            _run_axis(diagonal)
+
+    def test_builds_and_realizes_twt(self, twt_build):
+        from autografs.net import framework_quotient_edges, identify_net
+
+        twt, _rod, built = twt_build
+        # six repeats of the -Zn-O- 6_1 helix + one linker per lateral slot
+        assert built.symbols.count("Zn") == 6
+        assert built.symbols.count("O") == 6
+        assert built.symbols.count("C") == 6
+        assert len(built.slots) == 6 + 3
+        assert sorted(built.graph) == list(range(len(built)))
+        assert built.min_contact() > 1.0
+        built.verify_net(twt)
+        assert identify_net(framework_quotient_edges(built), {"twt": twt}) == ["twt"]
+
+    def test_axis_pin_is_divided_by_the_multiple(self, twt_build):
+        twt, rod, built = twt_build
+        c = built.structure.lattice.abc[2]
+        # six chemical repeats span one *run period*, which is two cells
+        assert c == pytest.approx(6 * rod.repeat.repeat_length / 2)
+        # pinning the period straight onto the parameter (the pre-#173
+        # arithmetic) would have doubled it
+        assert c != pytest.approx(6 * rod.repeat.repeat_length)
+        # and the pinned cell is the blueprint's, uniformly scaled
+        assert c == pytest.approx(twt.cell.abc[2] * 6.0)
+
+    def test_repeats_interleave_within_one_cell(self, twt_build):
+        # the point of the divided pin: the six repeats are laid down
+        # over two cells' worth of rod, so inside the single pinned cell
+        # they show up as two passes of three, sharing heights but half a
+        # turn apart - which is exactly why the run closes on 2c and not
+        # on c, and why the two passes are not periodic images
+        _twt, rod, built = twt_build
+        cell = np.asarray(built.cell)
+        c = built.structure.lattice.abc[2]
+        axis_hat = cell[2] / np.linalg.norm(cell[2])
+        centers = {}
+        for _node, data in built.graph.nodes(data=True):
+            if data["sbu"] == rod.name and data["symbol"] == "Zn":
+                centers[data["slot"]] = np.asarray(data["coord"])
+        assert sorted(centers) == list(range(6))
+        positions = np.array([centers[s] for s in range(6)])
+        heights = positions @ axis_hat
+
+        # consecutive repeats step one chemical repeat up, six of them
+        # spanning the whole two-cell run period
+        assert np.diff(heights) == pytest.approx(rod.repeat.repeat_length, abs=1e-6)
+        assert heights[-1] - heights[0] == pytest.approx(
+            2 * c - rod.repeat.repeat_length
+        )
+
+        # three heights in the cell, each holding two repeats
+        wrapped = np.round(heights % c, 6)
+        assert len(set(wrapped)) == 3
+        # the pair sharing a height is half a turn apart about the axis,
+        # so neither is the other's periodic image. Azimuths are taken
+        # about the helix's own axis line - the perpendicular centroid
+        # of its repeats, which is where a screw's axis has to sit
+        perpendicular = positions - np.outer(heights, axis_hat)
+        perpendicular = perpendicular - perpendicular.mean(axis=0)
+        e1 = perpendicular[0] / np.linalg.norm(perpendicular[0])
+        e2 = np.cross(axis_hat, e1)
+        azimuth = np.degrees(np.arctan2(perpendicular @ e2, perpendicular @ e1))
+        for k in range(3):
+            gap = abs(azimuth[k] - azimuth[k + 3]) % 360.0
+            assert min(gap, 360.0 - gap) == pytest.approx(180.0, abs=1e-3)
+
+    def test_straight_run_across_several_cells_refused(self, mofgen):
+        # no library net has one (every axis-multiple run is helical),
+        # and the straight path supercells whole blueprint periods, so
+        # such a run is refused rather than silently mis-built
+        import dataclasses
+
+        from autografs.net import axial_runs
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        pcu = mofgen.topologies["pcu"]
+        run = axial_runs(pcu)[0]
+        doubled = dataclasses.replace(
+            run,
+            direction=tuple(2 * d for d in run.direction),
+            period=2 * run.period,
+        )
+        with pytest.raises(Exception, match="closes on 2 cells"):
+            build_rod_framework(pcu, rod, linker, run=doubled)
 
 
 class TestEmptyLateralSlots:
