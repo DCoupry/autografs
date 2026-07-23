@@ -79,6 +79,7 @@ def build_framework(
     max_rmsd: float | None = None,
     min_distance: float | None = None,
     verify_net: bool = False,
+    relax_embedding: bool = False,
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -105,6 +106,10 @@ def build_framework(
         Post-build overlap gate; see Autografs.build.
     verify_net : bool, optional
         Topological gate; see Autografs.build.
+    relax_embedding : bool, optional
+        Embedding relaxation (#174): free the blueprint's
+        symmetry-allowed slot displacements alongside the cell and add
+        anchor-direction terms to the objective; see Autografs.build.
 
     Returns
     -------
@@ -112,13 +117,17 @@ def build_framework(
         The built framework.
     """
     t0 = time.time()
-    plan = autografs.alignment.prepare_build(topology, mappings)
+    plan = autografs.alignment.prepare_build(
+        topology, mappings, relax_embedding=relax_embedding
+    )
     x0 = plan.initial_parameters()
     if refine_cell and plan.has_pairs:
         # Nelder-Mead on the bond-length pair residual over the
         # crystal system's free parameters only (a cubic net
-        # optimizes a single length); the objective is pure numpy,
-        # no object copies per evaluation
+        # optimizes a single length) plus, under embedding
+        # relaxation, the slot displacements; the objective is pure
+        # numpy, no object copies per evaluation
+        n_free = plan.cell_param.n_free + plan.n_slot_free
         result = minimize(
             plan.residual,
             x0,
@@ -126,7 +135,7 @@ def build_framework(
             options={
                 "xatol": NELDER_MEAD_XATOL,
                 "fatol": NELDER_MEAD_FATOL,
-                "maxiter": NELDER_MEAD_MAXITER * plan.cell_param.n_free,
+                "maxiter": NELDER_MEAD_MAXITER * n_free,
             },
         )
         best_parameters = result.x
@@ -639,6 +648,7 @@ class Autografs:
         max_rmsd: float | None = None,
         min_distance: float | None = None,
         verify_net: bool = False,
+        relax_embedding: bool = False,
     ) -> Framework:
         """
         Generates a framework from a mapping of SBU to topology slots.
@@ -675,6 +685,20 @@ class Autografs:
             mismatch. Catches mis-paired anchors and wrong periodic
             images, which the geometric gates cannot see. False by
             default.
+        relax_embedding : bool, optional
+            Embedding relaxation (#174): additionally optimize the
+            slot centres, one displacement per crystallographic orbit
+            restricted to its site-symmetry-allowed directions (see
+            autografs.symmetry), and add anchor-direction terms to the
+            objective so the bond leaves each anchor along the
+            direction the SBU's own chemistry points. The idealized
+            (maximum-symmetry, near-equal-edge) embedding fixes the
+            *proportions* of the structure, and for lower-symmetry
+            nets those can be measurably wrong for real chemistry; a
+            fully pinned net (pcu and most high-symmetry blueprints)
+            has nothing to relax and builds exactly as without the
+            flag. The net's declared symmetry is preserved by
+            construction. False by default.
 
         Returns
         -------
@@ -714,6 +738,7 @@ class Autografs:
             max_rmsd=max_rmsd,
             min_distance=min_distance,
             verify_net=verify_net,
+            relax_embedding=relax_embedding,
         )
 
     def _validate_mappings(

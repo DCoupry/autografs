@@ -267,7 +267,9 @@ def bond_residuals(framework) -> dict:
     }
 
 
-def _rebuild(mofgen, topology, result, max_rmsd: float) -> dict | None:
+def _rebuild(
+    mofgen, topology, result, max_rmsd: float, relax_embedding: bool = False
+) -> dict | None:
     """Build from the structure's own fragments; verified net only.
 
     No overlap gate: a compressed packing is exactly what this
@@ -276,7 +278,11 @@ def _rebuild(mofgen, topology, result, max_rmsd: float) -> dict | None:
     for mappings in _candidate_mappings(topology, result.fragments):
         try:
             framework = mofgen.build(
-                topology, mappings=mappings, max_rmsd=max_rmsd, verify_net=True
+                topology,
+                mappings=mappings,
+                max_rmsd=max_rmsd,
+                verify_net=True,
+                relax_embedding=relax_embedding,
             )
         except AutografsError:
             continue
@@ -307,7 +313,11 @@ def _rebuild(mofgen, topology, result, max_rmsd: float) -> dict | None:
 
 
 def measure_one(
-    mofgen: Autografs, source: Path, rebuild: bool, max_rmsd: float
+    mofgen: Autografs,
+    source: Path,
+    rebuild: bool,
+    max_rmsd: float,
+    relax_embedding: bool = False,
 ) -> dict:
     """Measure one structure's embedding gap; failures are data."""
     record: dict = {"outcome": None, "net": None, "error": None}
@@ -363,7 +373,9 @@ def measure_one(
         entry["spacegroup"] = topology.spacegroup_number
         entry["buildable"] = is_buildable(topology, result.fragments)
         if rebuild and entry["buildable"]:
-            entry["rebuild"] = _rebuild(mofgen, topology, result, max_rmsd)
+            entry["rebuild"] = _rebuild(
+                mofgen, topology, result, max_rmsd, relax_embedding
+            )
         record["nets"][net] = entry
     if not record["nets"]:
         record["outcome"] = (
@@ -485,11 +497,12 @@ def run(
     rebuild: bool = False,
     max_rmsd: float = 0.5,
     verbose: bool = True,
+    relax_embedding: bool = False,
 ) -> dict:
     """Measure every structure; returns the results payload."""
     records: dict[str, dict] = {}
     for path in sorted(corpus):
-        record = measure_one(mofgen, path, rebuild, max_rmsd)
+        record = measure_one(mofgen, path, rebuild, max_rmsd, relax_embedding)
         records[Path(path).name] = record
         if verbose:
             detail = (
@@ -532,6 +545,12 @@ def main() -> None:
     )
     parser.add_argument("--max-rmsd", type=float, default=0.5)
     parser.add_argument(
+        "--relax-embedding",
+        action="store_true",
+        help="rebuild with embedding relaxation (#174): slot displacements "
+        "+ anchor-direction objective",
+    )
+    parser.add_argument(
         "--limit", type=int, default=None, help="measure only the first N structures"
     )
     parser.add_argument("--topofile", default=None, help="topology library override")
@@ -543,7 +562,13 @@ def main() -> None:
     if not corpus:
         raise SystemExit(f"no structures matched {args.corpus!r}")
     mofgen = Autografs(topofile=args.topofile)
-    payload = run(corpus, mofgen, rebuild=args.rebuild, max_rmsd=args.max_rmsd)
+    payload = run(
+        corpus,
+        mofgen,
+        rebuild=args.rebuild,
+        max_rmsd=args.max_rmsd,
+        relax_embedding=args.relax_embedding,
+    )
     Path(args.output).write_text(json.dumps(payload, indent=1, default=str))
     print(f"\n{payload['n_structures']} structures -> {args.output}")
     for outcome, count in payload["outcomes"].items():
