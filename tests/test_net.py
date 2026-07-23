@@ -1,6 +1,7 @@
 """Tests for the net verification gate (autografs.net)."""
 
 import os
+from collections import Counter
 
 import networkx
 import numpy as np
@@ -36,6 +37,50 @@ def mof5(mofgen):
         topology, {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}
     )
     return mofgen.build(topology, mappings=mappings, refine_cell=True, max_rmsd=0.5)
+
+
+class TestContractQuotientEdges:
+    def test_edge_centers_contract_to_the_net_edges(self, mofgen):
+        """pcu's blueprint subdivides every edge with a 2-connected
+        center; contracting them leaves the bare net: one vertex,
+        three edges per cell."""
+        from autografs.net import contract_quotient_edges, topology_quotient_edges
+
+        topology = mofgen.topologies["pcu"]
+        full = topology_quotient_edges(topology)
+        contracted = contract_quotient_edges(full)
+
+        vertices = {node for edge in contracted for node in edge[:2]}
+        assert len(vertices) == 1
+        assert sum(contracted.values()) == 3
+        # every surviving edge carries a nonzero voltage: the six bonds
+        # of the 6-connected node are three edges to its own images
+        assert all(any(voltage) for _, _, voltage in contracted)
+
+    def test_uncontracted_keeps_the_centers(self, mofgen):
+        from autografs.net import contract_quotient_edges, topology_quotient_edges
+
+        full = topology_quotient_edges(mofgen.topologies["pcu"])
+        kept = contract_quotient_edges(full, contract=False)
+
+        assert sum(kept.values()) == sum(full.values())
+
+    def test_signature_is_unchanged_by_the_refactor(self, mofgen, mof5):
+        """net_signature now routes through the public helper; the two
+        must agree on the same graph."""
+        from autografs.net import (
+            contract_quotient_edges,
+            coordination_sequences,
+            framework_quotient_edges,
+            net_signature,
+        )
+
+        edges = framework_quotient_edges(mof5)
+        contracted = contract_quotient_edges(edges)
+        sequences = Counter(coordination_sequences(contracted).values())
+        signature = net_signature(edges)
+
+        assert {sequence for sequence, _ in signature} == set(sequences)
 
 
 class TestVerifyNet:

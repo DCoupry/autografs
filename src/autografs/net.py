@@ -60,6 +60,7 @@ __all__ = [
     "topology_quotient_edges",
     "topology_rod_quotient_edges",
     "framework_quotient_edges",
+    "contract_quotient_edges",
     "verify_net",
     "coordination_sequences",
     "net_signature",
@@ -422,6 +423,42 @@ def _prune_and_contract(adjacency: _Adjacency, contract: bool = True) -> _Adjace
     return adjacency
 
 
+def contract_quotient_edges(
+    edges: Counter[Edge], contract: bool = True
+) -> Counter[Edge]:
+    """Quotient edge multiset reduced to its topology-bearing vertices.
+
+    Prunes 1-coordinated vertices and (by default) contracts
+    2-coordinated ones, so a blueprint's edge centers and a
+    deconstruction's ditopic linkers both collapse into the single net
+    edge they subdivide (see _prune_and_contract). Two embeddings of
+    the same net therefore reduce to comparable graphs whatever their
+    decoration.
+
+    Parameters
+    ----------
+    edges : Counter[Edge]
+        Labeled quotient graph.
+    contract : bool, optional
+        Contract 2-coordinated vertices as well as pruning caps.
+
+    Returns
+    -------
+    Counter[Edge]
+        The reduced multiset, in the same canonical edge form as the
+        input. Vertex ids are those of the surviving vertices.
+    """
+    reduced = _prune_and_contract(_adjacency(edges), contract=contract)
+    quotient: Counter[Edge] = Counter()
+    for node, halves in reduced.items():
+        for neighbor, voltage in halves:
+            key = _canonical(node, neighbor, np.asarray(voltage))
+            quotient[key] += 1
+    # every non-loop edge was seen from both ends, every self-loop from
+    # both voltage signs (canonicalized to one key)
+    return Counter({edge: mult // 2 for edge, mult in quotient.items()})
+
+
 def coordination_sequences(
     edges: Counter[Edge], shells: int = SIGNATURE_SHELLS
 ) -> dict[int, tuple[int, ...]]:
@@ -504,15 +541,7 @@ def net_signature(
         Sorted tuple of (coordination sequence, reduced count) pairs;
         empty when nothing remains after pruning.
     """
-    reduced = _prune_and_contract(_adjacency(edges), contract=contract)
-    quotient: Counter[Edge] = Counter()
-    for node, halves in reduced.items():
-        for neighbor, voltage in halves:
-            key = _canonical(node, neighbor, np.asarray(voltage))
-            quotient[key] += 1
-    # every non-loop edge was seen from both ends, every self-loop
-    # from both voltage signs (canonicalized to one key)
-    quotient = Counter({edge: mult // 2 for edge, mult in quotient.items()})
+    quotient = contract_quotient_edges(edges, contract=contract)
     counts = Counter(coordination_sequences(quotient, shells=shells).values())
     if not counts:
         return ()
