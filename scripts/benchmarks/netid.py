@@ -1,8 +1,8 @@
-"""Net-identification accuracy benchmark against external labels.
+"""Compare net identification against a file of reference labels.
 
-Runs deconstruction-based net identification over a corpus and compares
-the candidates against reference topology assignments (e.g. ARC-MOF's
-CrystalNets.jl labels), reporting agreement split by matching tier.
+Runs deconstruction-based net identification over a corpus and checks
+the candidates against reference topology assignments, reporting
+agreement split by matching tier.
 
 The labels file is JSON: ``{"structure.cif": "pcu", ...}`` — values may
 also be lists when the reference itself is ambiguous. A structure

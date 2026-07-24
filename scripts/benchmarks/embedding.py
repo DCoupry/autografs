@@ -1,17 +1,17 @@
-"""Embedding benchmark: how wrong are idealized net proportions? (#174)
+"""Compare a net's idealized embedding proportions against real crystals.
 
 A build places every SBU at its blueprint slot centre and only ever
 varies the cell's free parameters, so the *relative* placement of units
 is whatever the net's idealized (maximum-symmetry, near-equal-edge)
-embedding chose. For a real material that can be badly off, and no
-choice of cell can repair a proportion.
+embedding chose. For a real material that can be off, and no choice of
+cell can repair a proportion.
 
-This driver measures the gap against real crystals, without needing a
-build. For a structure and the library net it identifies as, both
-embeddings are reduced to their **contracted quotient graph** (caps
-pruned, ditopic linkers and blueprint edge centers contracted away, so
-the two are comparable however they are decorated) and every edge gets
-a dimensionless *reduced length*
+This driver measures the gap, without needing a build. For a structure
+and the library net it identifies as, both embeddings are reduced to
+their **contracted quotient graph** (caps pruned, ditopic linkers and
+blueprint edge centers contracted away, so the two are comparable
+however they are decorated) and every edge gets a dimensionless
+*reduced length*
 
     lambda = d / (fold * V_cell / n_vertices) ** (1/3)
 
@@ -28,7 +28,7 @@ and a real crystal in an unrelated setting directly comparable. The
 two multisets need not be the same size - one cell may be a multiple of
 the other - so they are compared on a normalized rank axis.
 
-Two numbers come out, and their separation is the point:
+Two numbers come out:
 
 - **size**   ``mean(lambda_real) / mean(lambda_ideal) - 1``. The
              embedding packs the same net at a different density than
@@ -465,14 +465,13 @@ def _stats(values: list[float]) -> dict:
 
 
 def _summarize(records: dict) -> dict:
-    """Aggregate the measured structures; grouping is the point.
+    """Aggregate the measured structures over two populations.
 
-    Reported over two populations. **buildable** is the one the issue
-    is about - a compatible mapping exists, so the pipeline would
-    produce this structure and its packing is the pipeline's
-    responsibility. **all** additionally counts structures that
-    identify but could never be placed; their gap is real but not
-    attributable to the embedding.
+    **buildable** is the population that matters - a compatible mapping
+    exists, so the pipeline would produce this structure and its
+    packing is the pipeline's responsibility. **all** additionally
+    counts structures that identify but could never be placed; their
+    gap is real but not attributable to the embedding.
     """
     measured = [r for r in records.values() if r["outcome"] == "measured"]
     buildable = [r for r in measured if r["buildable"]]
