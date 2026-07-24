@@ -1,15 +1,14 @@
-"""Round-trip closure benchmark: deconstruct -> rebuild -> verify.
+"""Round-trip closure driver: deconstruct -> rebuild -> verify.
 
 For every structure in a corpus, deconstruct it, then try to rebuild it
 from its own extracted fragments on every identified net candidate,
 gating the rebuild with the exact net-verification gate AND a
 composition gate: verify_net proves the graph realizes the net, but a
-net with interchangeable slot types happily accepts a fragment on the
-wrong orbit, building a topologically correct framework that is not
-the input material - measured on CoRE MOF, half the verified rebuilds
-were (#180). Only a rebuild that also reproduces the experimental
-reduced formula closes the loop. The per-structure outcome taxonomy is
-the point - failures are data:
+net with interchangeable slot types can accept a fragment on the wrong
+orbit, building a topologically correct framework that is not the input
+material. Only a rebuild that also reproduces the experimental reduced
+formula closes the loop. The per-structure outcome taxonomy is the
+useful output - failures are data:
 
 - ``closed``            rebuild passed verify_net AND reproduced the
                         experimental reduced formula
