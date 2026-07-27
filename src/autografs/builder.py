@@ -71,11 +71,14 @@ NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
 NELDER_MEAD_MAXITER = 100
 
 # Embedding relaxation (#197): how much worse the relaxed solution's
-# worst bond may close than the closure-only reference before the
-# reference is kept instead. Not zero - the two optimizations run to
-# their own tolerances and a hair of difference is noise, not a
-# regression - but far below anything chemically meaningful.
-CLOSURE_PREFERENCE_TOLERANCE = 0.01
+# worst bond may close than the best reference before that reference is
+# kept instead. NOT zero, and not noise-sized: a modest closure cost
+# bought with a large packing gain is exactly what #174 is for - the
+# corpus measurement that motivated it traded bond residual 0.091 ->
+# 0.214 A for a 5x better volume ratio, and refusing that would refuse
+# the feature. What this budget exists to catch is the pathological
+# case, where the objective walks off to a 0.9 A open bond for nothing.
+CLOSURE_REGRESSION_TOLERANCE = 0.2
 
 
 def _refine(plan, x0, objective=None):
@@ -92,6 +95,33 @@ def _refine(plan, x0, objective=None):
         },
     )
     return result.x
+
+
+def _refine_cell_only(plan, x0):
+    """The fixed-slot solution, in the relaxed plan's parameter space.
+
+    Optimizes the closure over the cell block alone with every slot
+    displacement pinned at zero, so the result is the build the caller
+    would get with the flag off - the reference the relaxation
+    guarantee is stated against.
+    """
+    n_cell = plan.cell_param.n_free
+    zeros = np.zeros(plan.n_slot_free)
+
+    def objective(cell_free: np.ndarray) -> float:
+        return float(plan.closure_residual(np.concatenate([cell_free, zeros])))
+
+    result = minimize(
+        objective,
+        np.asarray(x0)[:n_cell],
+        method="Nelder-Mead",
+        options={
+            "xatol": NELDER_MEAD_XATOL,
+            "fatol": NELDER_MEAD_FATOL,
+            "maxiter": NELDER_MEAD_MAXITER * n_cell,
+        },
+    )
+    return np.concatenate([result.x, zeros])
 
 
 def build_framework(
@@ -163,24 +193,47 @@ def build_framework(
         # numpy, no object copies per evaluation
         best_parameters = _refine(plan, x0)
         if plan.n_slot_free:
-            # freeing the slots must not cost closure (#197). The
+            # freeing the slots must not COST closure (#197). The
             # relaxed objective carries the anchor-direction terms as
             # well, so its optimum is not the best-closing point and on
             # a net whose SBU/slot shape mismatch is large it can be a
-            # much worse one. Optimize the *closure alone* over the same
-            # parameters as a reference and keep whichever actually
-            # closes better, so the flag is monotone by construction
-            # rather than by hope.
-            reference = _refine(plan, x0, objective=plan.closure_residual)
-            relaxed_worst = float(plan.closure_deviations(best_parameters).max())
-            reference_worst = float(plan.closure_deviations(reference).max())
-            if reference_worst < relaxed_worst - CLOSURE_PREFERENCE_TOLERANCE:
+            # much worse one. Two references are optimized for
+            # comparison and the best-closing of the three is kept:
+            #
+            #  - the *fixed-slot* solution (displacements pinned at
+            #    zero). This is the one the caller actually compares
+            #    against - "did turning the flag on make my structure
+            #    worse?" - so it is the reference the guarantee is
+            #    stated in terms of.
+            #  - closure alone over the FULL relaxed parameter set,
+            #    which can beat both when the extra dof genuinely help
+            #    and only the direction terms were leading it astray.
+            #
+            # The tolerance is deliberately not zero: a small closure
+            # cost bought with a large packing gain is the whole point
+            # of #174 (measured on the corpus: bond residual 0.091 ->
+            # 0.214 A for a 5x better volume ratio), so only a
+            # regression past CLOSURE_REGRESSION_TOLERANCE is refused.
+            candidates = [
+                ("relaxed", best_parameters),
+                ("closure-only", _refine(plan, x0, objective=plan.closure_residual)),
+                ("fixed-slot", _refine_cell_only(plan, x0)),
+            ]
+            scored = [
+                (name, params, float(plan.closure_deviations(params).max()))
+                for name, params in candidates
+            ]
+            relaxed_worst = scored[0][2]
+            budget = min(worst for _, _, worst in scored) + CLOSURE_REGRESSION_TOLERANCE
+            if relaxed_worst > budget:
+                name, best_parameters, worst = min(scored[1:], key=lambda s: s[2])
                 logger.debug(
                     f"Embedding relaxation on {topology.name!r} closed to "
-                    f"{relaxed_worst:.3f} A against {reference_worst:.3f} A "
-                    "for closure alone; keeping the better-closing solution."
+                    f"{relaxed_worst:.3f} A, past the "
+                    f"{CLOSURE_REGRESSION_TOLERANCE:.2f} A budget over the "
+                    f"best reference; keeping the {name} solution "
+                    f"({worst:.3f} A)."
                 )
-                best_parameters = reference
     else:
         if verbose:
             logger.info("\t[x] No cell refinement performed.")
