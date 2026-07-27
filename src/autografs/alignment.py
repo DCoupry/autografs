@@ -130,12 +130,21 @@ _MATCH_ITERATIONS = 8
 # one unit of anchor-direction misalignment is worth in the objective.
 # The misalignment is the deviation of two unit vectors (0 dead-on, 2
 # backwards), so this is the whole conversion between the two terms and
-# it has to be stated rather than left implicit - see BuildPlan.residual
-# for what happens when it is not. Chosen small: the direction terms are
-# there to *select between* the near-degenerate closures a freed net
-# admits, not to compete with closure, and most of the misalignment they
-# see is irreducible SBU-versus-slot shape that no displacement can fix.
-DIRECTION_WEIGHT = 0.05
+# it has to be *stated* rather than left implicit in the algebra - see
+# BuildPlan.residual for what happens when it is not.
+#
+# Calibrated, not guessed. Swept 0.05-4.0 against two criteria: recover
+# #174's measured payoff on the one real material with free proportions
+# that rebuilds faithfully (HKUST-1 on tbo, n_free 3 - built volume per
+# atom 0.951 of experimental fixed, 0.982 under the original relaxation)
+# and regress no library net's closure. 2.0 gives volume ratio 0.977 and
+# a 5x tighter worst bond (0.0157 -> 0.0030 A) with no regression
+# anywhere; 0.05 was too weak to move the embedding at all (0.951, a
+# no-op) and 4.0 starts costing closure again. The landscape is rough -
+# Nelder-Mead lands in different basins across the sweep - so this is a
+# defensible point, not an optimum, and a corpus-scale recalibration
+# over CoRE MOF is the honest follow-up.
+DIRECTION_WEIGHT = 2.0
 
 
 def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:
