@@ -602,6 +602,7 @@ class _RodBuild:
         rod: RodFragment,
         linkers: Fragment | dict[int, Fragment | None],
         run: SlotRun | HelicalRun | list[SlotRun | HelicalRun],
+        relax_embedding: bool = False,
     ) -> None:
         self.rod = rod
         # a helical run spirals its nodes: the screw axis is a fixed
@@ -795,6 +796,53 @@ class _RodBuild:
         )
         self.orbit_position = {orbit: k for k, orbit in enumerate(distinct)}
         self.n_orbits = len(distinct)
+
+        # embedding relaxation (#174) for the rod path, restricted to
+        # the LATERAL slots. The other candidates are all unusable, by
+        # construction rather than by choice:
+        #
+        # - a helical run's axis line is a screw axis of the net, i.e. a
+        #   symmetry element, and a rotation of order >= 2 fixes no
+        #   transverse vector (order 2 sends v -> -v). Axis lines are
+        #   pinned outright, so rod-to-rod spacing is set by the cell -
+        #   which ``scale`` already varies.
+        # - a run node's freedom is transverse (the nodes sit off the
+        #   axis), but that moves the *helix radius*, and a harvested
+        #   rod is rigid: placement reads only the node's azimuth and
+        #   height, never its radius. What is left of it - the azimuth -
+        #   is ``theta``.
+        # - a run's edge centers are contracted into the rod's own
+        #   continuation and never placed.
+        #
+        # The laterals are the genuine gap, and the one #174 was opened
+        # on: etb-e carries 3 free lateral parameters, exactly where the
+        # CAXVOO node-to-linker proportion was measured wrong. They are
+        # also better conditioned here than in the finite pipeline: the
+        # rods are symmetry-pinned anchors, so a linker between them is
+        # fixed by closure rather than floppy.
+        self.slot_disp = None
+        self.n_slot_free = 0
+        if relax_embedding and self.lateral:
+            from dataclasses import replace as dataclass_replace
+
+            from autografs.symmetry import orbit_displacements
+
+            placed = {lateral.slot_index for lateral in self.lateral}
+            disp = orbit_displacements(topology)
+            bases = {
+                orbit: (
+                    basis if disp.representatives[orbit] in placed else np.zeros((0, 3))
+                )
+                for orbit, basis in disp.bases.items()
+            }
+            disp = dataclass_replace(disp, bases=bases)
+            if disp.n_free:
+                self.slot_disp = disp
+                self.n_slot_free = disp.n_free
+                logger.debug(
+                    f"Rod embedding relaxation on {topology.name!r}: "
+                    f"{disp.n_free} lateral slot parameters."
+                )
         # linker copies per lateral slot, one per blueprint period the
         # build stacks: a helical blueprint is already the full period
         # (one linker each), a straight one holding a single node is
@@ -943,6 +991,7 @@ class _RodBuild:
         theta: np.ndarray | float,
         z0: np.ndarray | float,
         phi: np.ndarray | None = None,
+        shifts: np.ndarray | None = None,
     ) -> dict:
         """Place everything for one parameter set.
 
@@ -1094,7 +1143,12 @@ class _RodBuild:
                 centered = Rotation.from_rotvec(angle * species.relief_axis).apply(
                     centered
                 )
-            linker0 = centered @ rotation.T + lateral.center_frac @ linker_cell
+            center_frac = lateral.center_frac
+            if shifts is not None:
+                # embedding relaxation: the slot centre moves within its
+                # site symmetry, the SBU rides along rigidly
+                center_frac = center_frac + shifts[lateral.slot_index]
+            linker0 = centered @ rotation.T + center_frac @ linker_cell
             for n in range(self.linker_copies):
                 placements.append(
                     {
@@ -1160,15 +1214,29 @@ class _RodBuild:
         }
 
     def unpack(self, params: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-        """(scale, theta per family, z0 per family) from a flat vector."""
-        rest = np.asarray(params[1:], dtype=float).reshape(self.n_families, 2)
+        """(scale, theta per family, z0 per family) from a flat vector.
+
+        Reads the head only; any trailing lateral-displacement block
+        (embedding relaxation) is left to ``lateral_shifts``.
+        """
+        head = np.asarray(params[1 : 1 + 2 * self.n_families], dtype=float)
+        rest = head.reshape(self.n_families, 2)
         return float(params[0]), rest[:, 0], rest[:, 1]
+
+    def lateral_shifts(self, params: np.ndarray) -> np.ndarray | None:
+        """Per-slot fractional displacements from the parameter tail."""
+        if self.slot_disp is None:
+            return None
+        tail = np.asarray(params[1 + 2 * self.n_families :], dtype=float)
+        return self.slot_disp.expand(tail)
 
     def objective(self, params: np.ndarray) -> float:
         scale, theta, z0 = self.unpack(params)
         if scale <= 0.05:
             return 1e6
-        residuals = self.evaluate(scale, theta, z0)["residuals"]
+        residuals = self.evaluate(scale, theta, z0, shifts=self.lateral_shifts(params))[
+            "residuals"
+        ]
         return float(np.sqrt((residuals**2).mean()))
 
     def initial_guess(self) -> np.ndarray:
@@ -1239,12 +1307,14 @@ class _RodBuild:
             if self._arm_rows
             else 0.0
         )
+        # lateral displacements start at the idealized embedding
+        tail = [0.0] * self.n_slot_free
         if self.helical:
             per_family = [0.0, -z_arms] * self.n_families
-            return np.array([scale0, *per_family])
+            return np.array([scale0, *per_family, *tail])
         cell_p = self._cell_one_period(scale0)
         z_node = float((self.node_center_frac @ cell_p) @ self.axis_hat)
-        return np.array([scale0, 0.0, z_node - z_arms])
+        return np.array([scale0, 0.0, z_node - z_arms, *tail])
 
     def refresh_assignments(self, scale: float) -> None:
         """Re-solve which SBU arm fills which slot dummy, at this cell.
@@ -1503,6 +1573,7 @@ def build_rod_framework(
     bond_tolerance: float = DEFAULT_BOND_TOLERANCE,
     verify_net: bool = False,
     verbose: bool = False,
+    relax_embedding: bool = False,
 ) -> Framework:
     """Build a rod framework - straight or helical - from a rod and linkers.
 
@@ -1675,7 +1746,13 @@ def build_rod_framework(
     lateral_slots = [s for s in range(len(topology.slots)) if s not in run_slots]
     per_slot = _validate_linkers(topology, linkers, lateral_slots)
 
-    build = _RodBuild(topology, rod, per_slot, runs if len(runs) > 1 else runs[0])
+    build = _RodBuild(
+        topology,
+        rod,
+        per_slot,
+        runs if len(runs) > 1 else runs[0],
+        relax_embedding=relax_embedding,
+    )
 
     # optimize: coarse rotation grid per axis family (a full product
     # grid would be 16^families), then refine everything with Nelder-Mead
@@ -1696,6 +1773,7 @@ def build_rod_framework(
         options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
     )
     scale, theta, z0 = build.unpack(result.x)
+    shifts = build.lateral_shifts(result.x)
     # the polytopic arm assignments were fixed at the blueprint cell;
     # re-solve them now that the cell has moved
     build.refresh_assignments(scale)
@@ -1706,7 +1784,9 @@ def build_rod_framework(
     # relievable lateral orbit. A ring has pi symmetry, so the search
     # spans [0, pi); grid then refine.
     def relief(phi: np.ndarray) -> float:
-        return -build.min_inter_unit_contact(build.evaluate(scale, theta, z0, phi=phi))
+        return -build.min_inter_unit_contact(
+            build.evaluate(scale, theta, z0, phi=phi, shifts=shifts)
+        )
 
     best_phi: np.ndarray | None = None
     if build.n_orbits == 1:
@@ -1733,7 +1813,7 @@ def build_rod_framework(
         )
         if -refined.fun >= -relief(best_phi):
             best_phi = refined.x
-    placed = build.evaluate(scale, theta, z0, phi=best_phi)
+    placed = build.evaluate(scale, theta, z0, phi=best_phi, shifts=shifts)
 
     worst_bond = float(placed["residuals"].max())
     if worst_bond > bond_tolerance:

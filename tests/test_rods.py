@@ -2230,3 +2230,134 @@ class TestForwardUnwrap:
 
         result = mofgen.deconstruct(_helical_rod_structure())
         return rod_fragment(result.structure, result.rod_units[0])
+
+
+class TestRodEmbeddingRelaxation:
+    """Embedding relaxation for the rod path (#189 / #174).
+
+    Only the *lateral* slots are freed, and that restriction is forced
+    rather than chosen: a helical run's axis is a screw axis of the net,
+    so it is a symmetry element and cannot move; a run node's remaining
+    freedom is the helix radius, which a rigid harvested rod cannot
+    follow (placement reads its azimuth and height only); and a run's
+    edge centers are contracted into the rod. The laterals are what is
+    left, and they are where #174 was measured wrong on MOF-74.
+    """
+
+    def test_only_lateral_orbits_are_freed(self, bundled_topologies):
+        """etb-e's blueprint carries free run-node and run-edge orbits
+        too; the rod build must expose only the lateral ones."""
+        from autografs.rod_build import _RodBuild, _select_runs, _validate_linkers
+        from autografs.symmetry import orbit_displacements
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        mapping = {s: ditopic for s in dit_slots} | {s: tetratopic for s in tet_slots}
+        per_slot = _validate_linkers(
+            etbe, mapping, sorted(dit_slots) + sorted(tet_slots)
+        )
+        runs = _select_runs(etbe, rod, True)
+
+        build = _RodBuild(etbe, rod, per_slot, runs, relax_embedding=True)
+
+        # the whole blueprint has more freedom than the rod path can use
+        assert orbit_displacements(etbe).n_free > build.n_slot_free
+        assert build.n_slot_free == 3
+        # and the parameter vector grew by exactly that much
+        assert len(build.initial_guess()) == 1 + 2 * build.n_families + 3
+
+    def test_the_new_parameters_are_not_flat(self, bundled_topologies):
+        """A freed parameter the objective cannot see would be a
+        wandering direction for Nelder-Mead, not a degree of freedom."""
+        from autografs.rod_build import _RodBuild, _select_runs, _validate_linkers
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        mapping = {s: ditopic for s in dit_slots} | {s: tetratopic for s in tet_slots}
+        per_slot = _validate_linkers(
+            etbe, mapping, sorted(dit_slots) + sorted(tet_slots)
+        )
+        build = _RodBuild(
+            etbe, rod, per_slot, _select_runs(etbe, rod, True), relax_embedding=True
+        )
+
+        start = build.initial_guess()
+        base = build.objective(start)
+        for k in range(build.n_slot_free):
+            moved = start.copy()
+            moved[1 + 2 * build.n_families + k] += 0.3
+            assert abs(build.objective(moved) - base) > 1e-6
+
+    def test_relaxation_closes_a_mismatched_linker(self, bundled_topologies):
+        """The #174 situation: a linker whose span does not suit the
+        idealized node-to-linker proportion. Freeing the lateral slots
+        must close the bonds better than the cell alone can."""
+        import numpy as np
+        from scipy.optimize import minimize
+
+        from autografs.rod_build import _RodBuild, _select_runs, _validate_linkers
+
+        etbe = bundled_topologies["etb-e"]
+        rod, ditopic, tetratopic, dit_slots, tet_slots = _etbe_mixed_mapping(etbe)
+        # stretch the ditopic linker so the ideal separation misfits it
+        stretched = ditopic.copy()
+        coords = np.asarray(stretched.atoms.cart_coords)
+        center = coords.mean(axis=0)
+        stretched.atoms = type(stretched.atoms)(
+            stretched.atoms.species,
+            center + (coords - center) * 1.25,
+            site_properties=stretched.atoms.site_properties,
+        )
+        stretched._clear_geometry_caches()
+
+        worst = {}
+        for label, relax in (("default", False), ("relaxed", True)):
+            mapping = {s: stretched for s in dit_slots} | {
+                s: tetratopic for s in tet_slots
+            }
+            per_slot = _validate_linkers(
+                etbe, mapping, sorted(dit_slots) + sorted(tet_slots)
+            )
+            build = _RodBuild(
+                etbe,
+                rod,
+                per_slot,
+                _select_runs(etbe, rod, True),
+                relax_embedding=relax,
+            )
+            result = minimize(
+                build.objective,
+                build.initial_guess(),
+                method="Nelder-Mead",
+                options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
+            )
+            scale, theta, z0 = build.unpack(result.x)
+            placed = build.evaluate(
+                scale, theta, z0, shifts=build.lateral_shifts(result.x)
+            )
+            worst[label] = float(placed["residuals"].max())
+
+        assert worst["relaxed"] < 0.5 * worst["default"]
+
+    def test_pinned_laterals_build_identically(self, bundled_topologies):
+        """etb's laterals are symmetry-pinned (its free orbits are all
+        run slots), so the flag must be a no-op there - the rod mirror
+        of the finite pipeline's pinned-net guarantee."""
+        import numpy as np
+
+        from autografs.rod_build import build_rod_framework
+
+        etb = bundled_topologies["etb"]
+        rod, linker = _etb_helical_rod(etb)
+        default = build_rod_framework(etb, rod, linker, min_distance=None)
+        relaxed = build_rod_framework(
+            etb, rod, linker, min_distance=None, relax_embedding=True
+        )
+
+        assert np.allclose(relaxed.cell, default.cell, atol=1e-9)
+        for node in default.graph:
+            np.testing.assert_allclose(
+                relaxed.graph.nodes[node]["coord"],
+                default.graph.nodes[node]["coord"],
+                atol=1e-9,
+            )
