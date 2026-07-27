@@ -344,6 +344,15 @@ def orbit_displacements(
             representatives[orbits[slot]] = slot
             propagation[slot] = np.eye(3)
         # rebuild orbit_of_slot consistency below
+    if any(w is None for w in propagation):  # pragma: no cover - the loop above
+        # `expand` indexes propagation *by slot*, so a gap would not
+        # shorten the result, it would silently shift every later
+        # slot's displacement onto the wrong site
+        raise AssertionError(
+            f"Slot displacement propagation is incomplete on "
+            f"{topology.name!r}; the unreached-slot pass should have "
+            "filled every entry."
+        )
     bases: dict[int, np.ndarray] = {}
     for orbit, representative in representatives.items():
         stabilizer = [
@@ -356,5 +365,6 @@ def orbit_displacements(
         orbit_of_slot=tuple(orbits),
         representatives=representatives,
         bases=bases,
-        propagation=tuple(w for w in propagation if w is not None),
+        # indexed by slot: every entry is set, checked above
+        propagation=tuple(np.asarray(w) for w in propagation),
     )
