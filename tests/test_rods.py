@@ -2361,3 +2361,41 @@ class TestRodEmbeddingRelaxation:
                 default.graph.nodes[node]["coord"],
                 atol=1e-9,
             )
+
+
+class TestSingleUnitContact:
+    """A build can legitimately place exactly one unit: one rod on a
+    net whose every lateral slot is emptied (#168/#179). There is then
+    no inter-unit pair to measure, and the contact must report the
+    "nothing within reach" convention rather than reducing over an
+    empty array."""
+
+    def test_no_inter_unit_pair_reports_inf(self, mofgen):
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        pcu = mofgen.topologies["pcu"]
+        build = _RodBuild(pcu, rod, linker, _select_runs(pcu, rod, False)[0])
+        assert build.n_rods == 1
+        placed = build.evaluate(*build.unpack(build.initial_guess()))
+        # the all-lateral-slots-empty case: nothing but the rod is placed
+        placed["placements"] = []
+        assert build.min_inter_unit_contact(placed) == math.inf
+
+    def test_two_units_still_measure_a_contact(self, mofgen):
+        from autografs.rod_build import _RodBuild, _select_runs
+
+        result = mofgen.harvest([_rod_pillar_structure(1)])
+        rod = result.rods["rod_OZn"]
+        linker = result.fragments[
+            next(n for n, k in result.kinds.items() if k == "linker")
+        ]
+        pcu = mofgen.topologies["pcu"]
+        build = _RodBuild(pcu, rod, linker, _select_runs(pcu, rod, False)[0])
+        placed = build.evaluate(*build.unpack(build.initial_guess()))
+        assert placed["placements"]
+        assert math.isfinite(build.min_inter_unit_contact(placed))

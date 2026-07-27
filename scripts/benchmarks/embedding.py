@@ -274,6 +274,7 @@ def bond_residuals(framework) -> dict:
     cell = np.asarray(graph.graph["cell"], dtype=float)
     inverse = np.linalg.inv(cell)
     deviations: list[float] = []
+    skipped: set[str] = set()
     for node_a, node_b in graph.edges():
         data_a = graph.nodes[node_a]
         data_b = graph.nodes[node_b]
@@ -286,18 +287,28 @@ def bond_residuals(framework) -> dict:
             # produce (#179), so it must be measured.
             continue
         delta -= crossing @ cell
-        target = CovalentRadius.radius.get(
-            data_a["symbol"], 0.0
-        ) + CovalentRadius.radius.get(data_b["symbol"], 0.0)
+        # an element absent from the Cordero table has no target: a 0.0
+        # fallback would report the whole bond length as the deviation,
+        # which reads as a catastrophic build rather than as a missing
+        # radius. Skip the bond and say how many were skipped.
+        symbols = (data_a["symbol"], data_b["symbol"])
+        missing = [s for s in symbols if s not in CovalentRadius.radius]
+        if missing:
+            skipped.update(missing)
+            continue
+        target = sum(CovalentRadius.radius[s] for s in symbols)
         deviations.append(abs(float(np.linalg.norm(delta)) - target))
     if not deviations:
         return {}
     ordered = sorted(deviations)
-    return {
+    summary = {
         "median": statistics.median(ordered),
         "max": ordered[-1],
         "n_bonds": len(ordered),
     }
+    if skipped:
+        summary["skipped_elements"] = sorted(skipped)
+    return summary
 
 
 def _rebuild(

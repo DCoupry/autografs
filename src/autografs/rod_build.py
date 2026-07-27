@@ -96,6 +96,7 @@ What is structurally different from the finite-SBU pipeline:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -1343,6 +1344,11 @@ class _RodBuild:
         inter-unit distances change and only they can clash. Matched
         rod-linker anchor bonds are ~one covalent length and never the
         binding constraint, so they need no special exemption.
+
+        A build with a *single* unit has no inter-unit pair at all -
+        one rod on a net whose every lateral slot is emptied (#168/
+        #179) - and reports ``inf``, the same "nothing within reach"
+        convention ``Framework.min_contact`` uses.
         """
         cell = placed["cell"]
         inv = np.linalg.inv(cell)
@@ -1364,6 +1370,8 @@ class _RodBuild:
             labels.append(np.full(len(reals), p_index))
         points = np.vstack(coords)
         unit = np.concatenate(labels)
+        if len(np.unique(unit)) < 2:
+            return math.inf
         # minimum-image pairwise distances between different units
         delta = points[:, None, :] - points[None, :, :]
         frac = delta @ inv
