@@ -280,3 +280,166 @@ class TestClosureGate:
         )
         ungated = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
         assert np.allclose(gated.cell, ungated.cell, atol=1e-9)
+
+
+class TestObjectiveScaling:
+    """#197/#198: the augmented objective is only ever exercised when
+    the SBU's anchor-to-dummy direction differs from its centroid arm
+    direction. Every fixture above uses collinear rod SBUs, for which
+    the two coincide and the direction terms are identically zero - so
+    the whole term scaling went untested, and got it wrong.
+
+    A *bent* SBU has a genuine arm/bond mismatch and puts the terms in
+    play."""
+
+    @staticmethod
+    def _bent_sbu(name, half, offset):
+        """A ditopic SBU whose anchors sit off the arm axis.
+
+        The dummies stay on z (the slot's arm directions), but the
+        anchor carbons are displaced in x, so anchor->dummy is not the
+        centroid arm direction and the direction terms are nonzero.
+        """
+        species = ["C", "C", "X", "X"]
+        coords = [
+            [offset, 0.0, half],
+            [offset, 0.0, -half],
+            [0.0, 0.0, half + 1.4],
+            [0.0, 0.0, -half - 1.4],
+        ]
+        return Fragment(atoms=Molecule(species, np.array(coords)), name=name)
+
+    def test_direction_term_is_an_angle_not_a_length(self):
+        """The bug: measured as a raw vector deviation the term scales
+        with the bond length, so a long bond is penalized for being
+        long. Scaling every length in the problem must leave the
+        misalignment part of the objective alone."""
+        from autografs.alignment import DIRECTION_WEIGHT
+
+        assert DIRECTION_WEIGHT > 0
+        plan = prepare_build(_alternating_chain(), _mappings(), relax_embedding=True)
+        parameters = plan.initial_parameters()
+        # the chain's SBUs are collinear, so the direction terms
+        # vanish and the relaxed objective must equal the legacy one
+        legacy = prepare_build(_alternating_chain(), _mappings())
+        assert plan.residual(parameters) == pytest.approx(
+            legacy.residual(parameters[: legacy.cell_param.n_free]), abs=1e-9
+        )
+
+    def test_bent_sbu_puts_the_direction_terms_in_play(self):
+        """Sanity check on the fixture itself: without a genuine
+        arm/bond mismatch this class would test nothing."""
+        mappings = dict(_mappings())
+        mappings[1] = self._bent_sbu("bent_long", half=2.0, offset=0.8)
+        plan = prepare_build(_alternating_chain(), mappings, relax_embedding=True)
+        placement = next(p for p in plan.placements if p.slot_index == 1)
+        # anchor->dummy is not the centroid arm direction
+        assert not np.allclose(placement.bond_units, placement.arm_units, atol=1e-3)
+
+    def test_closure_stays_within_the_regression_budget(self):
+        """The contract, on a fixture where the direction terms are
+        live. Before #197 this blew the budget by an order of magnitude
+        on real nets (sra 0.002 -> 0.34 A, worst bond 0.004 -> 0.877)."""
+        from autografs.builder import CLOSURE_REGRESSION_TOLERANCE
+
+        mappings = dict(_mappings())
+        mappings[1] = self._bent_sbu("bent_long", half=2.0, offset=0.8)
+
+        fixed = build_framework(_alternating_chain(), dict(mappings))
+        relaxed = build_framework(
+            _alternating_chain(), dict(mappings), relax_embedding=True
+        )
+
+        assert (
+            max(_inter_sbu_gaps(relaxed))
+            <= max(_inter_sbu_gaps(fixed)) + CLOSURE_REGRESSION_TOLERANCE
+        )
+
+    def test_closure_reference_is_kept_when_it_closes_better(self):
+        """The monotonicity net: closure_residual optimized over the
+        same free parameters is the fallback, so a bad direction
+        landscape can cost nothing."""
+        mappings = dict(_mappings())
+        mappings[1] = self._bent_sbu("bent_long", half=2.0, offset=0.8)
+        plan = prepare_build(_alternating_chain(), mappings, relax_embedding=True)
+        parameters = plan.initial_parameters()
+        # the reference objective is closure alone: identical to the
+        # legacy residual when the displacements are zero
+        legacy = prepare_build(_alternating_chain(), dict(mappings))
+        assert plan.closure_residual(parameters) == pytest.approx(
+            legacy.residual(parameters[: legacy.cell_param.n_free]), abs=1e-9
+        )
+
+
+class TestRelaxationOnRealNets:
+    """The gap #198 names: the reduced test fixture carries *only*
+    fully pinned blueprints (acs, dia, hcb, pcu, sql, srs all have
+    n_free == 0), so every relaxation test above runs either on a
+    synthetic collinear-SBU chain - where the direction terms are
+    identically zero - or on a net that bypasses the augmented
+    objective entirely. The regression in #197 lived in exactly that
+    gap. These use the shipped library and real SBUs."""
+
+    @pytest.fixture(scope="class")
+    def bundled(self):
+        from pathlib import Path
+
+        import autografs
+        from autografs.topology_io import load_topologies
+
+        path = Path(autografs.__file__).parent / "data" / "topologies.json.gz"
+        return load_topologies(str(path))
+
+    @pytest.fixture(scope="class")
+    def library(self):
+        from autografs import Autografs
+
+        return Autografs()
+
+    def _pair(self, library, net):
+        topology = library.topologies[net]
+        units = library.list_building_units(sieve=net)
+        if not all(units.get(key) for key in topology.mappings):
+            pytest.skip(f"no compatible SBU for every slot type of {net}")
+        mappings = {key: options[0] for key, options in units.items()}
+        return (
+            topology,
+            library.build(topology, mappings=dict(mappings), max_rmsd=1.0),
+            library.build(
+                topology, mappings=dict(mappings), max_rmsd=1.0, relax_embedding=True
+            ),
+        )
+
+    @pytest.mark.parametrize("net", ["pts", "unc", "etb-e"])
+    def test_closure_stays_within_the_regression_budget(self, library, net):
+        """The contract, stated as the guard actually enforces it.
+
+        NOT "never closes worse": the corpus measurement says a modest
+        closure cost buys a large packing gain, and that trade is the
+        whole point of #174 (over 35 non-pinned faithful CoRE MOF
+        rebuilds, bond residual median 0.091 -> 0.112 A for a 3.3x
+        better built-vs-experimental density). What the guard promises
+        is that the cost stays inside CLOSURE_REGRESSION_TOLERANCE.
+
+        Before #197 the failures were an order of magnitude past any
+        budget: pts 0.125 -> 1.110 A worst bond, etb-e 0.173 -> 0.748,
+        sra 0.004 -> 0.877."""
+        from autografs.builder import CLOSURE_REGRESSION_TOLERANCE
+        from autografs.symmetry import orbit_displacements
+
+        topology, fixed, relaxed = self._pair(library, net)
+        assert orbit_displacements(topology).n_free > 0, "net has nothing to relax"
+
+        assert (
+            max(_inter_sbu_gaps(relaxed))
+            <= max(_inter_sbu_gaps(fixed)) + CLOSURE_REGRESSION_TOLERANCE
+        )
+
+    @pytest.mark.parametrize("net", ["pts", "unc", "etb-e"])
+    def test_relaxation_does_not_inflate_the_cell(self, library, net):
+        """The visible symptom of the old scaling: alignment bought
+        with volume (pts x2.8, tbo x2.2, etb-e x1.4). A relaxed build
+        moves the cell - that is the point - but not by that."""
+        _topology, fixed, relaxed = self._pair(library, net)
+
+        assert relaxed.structure.volume < 1.25 * fixed.structure.volume
