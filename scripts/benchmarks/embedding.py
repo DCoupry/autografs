@@ -58,7 +58,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import statistics
 import time
@@ -66,6 +65,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+from _mapping_order import graded_indices, n_combinations
 
 from autografs import Autografs
 from autografs.exceptions import AutografsError
@@ -221,6 +221,10 @@ def _candidate_mappings(topology, fragments):
     option alongside a fitting fragment: it would multiply the
     combination count for nets that already build, and a decoration
     the material *does* have should be placed.
+
+    Enumerated in graded order (see ``_mapping_order``) rather than
+    ``itertools.product`` order, so the budget varies every slot type
+    instead of only the last one.
     """
     slot_types = list(topology.mappings)
     options = []
@@ -233,8 +237,9 @@ def _candidate_mappings(topology, fragments):
                 return  # only 2-connected slots may be emptied
             fitting = [None]
         options.append(fitting)
-    combos = itertools.product(*options)
-    for combo in itertools.islice(combos, MAX_MAPPINGS_PER_NET):
+    sizes = [len(fitting) for fitting in options]
+    for indices in graded_indices(sizes, MAX_MAPPINGS_PER_NET):
+        combo = [option[index] for option, index in zip(options, indices, strict=True)]
         yield dict(zip(slot_types, combo, strict=True))
 
 
@@ -303,7 +308,9 @@ def _rebuild(
     No overlap gate: a compressed packing is exactly what this
     benchmark is here to measure, so it must not be rejected.
     """
+    tried = 0
     for mappings in _candidate_mappings(topology, result.fragments):
+        tried += 1
         try:
             framework = mofgen.build(
                 topology,
@@ -339,8 +346,27 @@ def _rebuild(
             ),
             "formula": built.composition.reduced_formula,
             "formula_experimental": experimental.composition.reduced_formula,
+            # no silent caps: how much of the assignment space the
+            # budget actually covered
+            "assignments_tried": tried,
+            "assignments_total": _assignment_space(topology, result.fragments),
         }
     return None
+
+
+def _assignment_space(topology, fragments) -> int:
+    """Total compatible fragment-per-slot-type assignments, 0 if none."""
+    sizes = []
+    for slot_type in topology.mappings:
+        fitting = sum(
+            1 for f in fragments.values() if f.has_compatible_symmetry(slot_type)
+        )
+        if not fitting:
+            if len(slot_type.atoms.indices_from_symbol("X")) != 2:
+                return 0
+            fitting = 1  # the empty-slot option
+        sizes.append(fitting)
+    return n_combinations(sizes)
 
 
 def measure_one(

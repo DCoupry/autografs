@@ -35,11 +35,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import time
 from collections import Counter
 from pathlib import Path
+
+from _mapping_order import graded_indices, n_combinations
 
 from autografs import Autografs
 from autografs.exceptions import AutografsError
@@ -51,7 +52,12 @@ MAX_MAPPINGS_PER_NET = 16
 
 
 def candidate_mappings(topology, fragments: dict):
-    """Yield fragment-per-slot-type assignments compatible by geometry."""
+    """Yield fragment-per-slot-type assignments compatible by geometry.
+
+    Enumerated in graded order (see ``_mapping_order``) rather than
+    ``itertools.product`` order, so the budget varies every slot type
+    instead of only the last one.
+    """
     slot_types = list(topology.mappings)
     options = []
     for slot_type in slot_types:
@@ -63,8 +69,15 @@ def candidate_mappings(topology, fragments: dict):
         if not fitting:
             return
         options.append(fitting)
-    combos = itertools.product(*options)
-    for combo in itertools.islice(combos, MAX_MAPPINGS_PER_NET):
+    sizes = [len(fitting) for fitting in options]
+    total = n_combinations(sizes)
+    if total > MAX_MAPPINGS_PER_NET:
+        print(
+            f"    [!] {topology.name}: {total} compatible assignments, "
+            f"trying the {MAX_MAPPINGS_PER_NET} nearest the first choice"
+        )
+    for indices in graded_indices(sizes, MAX_MAPPINGS_PER_NET):
+        combo = [option[index] for option, index in zip(options, indices, strict=True)]
         yield dict(zip(slot_types, combo, strict=True))
 
 
