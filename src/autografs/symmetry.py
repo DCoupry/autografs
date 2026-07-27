@@ -92,10 +92,10 @@ def _lattice_point_group(matrix: np.ndarray) -> list[np.ndarray]:
     metric = matrix @ matrix.T
     scale = float(np.abs(metric).max())
     candidates = []
+    # a column of W is never all-zero (W is invertible), so the search
+    # is over 26^3 = ~17.5k matrices rather than the full 3^9; the
+    # determinant test rejects most of them before the metric check
     columns = [np.array(c) for c in product((-1, 0, 1), repeat=3) if any(c)]
-    # build W column by column, pruning on the diagonal of the metric
-    # condition first (a full 3^9 scan is ~20k matrices; this is
-    # equivalent but keeps the inner check cheap)
     for w in product(columns, repeat=3):
         candidate = np.array(w, dtype=int).T
         if abs(round(float(np.linalg.det(candidate)))) != 1:
