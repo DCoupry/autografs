@@ -429,10 +429,6 @@ def measure_one(
         entry = compare(real, ideal)
         entry["spacegroup"] = topology.spacegroup_number
         entry["buildable"] = is_buildable(topology, result.fragments)
-        if rebuild and entry["buildable"]:
-            entry["rebuild"] = _rebuild(
-                mofgen, topology, result, max_rmsd, relax_embedding
-            )
         record["nets"][net] = entry
     if not record["nets"]:
         record["outcome"] = (
@@ -456,6 +452,16 @@ def measure_one(
     record["buildable"] = record["nets"][best]["buildable"]
     record["size_error"] = record["nets"][best]["size_error"]
     record["shape_error"] = record["nets"][best]["shape_error"]
+    # the rebuild closes the loop on *this* structure's volume-ratio
+    # prediction, so it belongs to the same population the prediction
+    # does: the best candidate, once. Rebuilding every candidate made
+    # an ambiguous structure contribute one row to the size/shape
+    # statistics but several to the rebuild ones, and cost a full
+    # build per runner-up.
+    if rebuild and record["buildable"]:
+        record["nets"][best]["rebuild"] = _rebuild(
+            mofgen, mofgen.topologies[best], result, max_rmsd, relax_embedding
+        )
     record["outcome"] = "measured"
     record["seconds"] = time.perf_counter() - t0
     return record
@@ -525,11 +531,12 @@ def _summarize(records: dict) -> dict:
                 system: _stats(values) for system, values in sorted(by_system.items())
             },
         }
+    # one rebuild per *structure*, on its best candidate - the same
+    # population the size/shape statistics above are taken from
     rebuilds = [
-        entry["rebuild"]
+        record["nets"][record["best_net"]]["rebuild"]
         for record in measured
-        for entry in record["nets"].values()
-        if entry.get("rebuild")
+        if record["nets"][record["best_net"]].get("rebuild")
     ]
     # only rebuilds that reproduced the material's own formula say
     # anything about its packing (see _rebuild)

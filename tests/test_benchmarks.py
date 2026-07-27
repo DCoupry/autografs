@@ -156,6 +156,25 @@ def test_embedding_predicts_the_rebuilt_cell(mofgen, embedding, mof5, tmp_path):
     )
 
 
+def test_embedding_rebuilds_once_per_structure(mofgen, embedding, mof5, tmp_path):
+    """The rebuild closes the loop on one structure's volume-ratio
+    prediction, so it belongs to the same population the prediction
+    does: the best candidate, once. An ambiguous structure must not
+    contribute several rows to the rebuild statistics while
+    contributing one to the size/shape ones."""
+    mof5.write_cif(tmp_path / "mof5.cif")
+
+    payload = embedding.run(
+        [tmp_path / "mof5.cif"], mofgen, rebuild=True, verbose=False
+    )
+
+    record = payload["structures"]["mof5.cif"]
+    carrying = [net for net, entry in record["nets"].items() if "rebuild" in entry]
+    assert carrying == [record["best_net"]]
+    summary = payload["summary"]
+    assert summary["n_rebuilt"] <= summary["n_measured"]
+
+
 def test_embedding_reports_failures_as_data(mofgen, embedding, tmp_path):
     """A non-framework input lands in the taxonomy, not a raise."""
     from pymatgen.core.lattice import Lattice
