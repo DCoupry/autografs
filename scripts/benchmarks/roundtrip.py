@@ -12,9 +12,19 @@ useful output - failures are data:
 
 - ``closed``            rebuild passed verify_net AND reproduced the
                         experimental reduced formula
+- ``closed_uncapped``   the rebuild reproduces the framework once its
+                        **monotopic** units are set aside. Those are
+                        pendant substituents and capping residues on
+                        the metal-free (branch-point) path, and no
+                        blueprint has a 1-connected slot to host them,
+                        so a rebuild is short by exactly those atoms.
+                        The net and every polytopic unit are right;
+                        this is a scope limit, not a wrong material
 - ``closed_wrong_composition``  verified rebuilds exist, but none with
-                        the right formula - topologically closed,
-                        chemically not the same material
+                        the right formula even allowing for that -
+                        topologically closed, chemically not the same
+                        material (a fragment on the wrong orbit, which
+                        is what this gate was added to catch)
 - ``rebuild_failed``    every candidate/mapping combination was gated
 - ``no_mapping``        no compatible fragment-to-slot assignment
 - ``rod``               identified, but contains 1-periodic units this
@@ -41,6 +51,7 @@ from collections import Counter
 from pathlib import Path
 
 from _mapping_order import graded_indices, n_combinations
+from pymatgen.core.composition import Composition
 
 from autografs import Autografs
 from autografs.exceptions import AutografsError
@@ -81,6 +92,43 @@ def candidate_mappings(topology, fragments: dict):
         yield dict(zip(slot_types, combo, strict=True))
 
 
+def uncapped_composition(result) -> tuple[str | None, str | None]:
+    """(reduced formula without the monotopic units, their formula).
+
+    A ``cap`` unit is an organic unit of external degree 1 - a pendant
+    substituent or capping residue, found on the metal-free
+    branch-point path. No blueprint carries a 1-connected slot, so a
+    rebuild is short by exactly those atoms however well the net and
+    every polytopic unit match; scoring that as "chemically not the
+    same material" conflates a scope limit with the wrong-orbit
+    assignment the composition gate exists to catch.
+
+    (Metal-bound solvent is *not* a cap: the metal-oxo rule clusters
+    C-free metal-bound atoms into the node, so a capped MOF round-trips
+    with its full formula and never reaches this path.)
+
+    Returns ``(None, None)`` when the structure has no cap units.
+    """
+    cap_atoms = [
+        index
+        for unit in result.units
+        if unit.kind == "cap"
+        for index in unit.atom_indices
+    ]
+    if not cap_atoms:
+        return None, None
+    structure = result.structure
+    caps = Composition(Counter(structure[index].specie.symbol for index in cap_atoms))
+    kept = Counter(
+        site.specie.symbol
+        for index, site in enumerate(structure)
+        if index not in set(cap_atoms)
+    )
+    if not kept:
+        return None, caps.reduced_formula
+    return Composition(kept).reduced_formula, caps.reduced_formula
+
+
 def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
     """Deconstruct one structure and attempt the verified rebuild."""
     record: dict = {"outcome": None, "net": None, "tier": None, "error": None}
@@ -111,8 +159,11 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
         record["seconds"] = time.perf_counter() - t0
         return record
     experimental_formula = result.structure.composition.reduced_formula
+    uncapped_formula, cap_formula = uncapped_composition(result)
+    record["caps"] = cap_formula
     saw_mapping = False
     saw_verified = False
+    saw_uncapped = False
     for net in result.net_candidates:
         topology = mofgen.topologies[net]
         for mappings in candidate_mappings(topology, result.fragments):
@@ -130,13 +181,21 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
             # the reduced formula is invariant to supercell choice and
             # interpenetration fold, so it compares across cells
             built_formula = framework.structure.composition.reduced_formula
-            if built_formula != experimental_formula:
-                continue  # right topology, wrong material - keep trying
-            record["outcome"] = "closed"
-            record["rebuilt_net"] = net
-            record["seconds"] = time.perf_counter() - t0
-            return record
-    if saw_verified:
+            if built_formula == experimental_formula:
+                record["outcome"] = "closed"
+                record["rebuilt_net"] = net
+                record["seconds"] = time.perf_counter() - t0
+                return record
+            if uncapped_formula is not None and built_formula == uncapped_formula:
+                # everything but the monotopic units: no blueprint has a
+                # 1-connected slot for those, so keep looking for a full
+                # match and fall back to this if none turns up
+                saw_uncapped = True
+                record["rebuilt_net"] = net
+            # else: right topology, wrong material - keep trying
+    if saw_uncapped:
+        record["outcome"] = "closed_uncapped"
+    elif saw_verified:
         record["outcome"] = "closed_wrong_composition"
     elif saw_mapping:
         record["outcome"] = "rebuild_failed"
