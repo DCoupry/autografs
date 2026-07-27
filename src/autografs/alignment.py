@@ -593,6 +593,47 @@ class BuildPlan:
             total += gap * gap + float(miss_a @ miss_a) + float(miss_b @ miss_b)
         return float(np.sqrt(total / (3 * len(self.pairs))))
 
+    def closure_deviations(self, params: np.ndarray) -> np.ndarray:
+        """|bond length - covalent target| per paired anchor, Angstrom.
+
+        The realized closure of a build, whatever objective produced
+        the parameters. Under the legacy objective this is the very
+        quantity being minimized, so it is small by construction; with
+        slot displacements active the objective additionally carries
+        the anchor-direction terms and can trade closure against them,
+        which is exactly why closure has to be measured separately
+        rather than read off the optimizer's own score. The rod
+        pipeline gates on the same quantity (``bond_tolerance``).
+
+        Call after ``finalize``: it reads ``arm_for_target``, which
+        ``finalize`` re-solves at the final cell, so the deviations
+        then describe the structure actually built.
+        """
+        cell_free, slot_free = self.split(params)
+        matrix = self.matrix_for(cell_free)
+        shifts = self._shifts(slot_free)
+        if shifts is None:
+            positions = [p.anchor_positions(matrix) for p in self.placements]
+        else:
+            positions = [
+                p.placed_geometry(matrix, shifts[p.slot_index])[0]
+                for p in self.placements
+            ]
+        deviations = [
+            abs(
+                float(
+                    np.linalg.norm(
+                        positions[index_a][target_a]
+                        - positions[index_b][target_b]
+                        - offset @ matrix
+                    )
+                )
+                - self._pair_bond_length(index_a, target_a, index_b, target_b)
+            )
+            for index_a, target_a, index_b, target_b, offset in self.pairs
+        ]
+        return np.asarray(deviations)
+
     def finalize(
         self, params: np.ndarray
     ) -> tuple[list[Fragment], Lattice, dict[int, float]]:

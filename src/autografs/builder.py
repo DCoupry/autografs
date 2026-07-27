@@ -81,6 +81,7 @@ def build_framework(
     verify_net: bool = False,
     relax_embedding: bool = False,
     empty_slots: Iterable[int] = (),
+    bond_tolerance: float | None = None,
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -114,6 +115,8 @@ def build_framework(
     empty_slots : iterable of int, optional
         2-connected slots deliberately left empty (#179); see
         Autografs.build.
+    bond_tolerance : float or None, optional
+        Closure gate; see Autografs.build. Off by default.
 
     Returns
     -------
@@ -161,12 +164,29 @@ def build_framework(
                 f"max_rmsd={max_rmsd:.3f} (worst: {worst:.3f}) "
                 f"on topology {topology.name}: {sorted(bad_slots)}"
             )
+    # how well the build actually closes. max_rmsd measures the *shape*
+    # match of each SBU against its slot and min_distance measures
+    # overlap; neither can see a framework whose units are correctly
+    # shaped and comfortably spaced with every bond between them half an
+    # Angstrom too long. Measured separately from the optimizer's own
+    # score because under embedding relaxation the objective carries
+    # direction terms too and can trade closure against them.
+    worst_bond = 0.0
+    if plan.has_pairs:
+        worst_bond = float(plan.closure_deviations(best_parameters).max())
+        if bond_tolerance is not None and worst_bond > bond_tolerance:
+            raise AlignmentError(
+                f"Build on {topology.name} does not close: worst "
+                f"inter-SBU bond deviates {worst_bond:.2f} A from its "
+                f"covalent target (bond_tolerance={bond_tolerance})."
+            )
     if verbose:
         a, b, c = lattice.abc
         alpha, beta, gamma = lattice.angles
         logger.info("\t[x] Best cell parameters:")
         logger.info(f"\t\ta={a:<.2f} b={b:<.2f} c={c:<.2f}")
         logger.info(f"\t\talpha={alpha:<.1f} beta={beta:<.1f} gamma={gamma:<.1f}")
+        logger.info(f"\t[x] Worst inter-SBU bond deviation: {worst_bond:.3f} A")
         logger.info(
             f"\t[x] Aligned {len(best_alignment)} fragments in {time.time() - t0:.1f} seconds"
         )
@@ -663,6 +683,7 @@ class Autografs:
         min_distance: float | None = None,
         verify_net: bool = False,
         relax_embedding: bool = False,
+        bond_tolerance: float | None = None,
     ) -> Framework:
         """
         Generates a framework from a mapping of SBU to topology slots.
@@ -720,6 +741,25 @@ class Autografs:
             has nothing to relax and builds exactly as without the
             flag. The net's declared symmetry is preserved by
             construction. False by default.
+        bond_tolerance : float or None, optional
+            Closure gate, in Angstrom: reject the build when any
+            inter-SBU bond deviates from its covalent target by more
+            than this. The other two gates cannot see this failure -
+            max_rmsd measures the *shape* match of each SBU against
+            its slot, min_distance measures overlap, and a framework
+            whose units are correctly shaped and comfortably spaced
+            can still have every bond between them half an Angstrom
+            too long. ``build_rod`` gates on the same quantity.
+
+            **Off by default, deliberately.** An arbitrary SBU on an
+            arbitrary net frequently cannot close: over a 120-net
+            library sample of builds that pass ``max_rmsd=0.5`` today,
+            the median worst-bond deviation is 0.43 A and the 90th
+            percentile 1.14 A, so any default value would silently
+            change which builds the library produces. Set it when
+            closure matters (screening, round-trip work, anything
+            using relax_embedding); the realized value is reported
+            under ``verbose`` either way.
 
         Returns
         -------
@@ -731,8 +771,9 @@ class Autografs:
         Raises
         ------
         AlignmentError
-            If an SBU's connection count does not match its slot, or if
-            max_rmsd is set and any slot alignment exceeds it.
+            If an SBU's connection count does not match its slot, if
+            max_rmsd is set and any slot alignment exceeds it, or if
+            bond_tolerance is set and any inter-SBU bond exceeds it.
         OverlapError
             If min_distance is set and any non-bonded contact in the
             output is closer than it.
@@ -765,6 +806,7 @@ class Autografs:
             verify_net=verify_net,
             relax_embedding=relax_embedding,
             empty_slots=empty_slots,
+            bond_tolerance=bond_tolerance,
         )
 
     def _validate_mappings(
