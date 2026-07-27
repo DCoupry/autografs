@@ -126,6 +126,17 @@ _START_ROTATIONS: np.ndarray = np.concatenate([_CUBE_ROTATIONS, _EXTRA_TWISTS])
 # Iterations of the assignment <-> rotation refinement per start
 _MATCH_ITERATIONS = 8
 
+# Embedding relaxation (#174/#197): how many Angstrom of bond closure
+# one unit of anchor-direction misalignment is worth in the objective.
+# The misalignment is the deviation of two unit vectors (0 dead-on, 2
+# backwards), so this is the whole conversion between the two terms and
+# it has to be stated rather than left implicit - see BuildPlan.residual
+# for what happens when it is not. Chosen small: the direction terms are
+# there to *select between* the near-degenerate closures a freed net
+# admits, not to compete with closure, and most of the misalignment they
+# see is irreducible SBU-versus-slot shape that no displacement can fix.
+DIRECTION_WEIGHT = 0.05
+
 
 def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """Optimal proper rotation taking sources onto targets.
@@ -547,14 +558,29 @@ class BuildPlan:
         the legacy objective, bit-for-bit.
 
         With slot displacements active, two direction terms join each
-        pair's closure gap: the deviation of the bond vector from a
-        bond-length step along each end's own placed anchor-to-dummy
-        direction. Bond closure alone cannot select between the many
-        closures a displaced net admits (a freed periodic net is
-        generically floppy) - the direction terms encode the approach
-        direction the SBU's chemistry wants, which is what the
-        idealized embedding gets wrong (#174). All three terms are
-        lengths, so no weighting is needed.
+        pair's closure gap: how far the bond vector points away from
+        each end's own placed anchor-to-dummy direction. Bond closure
+        alone cannot select between the many closures a displaced net
+        admits (a freed periodic net is generically floppy) - the
+        direction terms encode the approach direction the SBU's
+        chemistry wants, which is what the idealized embedding gets
+        wrong (#174).
+
+        The direction terms are **misalignments, not lengths**
+        (``DIRECTION_WEIGHT``). Measuring them as the raw vector
+        deviation - a length, as the first #174 implementation did -
+        makes each one ``2 * L^2 * (1 - cos alpha)`` for a bond of
+        length L, i.e. of order ``L * alpha``: about 1.0 A at a
+        typical 30-40 degree arm/bond mismatch, against a closure gap
+        on a 0.1 A scale. Two such terms per pair then swamp closure
+        by an order of magnitude, and since the mismatch is mostly
+        *irreducible* (it comes from SBU-versus-slot shape, which no
+        slot displacement can change) the optimizer spends real bond
+        closure shaving a degree or two off it. Measured across the
+        library that cost 0.002 -> 0.34 A of closure on sra and
+        0.08 -> 0.84 A on tbo. Dividing by the bond length leaves the
+        angle alone, and an explicit weight says how much of an
+        Angstrom of closure a radian of misalignment is worth.
         """
         cell_free, slot_free = self.split(params)
         matrix = self.matrix_for(cell_free)
@@ -585,13 +611,32 @@ class BuildPlan:
             length = float(np.sqrt(bond @ bond))
             target = self._pair_bond_length(index_a, target_a, index_b, target_b)
             gap = length - target
-            # a bond-length step along each end's own bond direction is
-            # where the partner anchor should sit; the deviation is a
-            # length, zero when the bond leaves both anchors dead-on
-            miss_a = bond - length * directions_a[target_a]
-            miss_b = -bond - length * directions_b[target_b]
-            total += gap * gap + float(miss_a @ miss_a) + float(miss_b @ miss_b)
-        return float(np.sqrt(total / (3 * len(self.pairs))))
+            # the unit bond direction against each end's own: the
+            # deviation of two unit vectors, zero when the bond leaves
+            # that anchor dead-on and 2 when it leaves backwards -
+            # scale-free, so a long bond is not penalized for being long
+            unit = bond / max(length, 1e-9)
+            miss_a = unit - directions_a[target_a]
+            miss_b = -unit - directions_b[target_b]
+            total += gap * gap + DIRECTION_WEIGHT**2 * (
+                float(miss_a @ miss_a) + float(miss_b @ miss_b)
+            )
+        # normalized per *pair*, like the fixed-slot branch, so the two
+        # objectives are the same number whenever the direction terms
+        # vanish (a collinear SBU) and comparable when they do not
+        return float(np.sqrt(total / len(self.pairs)))
+
+    def closure_residual(self, params: np.ndarray) -> float:
+        """RMS closure deviation alone, over the same parameters.
+
+        The legacy objective, but evaluated over the *relaxed*
+        parameter vector: the slot displacements are free, the
+        anchor-direction terms are not in play. Used as the reference
+        the relaxed solution has to beat on closure before it is
+        preferred (#197), which is what makes the flag monotone.
+        """
+        deviations = self.closure_deviations(params)
+        return float(np.sqrt((deviations**2).mean())) if len(deviations) else 0.0
 
     def closure_deviations(self, params: np.ndarray) -> np.ndarray:
         """|bond length - covalent target| per paired anchor, Angstrom.

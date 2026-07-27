@@ -70,6 +70,29 @@ NELDER_MEAD_FATOL = 0.01  # Absolute tolerance for RMSE convergence
 # length, triclinic six parameters - a flat budget starved the latter
 NELDER_MEAD_MAXITER = 100
 
+# Embedding relaxation (#197): how much worse the relaxed solution's
+# worst bond may close than the closure-only reference before the
+# reference is kept instead. Not zero - the two optimizations run to
+# their own tolerances and a hair of difference is noise, not a
+# regression - but far below anything chemically meaningful.
+CLOSURE_PREFERENCE_TOLERANCE = 0.01
+
+
+def _refine(plan, x0, objective=None):
+    """Nelder-Mead over a plan's free parameters."""
+    n_free = plan.cell_param.n_free + plan.n_slot_free
+    result = minimize(
+        plan.residual if objective is None else objective,
+        x0,
+        method="Nelder-Mead",
+        options={
+            "xatol": NELDER_MEAD_XATOL,
+            "fatol": NELDER_MEAD_FATOL,
+            "maxiter": NELDER_MEAD_MAXITER * n_free,
+        },
+    )
+    return result.x
+
 
 def build_framework(
     topology: Topology,
@@ -138,18 +161,26 @@ def build_framework(
         # optimizes a single length) plus, under embedding
         # relaxation, the slot displacements; the objective is pure
         # numpy, no object copies per evaluation
-        n_free = plan.cell_param.n_free + plan.n_slot_free
-        result = minimize(
-            plan.residual,
-            x0,
-            method="Nelder-Mead",
-            options={
-                "xatol": NELDER_MEAD_XATOL,
-                "fatol": NELDER_MEAD_FATOL,
-                "maxiter": NELDER_MEAD_MAXITER * n_free,
-            },
-        )
-        best_parameters = result.x
+        best_parameters = _refine(plan, x0)
+        if plan.n_slot_free:
+            # freeing the slots must not cost closure (#197). The
+            # relaxed objective carries the anchor-direction terms as
+            # well, so its optimum is not the best-closing point and on
+            # a net whose SBU/slot shape mismatch is large it can be a
+            # much worse one. Optimize the *closure alone* over the same
+            # parameters as a reference and keep whichever actually
+            # closes better, so the flag is monotone by construction
+            # rather than by hope.
+            reference = _refine(plan, x0, objective=plan.closure_residual)
+            relaxed_worst = float(plan.closure_deviations(best_parameters).max())
+            reference_worst = float(plan.closure_deviations(reference).max())
+            if reference_worst < relaxed_worst - CLOSURE_PREFERENCE_TOLERANCE:
+                logger.debug(
+                    f"Embedding relaxation on {topology.name!r} closed to "
+                    f"{relaxed_worst:.3f} A against {reference_worst:.3f} A "
+                    "for closure alone; keeping the better-closing solution."
+                )
+                best_parameters = reference
     else:
         if verbose:
             logger.info("\t[x] No cell refinement performed.")
