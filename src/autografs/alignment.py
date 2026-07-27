@@ -133,18 +133,27 @@ _MATCH_ITERATIONS = 8
 # it has to be *stated* rather than left implicit in the algebra - see
 # BuildPlan.residual for what happens when it is not.
 #
-# Calibrated, not guessed. Swept 0.05-4.0 against two criteria: recover
-# #174's measured payoff on the one real material with free proportions
-# that rebuilds faithfully (HKUST-1 on tbo, n_free 3 - built volume per
-# atom 0.951 of experimental fixed, 0.982 under the original relaxation)
-# and regress no library net's closure. 2.0 gives volume ratio 0.977 and
-# a 5x tighter worst bond (0.0157 -> 0.0030 A) with no regression
-# anywhere; 0.05 was too weak to move the embedding at all (0.951, a
-# no-op) and 4.0 starts costing closure again. The landscape is rough -
-# Nelder-Mead lands in different basins across the sweep - so this is a
-# defensible point, not an optimum, and a corpus-scale recalibration
-# over CoRE MOF is the honest follow-up.
-DIRECTION_WEIGHT = 2.0
+# Calibrated at corpus scale (#207): the first 600 CoRE MOF structures
+# rebuilt at each weight, scored on the 35 non-pinned rebuilds that
+# reproduce the real formula, with the 21 pinned ones as a control (they
+# must be identical at every weight - and are, exactly).
+#
+#   weight   |vr-1| median   bond median   min_contact median
+#   fixed        0.260          0.091           0.84
+#   0.25         0.114          0.105           0.83
+#   0.50         0.079          0.112           0.97
+#   1.0          0.193          0.115           0.94
+#   2.0          0.260          0.077           1.02
+#   4.0          0.260          0.078           1.02
+#
+# 0.5 cuts the built-vs-experimental density error 3.3x for 0.02 A of
+# closure, and improves packing. **A single-structure calibration picked
+# 2.0 and it is worthless here** - at 2.0 the direction terms push hard
+# enough that the closure guard rejects the relaxed solution on most
+# structures, so the corpus median falls back to the fixed-slot 0.260
+# while HKUST-1 alone still looked excellent. Calibrate this on the
+# population, never on one material.
+DIRECTION_WEIGHT = 0.5
 
 
 def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:

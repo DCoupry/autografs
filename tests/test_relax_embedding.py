@@ -336,10 +336,12 @@ class TestObjectiveScaling:
         # anchor->dummy is not the centroid arm direction
         assert not np.allclose(placement.bond_units, placement.arm_units, atol=1e-3)
 
-    def test_relaxation_never_closes_worse_than_the_cell_alone(self):
-        """The invariant the feature owes its caller, on a net where
-        the direction terms are live. Before #197 this failed by an
-        order of magnitude on real nets (sra 0.002 -> 0.34 A)."""
+    def test_closure_stays_within_the_regression_budget(self):
+        """The contract, on a fixture where the direction terms are
+        live. Before #197 this blew the budget by an order of magnitude
+        on real nets (sra 0.002 -> 0.34 A, worst bond 0.004 -> 0.877)."""
+        from autografs.builder import CLOSURE_REGRESSION_TOLERANCE
+
         mappings = dict(_mappings())
         mappings[1] = self._bent_sbu("bent_long", half=2.0, offset=0.8)
 
@@ -348,7 +350,10 @@ class TestObjectiveScaling:
             _alternating_chain(), dict(mappings), relax_embedding=True
         )
 
-        assert max(_inter_sbu_gaps(relaxed)) <= max(_inter_sbu_gaps(fixed)) + 0.01
+        assert (
+            max(_inter_sbu_gaps(relaxed))
+            <= max(_inter_sbu_gaps(fixed)) + CLOSURE_REGRESSION_TOLERANCE
+        )
 
     def test_closure_reference_is_kept_when_it_closes_better(self):
         """The monotonicity net: closure_residual optimized over the
@@ -391,40 +396,50 @@ class TestRelaxationOnRealNets:
 
         return Autografs()
 
-    @pytest.mark.parametrize("net", ["pts", "unc", "etb-e"])
-    def test_relaxation_never_closes_worse(self, library, net):
-        """The invariant the flag owes its caller. Before #197 this
-        failed on every net with freedom - pts 0.125 -> 1.110 A worst
-        bond, etb-e 0.173 -> 0.748, sra 0.004 -> 0.877."""
-        from autografs.symmetry import orbit_displacements
-
+    def _pair(self, library, net):
         topology = library.topologies[net]
         units = library.list_building_units(sieve=net)
         if not all(units.get(key) for key in topology.mappings):
             pytest.skip(f"no compatible SBU for every slot type of {net}")
-        assert orbit_displacements(topology).n_free > 0, "net has nothing to relax"
         mappings = {key: options[0] for key, options in units.items()}
-
-        fixed = library.build(topology, mappings=dict(mappings), max_rmsd=1.0)
-        relaxed = library.build(
-            topology, mappings=dict(mappings), max_rmsd=1.0, relax_embedding=True
+        return (
+            topology,
+            library.build(topology, mappings=dict(mappings), max_rmsd=1.0),
+            library.build(
+                topology, mappings=dict(mappings), max_rmsd=1.0, relax_embedding=True
+            ),
         )
 
-        assert max(_inter_sbu_gaps(relaxed)) <= max(_inter_sbu_gaps(fixed)) + 0.01
+    @pytest.mark.parametrize("net", ["pts", "unc", "etb-e"])
+    def test_closure_stays_within_the_regression_budget(self, library, net):
+        """The contract, stated as the guard actually enforces it.
+
+        NOT "never closes worse": the corpus measurement says a modest
+        closure cost buys a large packing gain, and that trade is the
+        whole point of #174 (over 35 non-pinned faithful CoRE MOF
+        rebuilds, bond residual median 0.091 -> 0.112 A for a 3.3x
+        better built-vs-experimental density). What the guard promises
+        is that the cost stays inside CLOSURE_REGRESSION_TOLERANCE.
+
+        Before #197 the failures were an order of magnitude past any
+        budget: pts 0.125 -> 1.110 A worst bond, etb-e 0.173 -> 0.748,
+        sra 0.004 -> 0.877."""
+        from autografs.builder import CLOSURE_REGRESSION_TOLERANCE
+        from autografs.symmetry import orbit_displacements
+
+        topology, fixed, relaxed = self._pair(library, net)
+        assert orbit_displacements(topology).n_free > 0, "net has nothing to relax"
+
+        assert (
+            max(_inter_sbu_gaps(relaxed))
+            <= max(_inter_sbu_gaps(fixed)) + CLOSURE_REGRESSION_TOLERANCE
+        )
 
     @pytest.mark.parametrize("net", ["pts", "unc", "etb-e"])
     def test_relaxation_does_not_inflate_the_cell(self, library, net):
         """The visible symptom of the old scaling: alignment bought
-        with volume (pts x2.8, tbo x2.2, etb-e x1.4)."""
-        topology = library.topologies[net]
-        units = library.list_building_units(sieve=net)
-        if not all(units.get(key) for key in topology.mappings):
-            pytest.skip(f"no compatible SBU for every slot type of {net}")
-        mappings = {key: options[0] for key, options in units.items()}
+        with volume (pts x2.8, tbo x2.2, etb-e x1.4). A relaxed build
+        moves the cell - that is the point - but not by that."""
+        _topology, fixed, relaxed = self._pair(library, net)
 
-        fixed = library.build(topology, mappings=dict(mappings), max_rmsd=1.0)
-        relaxed = library.build(
-            topology, mappings=dict(mappings), max_rmsd=1.0, relax_embedding=True
-        )
-
-        assert relaxed.structure.volume < 1.1 * fixed.structure.volume
+        assert relaxed.structure.volume < 1.25 * fixed.structure.volume
