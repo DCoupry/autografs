@@ -263,3 +263,81 @@ def test_embedding_scores_only_what_the_pipeline_would_build(
     assert payload["summary"]["buildable"]["size_error"]["max"] == pytest.approx(
         0.0, abs=1e-6
     )
+
+
+class TestRoundtripCapTaxonomy:
+    """#195: a monotopic ``cap`` unit has no 1-connected blueprint slot
+    to go to, so a rebuild is short by exactly those atoms however well
+    the net and every polytopic unit match. That is a scope limit, not
+    the wrong-orbit assignment the composition gate exists to catch, and
+    the taxonomy has to tell them apart.
+
+    (Metal-bound solvent is *not* a cap - the metal-oxo rule clusters
+    C-free metal-bound atoms into the node - so this only arises on the
+    metal-free branch-point path.)
+    """
+
+    @staticmethod
+    def _result(structure, units):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(structure=structure, units=units)
+
+    def test_no_caps_reports_nothing(self, roundtrip, mof5):
+        assert roundtrip.uncapped_composition(self._result(mof5.structure, [])) == (
+            None,
+            None,
+        )
+
+    def test_cap_atoms_are_subtracted(self, roundtrip, mof5):
+        from autografs.deconstruct import BuildingUnit
+
+        structure = mof5.structure
+        hydrogens = [i for i, site in enumerate(structure) if site.specie.symbol == "H"]
+        assert hydrogens, "fixture has no hydrogens to stand in for caps"
+        units = [
+            BuildingUnit(name="cap", kind="cap", atom_indices=[index], n_connections=1)
+            for index in hydrogens
+        ]
+
+        uncapped, caps = roundtrip.uncapped_composition(self._result(structure, units))
+
+        from pymatgen.core.composition import Composition
+
+        assert caps == Composition({"H": len(hydrogens)}).reduced_formula
+        # the framework minus every H, as a reduced formula
+        remaining = Composition(
+            {
+                symbol: sum(1 for site in structure if site.specie.symbol == symbol)
+                for symbol in {site.specie.symbol for site in structure}
+                if symbol != "H"
+            }
+        )
+        assert uncapped == remaining.reduced_formula
+        assert uncapped != structure.composition.reduced_formula
+
+    def test_polytopic_units_are_never_subtracted(self, roundtrip, mof5):
+        """Only ``kind == "cap"`` counts: a linker is placeable."""
+        from autografs.deconstruct import BuildingUnit
+
+        units = [
+            BuildingUnit(
+                name="linker", kind="linker", atom_indices=[0, 1], n_connections=2
+            ),
+            BuildingUnit(name="node", kind="node", atom_indices=[2], n_connections=6),
+        ]
+        assert roundtrip.uncapped_composition(self._result(mof5.structure, units)) == (
+            None,
+            None,
+        )
+
+    def test_capless_structure_records_no_caps(self, mofgen, roundtrip, tmp_path, mof5):
+        """The record carries the cap formula so an outcome is
+        interpretable; a MOF without monotopic units reports None and
+        still closes."""
+        mof5.write_cif(tmp_path / "mof5.cif")
+
+        payload = roundtrip.run([tmp_path / "mof5.cif"], mofgen, max_rmsd=0.5)
+
+        assert payload["outcomes"] == {"closed": 1}
+        assert payload["structures"]["mof5.cif"]["caps"] is None
