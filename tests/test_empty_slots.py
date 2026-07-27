@@ -93,8 +93,10 @@ class TestEmptySlotBuild:
             mofgen.build(topology, mappings=mappings)
 
     def test_partial_emptying_by_index(self, mofgen):
-        """Emptying one edge center and filling the other two is a
-        different net than pcu - verify_net must say so."""
+        """Emptying one edge center and filling the other two still
+        realizes pcu: the blueprint is contracted on exactly the
+        emptied slot, so verify_net compares like with like and
+        accepts."""
         topology = mofgen.topologies["pcu"]
         mappings = {}
         for key in topology.mappings:

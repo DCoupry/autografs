@@ -17,8 +17,10 @@ useful output - failures are data:
                         chemically not the same material
 - ``rebuild_failed``    every candidate/mapping combination was gated
 - ``no_mapping``        no compatible fragment-to-slot assignment
-- ``rod``               identified, but contains 1-periodic units the
-                        forward pipeline cannot rebuild (Stage A)
+- ``rod``               identified, but contains 1-periodic units this
+                        driver does not rebuild: rods go through
+                        ``Autografs.build_rod``, not the slot-type
+                        mappings enumerated here
 - ``unidentified``      deconstructed, but no library net matched
 - ``deconstruction_failed``  with the error message
 
@@ -84,8 +86,10 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
         record["net"] = result.net_candidates
         record["tier"] = result.subframework_nets[0].tier
     if result.rod_units:
-        # identified (often correctly) but not rebuildable: the forward
-        # pipeline has no rod support yet (#91 Stage C)
+        # out of scope for *this* driver, not for the pipeline: rods
+        # build through Autografs.build_rod (#158/#168/#173), which
+        # takes a RodFragment and a run rather than the slot-type
+        # mappings this round trip enumerates
         record["outcome"] = "rod" if result.net_candidates else "unidentified"
         record["seconds"] = time.perf_counter() - t0
         return record
