@@ -360,6 +360,39 @@ An axis-parallel and a diagonal family cannot be mixed in one build: a
 diagonal pin stretches the whole cell along its own direction, which
 cannot also leave a cell row free for the other to pin.
 
+### Relaxing the embedding
+
+Like the finite pipeline, a rod build places its finite units at the
+blueprint's idealized slot centres, so their *proportions* are whatever the
+net's maximum-symmetry embedding chose. `relax_embedding=True` frees the
+**lateral** slot positions as extra optimizer degrees of freedom, one
+displacement per crystallographic orbit restricted to the directions that
+orbit's site symmetry allows:
+
+```python
+mof = mofgen.build_rod(topology, rod, linkers, relax_embedding=True)
+```
+
+Only the laterals are freed, and that is forced by the geometry rather than
+chosen:
+
+- a helical run's **axis line is a screw axis of the net** — a symmetry
+  element — and a rotation of order ≥ 2 fixes no transverse vector, so axis
+  lines cannot move at all. Rod-to-rod spacing is set by the cell, which the
+  build already optimizes.
+- a **run node's** remaining freedom is transverse (its nodes sit off the
+  axis), but that changes the *helix radius*, and a harvested rod is rigid:
+  placement reads a node's azimuth and height, never its radius. The azimuth
+  part is already the build's `theta`.
+- a run's **edge centers** are contracted into the rod's own continuation and
+  never placed.
+
+Nets whose laterals are symmetry-pinned (`etb`, whose free orbits are all run
+slots) build identically with the flag on. Where the laterals do carry freedom
+— `etb-e` has three parameters, exactly where MOF-74's node-to-linker
+proportion was measured wrong — a linker whose span does not suit the
+idealized separation closes markedly better. Off by default.
+
 ### Verifying the built net
 
 Passing `verify_net=True` (or calling `mof.verify_net(topology)` after

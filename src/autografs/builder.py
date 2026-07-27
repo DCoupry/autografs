@@ -1137,6 +1137,7 @@ class Autografs:
         min_distance: float | None = 1.0,
         verify_net: bool = False,
         verbose: bool = False,
+        relax_embedding: bool = False,
     ) -> Framework:
         """Build a rod framework — straight or helical (rod Stage C).
 
@@ -1209,4 +1210,5 @@ class Autografs:
             min_distance=min_distance,
             verify_net=verify_net,
             verbose=verbose,
+            relax_embedding=relax_embedding,
         )
