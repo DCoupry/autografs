@@ -6,11 +6,13 @@ import os
 
 import numpy as np
 import pytest
+from pymatgen.analysis.local_env import CovalentRadius
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 
 from autografs.alignment import prepare_build
 from autografs.builder import build_framework
+from autografs.exceptions import AlignmentError
 from autografs.fragment import Fragment
 from autografs.topology import Topology
 
@@ -26,7 +28,12 @@ def mofgen():
     return Autografs(topofile=FIXTURE_PATH)
 
 
-BOND_CC = 2 * 0.76  # Cordero C radius x2: the C-C pair target
+# the C-C pair target the optimizer actually aims at: twice pymatgen's
+# Cordero radius for carbon. Read from the table rather than written
+# out - the hardcoded 2 * 0.76 this replaces was 0.06 A off the value
+# _pair_bond_length uses (pymatgen carries 0.73), which quietly shifted
+# every gap measured here away from the one being minimized.
+BOND_CC = 2 * CovalentRadius.radius["C"]
 
 
 def _slot(zs, tags, equivalence_class):
@@ -195,3 +202,81 @@ class TestRelaxedBuild:
             [data["coord"] for _, data in sorted(relaxed.graph.nodes(data=True))]
         )
         assert np.allclose(relaxed_coords, default_coords, atol=1e-9)
+
+
+class TestClosureGate:
+    """#196: max_rmsd measures each SBU's *shape* against its slot and
+    min_distance measures overlap. Neither can see a framework whose
+    units are correctly shaped and comfortably spaced with every bond
+    between them far too long - which is exactly what the alternating
+    chain produces at fixed slots, and what the relaxed objective can
+    trade closure for."""
+
+    def test_deviations_match_the_realized_bonds(self):
+        """closure_deviations must describe the structure actually
+        built, not an intermediate: same numbers as measuring the
+        output graph."""
+        plan = prepare_build(_alternating_chain(), _mappings())
+        parameters = plan.initial_parameters()
+        framework = build_framework(_alternating_chain(), _mappings())
+        # rebuild the same way build_framework does, then compare
+        from scipy.optimize import minimize
+
+        from autografs.builder import (
+            NELDER_MEAD_FATOL,
+            NELDER_MEAD_MAXITER,
+            NELDER_MEAD_XATOL,
+        )
+
+        result = minimize(
+            plan.residual,
+            parameters,
+            method="Nelder-Mead",
+            options={
+                "xatol": NELDER_MEAD_XATOL,
+                "fatol": NELDER_MEAD_FATOL,
+                "maxiter": NELDER_MEAD_MAXITER * plan.cell_param.n_free,
+            },
+        )
+        plan.finalize(result.x)
+        assert sorted(plan.closure_deviations(result.x)) == pytest.approx(
+            sorted(_inter_sbu_gaps(framework)), abs=1e-6
+        )
+
+    def test_gate_rejects_a_build_that_does_not_close(self):
+        """The fixed-slot chain leaves > 0.5 A of open bond (see
+        test_fixed_slots_cannot_close_both_edges); a tolerance below
+        that must refuse it instead of returning it."""
+        with pytest.raises(AlignmentError, match="does not close"):
+            build_framework(_alternating_chain(), _mappings(), bond_tolerance=0.1)
+
+    def test_gate_accepts_a_build_that_does_close(self):
+        """Freeing the node orbit closes every bond, so the same
+        tolerance passes."""
+        framework = build_framework(
+            _alternating_chain(),
+            _mappings(),
+            relax_embedding=True,
+            bond_tolerance=0.1,
+        )
+        assert max(_inter_sbu_gaps(framework)) < 0.1
+
+    def test_gate_is_off_by_default(self):
+        """An arbitrary SBU on an arbitrary net frequently cannot
+        close; a default value would silently change which builds the
+        library produces, so None must stay the default."""
+        framework = build_framework(_alternating_chain(), _mappings())
+        assert max(_inter_sbu_gaps(framework)) > 0.5  # would fail any gate
+
+    def test_pinned_pcu_reports_a_tight_closure(self, mofgen):
+        """A net that does close is not disturbed by the gate."""
+        topology = mofgen.topologies["pcu"]
+        mappings = {}
+        for key in topology.mappings:
+            conn = len(key.atoms.indices_from_symbol("X"))
+            mappings[key] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[conn]
+        gated = mofgen.build(
+            topology, mappings=mappings, max_rmsd=0.5, bond_tolerance=0.35
+        )
+        ungated = mofgen.build(topology, mappings=mappings, max_rmsd=0.5)
+        assert np.allclose(gated.cell, ungated.cell, atol=1e-9)
