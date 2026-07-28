@@ -264,11 +264,12 @@ generators. Architecture and module map: [How it works](docs/internals.md).
 
 The 3.x line has reached feature parity with 2.x and gone well beyond it: the
 inverse pipeline (deconstruction, net identification, SBU harvesting for MOFs
-and COFs), rod-MOF support in both directions (including helical rods), IZA
-zeolite import (`autografs-topologies --use_iza`), partial charges, ASE-driven
-relaxation, elastic constants, and commensurate twisted bilayers have all
-landed. Remaining directions — cross-linked multi-rod nets (`etb` itself),
-EPINET import, and curated high-connectivity SBU packs for the last uncovered
+and COFs), rod-MOF support in both directions (helical, cross-linked multi-rod
+`etb`/MOF-74, woven multi-axis and lattice-diagonal channels), IZA zeolite
+import (`autografs-topologies --use_iza`), partial charges, ASE-driven
+relaxation, elastic constants, commensurate twisted bilayers, and embedding
+relaxation for low-symmetry nets have all landed. Remaining directions —
+EPINET import and curated high-connectivity SBU packs for the last uncovered
 nets — are tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues).
 
 ## Citing
