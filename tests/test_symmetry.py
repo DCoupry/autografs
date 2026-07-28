@@ -8,7 +8,14 @@ from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 
 from autografs.fragment import Fragment
-from autografs.symmetry import blueprint_operations, orbit_displacements
+from autografs.symmetry import (
+    _DISPLACEMENTS_CACHE,
+    _OPERATIONS_CACHE,
+    _cache_key,
+    blueprint_operations,
+    clear_symmetry_cache,
+    orbit_displacements,
+)
 from autografs.topology import Topology
 
 FIXTURE_PATH = os.path.join(
@@ -179,3 +186,69 @@ class TestOrbitDisplacements:
             cartesian = basis @ matrix
             gram = cartesian @ cartesian.T
             assert np.allclose(gram, np.eye(len(basis)), atol=1e-8)
+
+
+class TestMemoization:
+    """The derivation is memoized; the cache must be invisible."""
+
+    def test_repeat_calls_agree(self, mofgen):
+        """Warm results must equal cold ones, element for element."""
+        clear_symmetry_cache()
+        cold_ops = blueprint_operations(mofgen.topologies["pcu"])
+        cold = orbit_displacements(mofgen.topologies["pcu"])
+        warm_ops = blueprint_operations(mofgen.topologies["pcu"])
+        warm = orbit_displacements(mofgen.topologies["pcu"])
+        assert cold_ops == warm_ops
+        assert cold.orbit_of_slot == warm.orbit_of_slot
+        assert cold.n_free == warm.n_free
+        for orbit, basis in cold.bases.items():
+            assert np.array_equal(basis, warm.bases[orbit])
+
+    def test_entry_is_stored_under_the_content_key(self, mofgen):
+        """The store and the lookup must use the same key.
+
+        Regression: the cache key was once shadowed by the local `key`
+        of the duplicate-operation guard, so entries were stored under
+        the last operation's (rotation, translation) while lookups used
+        the content key - every call recomputed. Results stayed correct,
+        so no behavioural test can see it; only the key can.
+        """
+        clear_symmetry_cache()
+        topology = mofgen.topologies["pcu"]
+        blueprint_operations(topology)
+        assert _cache_key(topology) in _OPERATIONS_CACHE
+        orbit_displacements(topology)
+        assert _cache_key(topology) in _DISPLACEMENTS_CACHE
+
+    def test_distinct_blueprints_do_not_collide(self, mofgen):
+        """Different blueprints must keep their own answers.
+
+        Guards the keying itself: a key derived from something coarser
+        than the embedding - a net name, a slot count - would let two
+        blueprints read each other's operations. Interleave blueprints
+        of different symmetry, slot count and free dimension."""
+        blueprints = {
+            "pcu": mofgen.topologies["pcu"],
+            "p1": _p1_topology(),
+            "pillar": _pillar_topology(),
+        }
+        clear_symmetry_cache()
+        alone = {
+            name: orbit_displacements(topology).n_free
+            for name, topology in blueprints.items()
+        }
+        # the free dimensions must actually differ, or the assertion
+        # below would pass on a fully broken cache
+        assert len(set(alone.values())) == len(alone), alone
+        clear_symmetry_cache()
+        for name in ("pcu", "p1", "pillar", "pcu", "pillar", "p1"):
+            assert orbit_displacements(blueprints[name]).n_free == alone[name]
+
+    def test_returned_operation_list_is_not_shared(self, mofgen):
+        """Callers get their own container; mutating it must not
+        corrupt the next caller's answer."""
+        clear_symmetry_cache()
+        first = blueprint_operations(mofgen.topologies["pcu"])
+        expected = len(first)
+        first.clear()
+        assert len(blueprint_operations(mofgen.topologies["pcu"])) == expected

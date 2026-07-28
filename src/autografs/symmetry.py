@@ -143,6 +143,42 @@ def _match_sites(
     return image
 
 
+# Derivation costs 0.2-0.4 s per net (more for a 152-slot blueprint
+# like tbo) and is pure in its geometric input, while callers re-derive
+# it once per *build attempt* - a corpus sweep trying several mappings
+# per net candidate over thousands of structures repeats the identical
+# work hundreds of times. Keyed on the rounded centre set, orbit labels
+# and cell rather than on the Topology object, so a mutated or rebuilt
+# blueprint cannot collide with a stale entry; a name would.
+_OPERATIONS_CACHE: dict[tuple, list[SymmetryOperation]] = {}
+_DISPLACEMENTS_CACHE: dict[tuple, OrbitDisplacements] = {}
+_CACHE_LIMIT = 512
+
+
+def _cache_key(topology: Topology) -> tuple:
+    centers, orbits = _slot_centers(topology)
+    matrix = np.asarray(topology.cell.matrix, dtype=float)
+    return (
+        np.round(centers, 6).tobytes(),
+        centers.shape,
+        tuple(orbits),
+        np.round(matrix, 6).tobytes(),
+    )
+
+
+def _cache_put(cache: dict, key: tuple, value):
+    if len(cache) >= _CACHE_LIMIT:
+        cache.clear()
+    cache[key] = value
+    return value
+
+
+def clear_symmetry_cache() -> None:
+    """Drop the memoized operations and displacements."""
+    _OPERATIONS_CACHE.clear()
+    _DISPLACEMENTS_CACHE.clear()
+
+
 def blueprint_operations(topology: Topology) -> list[SymmetryOperation]:
     """Space-group operations of a blueprint, from its own embedding.
 
@@ -163,6 +199,12 @@ def blueprint_operations(topology: Topology) -> list[SymmetryOperation]:
     list[SymmetryOperation]
         All operations found, identity first. Proper and improper.
     """
+    # NB: `key` is taken further down by the duplicate-operation guard
+    cache_key = _cache_key(topology)
+    cached = _OPERATIONS_CACHE.get(cache_key)
+    if cached is not None:
+        # a fresh list: the entries are immutable, the container is not
+        return list(cached)
     centers, orbits = _slot_centers(topology)
     if not len(centers):
         return []
@@ -203,7 +245,8 @@ def blueprint_operations(topology: Topology) -> list[SymmetryOperation]:
             op.translation,
         )
     )
-    return operations
+    _cache_put(_OPERATIONS_CACHE, cache_key, operations)
+    return list(operations)
 
 
 @dataclass(frozen=True)
@@ -313,8 +356,15 @@ def orbit_displacements(
     Returns
     -------
     OrbitDisplacements
+        Treat as read-only: when ``operations`` is omitted the result is
+        memoized and shared between callers.
     """
+    cache_key = None
     if operations is None:
+        cache_key = _cache_key(topology)
+        cached = _DISPLACEMENTS_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
         operations = blueprint_operations(topology)
     centers, orbits = _slot_centers(topology)
     n_slots = len(centers)
@@ -361,10 +411,13 @@ def orbit_displacements(
             if operation.slot_image[representative] == representative
         ]
         bases[orbit] = _fixed_subspace(stabilizer, matrix)
-    return OrbitDisplacements(
+    displacements = OrbitDisplacements(
         orbit_of_slot=tuple(orbits),
         representatives=representatives,
         bases=bases,
         # indexed by slot: every entry is set, checked above
         propagation=tuple(np.asarray(w) for w in propagation),
     )
+    if cache_key is not None:
+        _cache_put(_DISPLACEMENTS_CACHE, cache_key, displacements)
+    return displacements
