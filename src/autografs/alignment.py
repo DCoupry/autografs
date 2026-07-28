@@ -155,36 +155,45 @@ _MATCH_ITERATIONS = 8
 # population, never on one material.
 DIRECTION_WEIGHT = 0.5
 
-# Minimum symmetry-allowed slot freedom for relaxation to be worth
-# running. Below this the augmented objective is applied to a space too
-# small to express the proportion it is trying to fix, and it spends
-# real closure on the irreducible arm mismatch instead - the same
-# failure as on a fully pinned net, just less complete.
+# Minimum symmetry-allowed slot freedom for relaxation to be applied.
+# Below this the augmented objective buys nothing measurable, so the
+# build takes the legacy fixed-slot path instead of paying for extra
+# optimizer parameters and a less predictable result.
 #
 # Measured over the full CoRE MOF corpus (4764 structures, 272 verified
-# and composition-gated round trips, paired fixed vs relaxed), median
-# |V_built/V_exp - 1| by the net's n_free:
+# and composition-gated round trips), paired fixed vs relaxed on
+# |V_built/V_exp - 1|, Wilcoxon signed-rank with rank-biserial effect
+# size:
 #
-#   n_free      n     fixed -> relaxed
-#   0 (pinned) 202    0.255 -> 0.255   (control: identical, as it must)
-#   1           55    0.234 -> 0.306   REGRESSES
-#   2-5         12    0.095 -> 0.051
-#   >5           3    0.154 -> 0.106
+#   n_free      n   median fixed->relaxed   p       r_rb    improved
+#   0 (pinned) 202  0.255 -> 0.255          --      --      0/202 (exact)
+#   1           55  0.234 -> 0.306          0.70   -0.06    30/55
+#   2-5         12  0.095 -> 0.051          0.043  +0.67    10/12
+#   >5           3  0.154 -> 0.106          0.75   +0.33     2/3
+#   >=2 pooled  15  0.103 -> 0.055          0.064  +0.55    12/15
 #
-# One free scalar is worse than none. Note the pooled non-pinned figure
-# (0.226 -> 0.212) hides this completely, because single-parameter nets
-# dominate the population that round-trips at all - do not report or
-# calibrate on it.
+# Read the test, not the median. At n_free == 1 the median moves the
+# wrong way but the paired distribution is symmetric (p = 0.70, median
+# paired change -0.001, 30 of 55 improved): that shift is a handful of
+# large worsenings in the tail, NOT a systematic regression. An earlier
+# version of this comment called it one; it is not.
 #
-# This is a *population* default and it has a known counterexample: a
-# net can exist whose single free parameter is exactly the proportion
-# that needs fixing (tests/test_relax_embedding.py's alternating chain
-# is one by construction - one z displacement closes both of its
-# unequal edges). Nothing available at build time distinguishes that
-# case from the 55 above; the closure guard cannot, because the defect
-# it would need to see is packing against the *experimental* cell,
-# which a build does not have. Raise or lower this if you know your
-# nets. Set to 1 to restore the previous behaviour.
+# So the honest case for the threshold is negative, not positive: one
+# free scalar delivers no measurable benefit, and falling back makes
+# those builds bit-identical to the default path for free. The case for
+# relaxation itself rests on the n_free >= 2 population, which is only
+# 15 structures at p = 0.064 - suggestive, not established. The strong
+# result is that the *defect* is real (see docs/building.md: 90.6% of
+# 1134 structures, sign test p < 1e-180); that relaxation *fixes* it at
+# scale is not yet demonstrated.
+#
+# The threshold is a population default with a known counterexample: a
+# net whose single free parameter is exactly the proportion that needs
+# fixing does benefit (tests/test_relax_embedding.py's alternating
+# chain is one by construction). Nothing at build time distinguishes
+# that case; the closure guard cannot, because the defect it would need
+# to see is packing against the *experimental* cell, which a build does
+# not have. Set to 1 to restore the previous behaviour.
 MIN_FREE_DISPLACEMENTS = 2
 
 

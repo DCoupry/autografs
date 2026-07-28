@@ -131,21 +131,28 @@ topology of the output is unchanged (`verify_net` applies as usual) while the
 packing follows the SBUs instead of the idealization. Off by default; the
 geometry of default builds is unchanged.
 
-**What it buys, measured.** Over the first 600 structures of CoRE MOF 2014,
-rebuilt from their own deconstructed fragments and kept only where the rebuild
-reproduces the experimental reduced formula (35 such structures on nets with
-free proportions):
+**The defect is real, and that part is not in doubt.** The idealized
+embedding can be compared against experiment without building anything, by
+reducing both to a contracted quotient graph and comparing scale-free edge
+lengths. Over 1134 CoRE MOF structures on which a build would be possible,
+the signed size bias is positive for **90.6%** of them (95% CI 88.7–92.1,
+sign test *p* < 10⁻¹⁸⁰; Wilcoxon *p* < 10⁻¹³⁰, median +0.068). The
+idealization is not merely imperfect, it is wrong in a *consistent
+direction* — units sit further apart, relative to the cell, than in the real
+material — and it predicts a built cell about 22% too large by volume. A
+single cell scale cannot repair a fractional coordinate.
 
-| | fixed slots | `relax_embedding=True` |
-|---|---|---|
-| built-vs-experimental density error, median | 0.260 | **0.079** |
-| inter-SBU bond deviation, median | 0.091 Å | 0.112 Å |
-| closest non-bonded contact, median | 0.84 Å | 0.97 Å |
+**What relaxation buys is less well established.** On the 272 corpus
+structures that round-trip through both the net and composition gates, the
+paired improvement is confined to nets with two or more free displacements
+and amounts to 15 structures at *p* = 0.064 (median density error
+0.103 → 0.055, rank-biserial +0.55, 12 of 15 improved). That is suggestive,
+not conclusive, and the honest summary is: the problem is demonstrated at
+scale, the cure is not.
 
-So the density error falls by about 3.3× and packing improves, at a cost of
-roughly 0.02 Å in bond closure. That trade is the point of the feature, not a
-side effect: the idealized embedding is systematically *more open* than real
-chemistry, and a single cell scale cannot repair a fractional coordinate.
+An earlier version of this document quoted a 3.3× improvement from a
+35-structure subset. The full corpus does not support a factor that large;
+treat the subset figure as superseded.
 
 **What it does not buy.** Fully pinned blueprints — every slot on a special
 position, nothing symmetry-allowed to move — build bit-for-bit identically
@@ -157,28 +164,37 @@ so relaxation on such a net is slower and its result less reliable than on a
 net with two or three.
 
 **Nets with a single free displacement also fall back**
-(`alignment.MIN_FREE_DISPLACEMENTS = 2`). One free scalar turns out to be
-worse than none: over the *full* 4764-structure CoRE MOF corpus, on the 272
-rebuilds that pass both the net and the composition gate, the median
-built-vs-experimental density error by the net's free-parameter count is
+(`alignment.MIN_FREE_DISPLACEMENTS = 2`). Over the *full* 4764-structure CoRE
+MOF corpus, on the 272 rebuilds passing both the net and the composition
+gate, paired fixed-vs-relaxed on the density error:
 
-| free displacements | structures | fixed slots | relaxed |
-|---|---|---|---|
-| 0 (pinned) | 202 | 0.255 | 0.255 |
-| **1** | **55** | **0.234** | **0.306** |
-| 2–5 | 12 | 0.095 | **0.051** |
-| >5 | 3 | 0.154 | **0.106** |
+| free displacements | structures | fixed | relaxed | *p* | *r*<sub>rb</sub> | improved |
+|---|---|---|---|---|---|---|
+| 0 (pinned) | 202 | 0.255 | 0.255 | — | — | exact |
+| 1 | 55 | 0.234 | 0.306 | 0.70 | −0.06 | 30/55 |
+| 2–5 | 12 | 0.095 | **0.051** | 0.043 | +0.67 | 10/12 |
+| >5 | 3 | 0.154 | 0.106 | 0.75 | +0.33 | 2/3 |
+| ≥2 pooled | 15 | 0.103 | **0.055** | 0.064 | +0.55 | 12/15 |
 
-so relaxation earns its keep where there is real freedom and costs you where
-there is almost none. Note also what the pooled non-pinned figure would have
-said — 0.226 → 0.212, nearly flat — because single-parameter nets dominate the
-population that round-trips at all. That is the same trap as calibrating
-`DIRECTION_WEIGHT` on one structure, one level up: a pooled average over an
-unbalanced population hides two opposite effects.
+(Wilcoxon signed-rank, rank-biserial effect size.)
 
-This is a *population* default with a known counterexample — a net whose one
-free parameter happens to be exactly the proportion that needs fixing does
-benefit, and nothing available at build time distinguishes that case. Set
+Read the test, not the median. At one free parameter the median moves the
+wrong way, but the paired distribution is symmetric — *p* = 0.70, median
+paired change −0.001, 30 of 55 improved. That shift comes from a few large
+worsenings in the tail, not a systematic regression. The case for the
+threshold is therefore negative rather than positive: one free scalar buys
+nothing measurable, and falling back makes those builds bit-identical to the
+default path at no cost.
+
+Be aware of the corresponding limit on the positive side: the evidence that
+relaxation *helps* rests on 15 structures at *p* = 0.064 — suggestive, not
+established. What is firmly established is that the defect is real (the
+signed-bias result above, *p* < 10⁻¹⁸⁰). If your nets matter to you, measure
+on your own set.
+
+The threshold is a population default with a known counterexample — a net
+whose one free parameter is exactly the proportion needing repair does
+benefit, and nothing at build time distinguishes that case. Set
 `MIN_FREE_DISPLACEMENTS = 1` to restore the previous behaviour.
 
 **Closure is protected by a guard, not by the objective.** Freeing the slots
