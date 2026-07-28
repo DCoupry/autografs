@@ -156,6 +156,31 @@ free parameters (the sample's largest is 52), and the optimizer is Nelder-Mead,
 so relaxation on such a net is slower and its result less reliable than on a
 net with two or three.
 
+**Nets with a single free displacement also fall back**
+(`alignment.MIN_FREE_DISPLACEMENTS = 2`). One free scalar turns out to be
+worse than none: over the *full* 4764-structure CoRE MOF corpus, on the 272
+rebuilds that pass both the net and the composition gate, the median
+built-vs-experimental density error by the net's free-parameter count is
+
+| free displacements | structures | fixed slots | relaxed |
+|---|---|---|---|
+| 0 (pinned) | 202 | 0.255 | 0.255 |
+| **1** | **55** | **0.234** | **0.306** |
+| 2–5 | 12 | 0.095 | **0.051** |
+| >5 | 3 | 0.154 | **0.106** |
+
+so relaxation earns its keep where there is real freedom and costs you where
+there is almost none. Note also what the pooled non-pinned figure would have
+said — 0.226 → 0.212, nearly flat — because single-parameter nets dominate the
+population that round-trips at all. That is the same trap as calibrating
+`DIRECTION_WEIGHT` on one structure, one level up: a pooled average over an
+unbalanced population hides two opposite effects.
+
+This is a *population* default with a known counterexample — a net whose one
+free parameter happens to be exactly the proportion that needs fixing does
+benefit, and nothing available at build time distinguishes that case. Set
+`MIN_FREE_DISPLACEMENTS = 1` to restore the previous behaviour.
+
 **Closure is protected by a guard, not by the objective.** Freeing the slots
 lets the optimizer trade bond closure against the anchor-direction terms, and
 on a net whose SBU-versus-slot shape mismatch is large that trade can go badly.

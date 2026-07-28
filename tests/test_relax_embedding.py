@@ -10,6 +10,7 @@ from pymatgen.analysis.local_env import CovalentRadius
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
 
+from autografs import alignment
 from autografs.alignment import prepare_build
 from autografs.builder import build_framework
 from autografs.exceptions import AlignmentError
@@ -107,6 +108,21 @@ def _inter_sbu_gaps(framework):
     return gaps
 
 
+@pytest.fixture
+def single_parameter_relaxation(monkeypatch):
+    """Let relaxation run on a one-parameter blueprint.
+
+    ``MIN_FREE_DISPLACEMENTS`` defaults to 2 because single-parameter
+    nets regress on the CoRE MOF population. The alternating chain here
+    is the constructed counterexample the constant documents - its one
+    free displacement is precisely the proportion that needs fixing -
+    so the mechanism tests lower the threshold rather than losing their
+    subject. The default itself is covered by
+    ``TestMinFreeDisplacements``.
+    """
+    monkeypatch.setattr(alignment, "MIN_FREE_DISPLACEMENTS", 1)
+
+
 class TestPlanParametrization:
     def test_fixed_slot_plan_is_unchanged(self):
         """Without the flag the plan carries no slot block and the
@@ -117,7 +133,7 @@ class TestPlanParametrization:
         assert plan.n_slot_free == 0
         assert len(plan.initial_parameters()) == plan.cell_param.n_free
 
-    def test_relaxed_plan_finds_the_node_z_freedom(self):
+    def test_relaxed_plan_finds_the_node_z_freedom(self, single_parameter_relaxation):
         """The chain's only symmetry-allowed displacement is the node
         orbit's z: one extra parameter, linkers pinned by the mirror."""
         plan = prepare_build(_alternating_chain(), _mappings(), relax_embedding=True)
@@ -139,7 +155,7 @@ class TestRelaxedBuild:
         assert len(gaps) == 4
         assert max(gaps) > 0.5
 
-    def test_relaxation_closes_both_edges(self):
+    def test_relaxation_closes_both_edges(self, single_parameter_relaxation):
         """Freeing the node orbit's z closes every bond to its
         covalent target."""
         framework = build_framework(
@@ -149,7 +165,7 @@ class TestRelaxedBuild:
         assert len(gaps) == 4
         assert max(gaps) < 0.1
 
-    def test_relaxation_preserves_the_mirror(self):
+    def test_relaxation_preserves_the_mirror(self, single_parameter_relaxation):
         """The two nodes must move oppositely (z -> 0.5 - z survives):
         their separation along c changes, but their midpoint stays at
         the mirror plane z = 0.25c."""
@@ -170,7 +186,7 @@ class TestRelaxedBuild:
         separation = abs(node_z[2] - node_z[0])
         assert abs(separation - 0.5 * cell[2, 2]) > 0.5
 
-    def test_linker_orbits_are_pinned_by_the_mirror(self):
+    def test_linker_orbits_are_pinned_by_the_mirror(self, single_parameter_relaxation):
         """The chain's mirror fixes both linker sites: only the node
         orbit carries freedom."""
         plan = prepare_build(_alternating_chain(), _mappings(), relax_embedding=True)
@@ -250,7 +266,7 @@ class TestClosureGate:
         with pytest.raises(AlignmentError, match="does not close"):
             build_framework(_alternating_chain(), _mappings(), bond_tolerance=0.1)
 
-    def test_gate_accepts_a_build_that_does_close(self):
+    def test_gate_accepts_a_build_that_does_close(self, single_parameter_relaxation):
         """Freeing the node orbit closes every bond, so the same
         tolerance passes."""
         framework = build_framework(
@@ -443,3 +459,30 @@ class TestRelaxationOnRealNets:
         _topology, fixed, relaxed = self._pair(library, net)
 
         assert relaxed.structure.volume < 1.25 * fixed.structure.volume
+
+
+class TestMinFreeDisplacements:
+    """The population default: relaxation is off below the threshold."""
+
+    def test_single_parameter_net_falls_back_by_default(self):
+        """The alternating chain has exactly one free displacement, so
+        at the shipped threshold of 2 the plan must come out identical
+        to the flag-off plan - no slot block, no dead parameters."""
+        assert alignment.MIN_FREE_DISPLACEMENTS == 2
+        topology = _alternating_chain()
+        from autografs.symmetry import orbit_displacements
+
+        assert orbit_displacements(topology).n_free == 1
+
+        relaxed = prepare_build(topology, _mappings(), relax_embedding=True)
+        fixed = prepare_build(topology, _mappings())
+        assert relaxed.slot_disp is None
+        assert relaxed.n_slot_free == 0
+        assert len(relaxed.initial_parameters()) == len(fixed.initial_parameters())
+
+    def test_threshold_is_respected_when_lowered(self, single_parameter_relaxation):
+        """And the freedom is still there to be used if a caller wants
+        it - the fallback is a default, not a removal."""
+        plan = prepare_build(_alternating_chain(), _mappings(), relax_embedding=True)
+        assert plan.slot_disp is not None
+        assert plan.n_slot_free == 1

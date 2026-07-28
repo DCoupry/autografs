@@ -155,6 +155,38 @@ _MATCH_ITERATIONS = 8
 # population, never on one material.
 DIRECTION_WEIGHT = 0.5
 
+# Minimum symmetry-allowed slot freedom for relaxation to be worth
+# running. Below this the augmented objective is applied to a space too
+# small to express the proportion it is trying to fix, and it spends
+# real closure on the irreducible arm mismatch instead - the same
+# failure as on a fully pinned net, just less complete.
+#
+# Measured over the full CoRE MOF corpus (4764 structures, 272 verified
+# and composition-gated round trips, paired fixed vs relaxed), median
+# |V_built/V_exp - 1| by the net's n_free:
+#
+#   n_free      n     fixed -> relaxed
+#   0 (pinned) 202    0.255 -> 0.255   (control: identical, as it must)
+#   1           55    0.234 -> 0.306   REGRESSES
+#   2-5         12    0.095 -> 0.051
+#   >5           3    0.154 -> 0.106
+#
+# One free scalar is worse than none. Note the pooled non-pinned figure
+# (0.226 -> 0.212) hides this completely, because single-parameter nets
+# dominate the population that round-trips at all - do not report or
+# calibrate on it.
+#
+# This is a *population* default and it has a known counterexample: a
+# net can exist whose single free parameter is exactly the proportion
+# that needs fixing (tests/test_relax_embedding.py's alternating chain
+# is one by construction - one z displacement closes both of its
+# unequal edges). Nothing available at build time distinguishes that
+# case from the 55 above; the closure guard cannot, because the defect
+# it would need to see is packing against the *experimental* cell,
+# which a build does not have. Raise or lower this if you know your
+# nets. Set to 1 to restore the previous behaviour.
+MIN_FREE_DISPLACEMENTS = 2
+
 
 def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """Optimal proper rotation taking sources onto targets.
@@ -497,12 +529,14 @@ class BuildPlan:
     def _shifts(self, slot_free: np.ndarray) -> np.ndarray | None:
         """Per-topology-slot fractional displacements, or None.
 
-        None also for a relaxation-enabled plan on a fully pinned
-        blueprint: with no displacement to select between, the
+        None also for a relaxation-enabled plan whose blueprint has too
+        little freedom: with no displacement to select between, the
         augmented objective has nothing to steer and measurably makes
         the cell-only compromise worse (it trades bond closure against
-        the unresolvable arm mismatch), so pinned nets keep the legacy
-        objective exactly - flag or no flag.
+        the unresolvable arm mismatch), so such nets keep the legacy
+        objective exactly - flag or no flag. ``prepare_build`` already
+        drops ``slot_disp`` below ``MIN_FREE_DISPLACEMENTS``; the check
+        here also covers a plan constructed directly.
         """
         if self.slot_disp is None or self.slot_disp.n_free == 0:
             return None
@@ -966,7 +1000,18 @@ def prepare_build(
                 for orbit, basis in slot_disp.bases.items()
             }
             slot_disp = dataclass_replace(slot_disp, bases=bases)
-        if slot_disp.n_free:
+        if slot_disp.n_free < MIN_FREE_DISPLACEMENTS:
+            # too little freedom to be worth the augmented objective
+            # (see MIN_FREE_DISPLACEMENTS). Dropping slot_disp entirely
+            # rather than only suppressing the shifts keeps the legacy
+            # path bit-for-bit and leaves no dead optimizer parameters.
+            logger.debug(
+                f"Embedding relaxation on {topology.name!r} disabled: "
+                f"{slot_disp.n_free} free displacement(s), below "
+                f"{MIN_FREE_DISPLACEMENTS}."
+            )
+            slot_disp = None
+        else:
             logger.debug(
                 f"Embedding relaxation on {topology.name!r}: "
                 f"{slot_disp.n_free} slot parameters over "
