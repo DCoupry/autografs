@@ -391,7 +391,16 @@ Nets whose laterals are symmetry-pinned (`etb`, whose free orbits are all run
 slots) build identically with the flag on. Where the laterals do carry freedom
 — `etb-e` has three parameters, exactly where MOF-74's node-to-linker
 proportion was measured wrong — a linker whose span does not suit the
-idealized separation closes markedly better. Off by default.
+idealized separation closes markedly better: stretching a ditopic linker 25%
+past what the idealized separation wants takes the worst bond deviation from
+0.0149 Å to 0.0037 Å, a 4× improvement. Off by default.
+
+Note one difference from the [finite pipeline](building.md#embedding-relaxation):
+the rod objective gains **no anchor-direction terms** and needs no closure
+guard. It is simply better conditioned — the rods are symmetry-pinned anchors
+at both ends of every lateral, so a linker between them is fixed by closure
+alone, whereas a freed finite net is generically floppy and needs the
+direction terms to choose among the many closures it admits.
 
 ### Verifying the built net
 

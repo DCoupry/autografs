@@ -133,6 +133,9 @@ src/autografs/
 ├── builder.py       Autografs: libraries, sieve, build / build_all
 ├── alignment.py     numpy core: direction matching, Kabsch, cell
 │                    parametrization per crystal system, BuildPlan
+├── symmetry.py      blueprint space-group operations recovered from
+│                    the slot-centre set; orbit-constrained slot
+│                    displacements for embedding relaxation
 ├── fragment.py      Fragment: Molecule + dummies, compatibility,
 │                    rotate / flip / functionalize
 ├── topology.py      Topology: lattice + slots + orbit grouping
@@ -192,6 +195,8 @@ flowchart TD
     alignment --> fragment
     alignment --> topology
     alignment --> plane_groups
+    alignment -. "lazy, relax_embedding only" .-> symmetry
+    symmetry --> topology
     topology --> fragment
     topology_io --> topology
     framework --> utils

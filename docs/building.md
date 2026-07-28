@@ -51,6 +51,7 @@ mof = mofgen.build(
     refine_cell=True,   # optimize cell parameters (default)
     max_rmsd=0.3,       # reject builds with bad shape matches
     min_distance=1.0,   # reject builds with overlapping atoms
+    bond_tolerance=0.35,  # reject builds whose bonds do not close
 )
 ```
 
@@ -63,6 +64,21 @@ mof = mofgen.build(
   `autografs.OverlapError` is raised instead of returning overlapping or
   interpenetrating output. The same check is available on any result as
   `Framework.min_contact()`.
+- **`bond_tolerance`** gates *closure*: the deviation of each inter-SBU bond
+  from its covalent target, in Å. The other two gates cannot see this
+  failure — `max_rmsd` measures each SBU's shape against its slot and
+  `min_distance` measures overlap, and a framework whose units are correctly
+  shaped and comfortably spaced can still have every bond between them half an
+  Å too long.
+
+  **Off by default, and that is a measurement rather than caution.** An
+  arbitrary SBU on an arbitrary net frequently cannot close: over a 120-net
+  library sample of builds that pass `max_rmsd=0.5` today, the worst-bond
+  deviation has median 0.43 Å and 90th percentile 1.14 Å. Any default value
+  would silently change which builds the library produces, so the choice is
+  left to you. Set it when closure matters — screening, round-trip work,
+  anything using `relax_embedding` — and read the realized value under
+  `verbose` either way.
 - **Slot indices** (integers) may be used as mapping keys to place a specific
   SBU on a specific slot, overriding the slot-type choice:
 
@@ -110,12 +126,45 @@ frees the slot centres as extra optimization degrees of freedom — one
 displacement per crystallographic orbit, restricted to the directions the
 site's symmetry allows, so the net's declared symmetry is preserved by
 construction — and adds anchor-direction terms to the objective so each bond
-leaves its anchors along the direction the SBU's own chemistry points. Fully
-pinned nets (their embedding is already exact by symmetry) have nothing to
-relax and build exactly as without the flag; for the rest, the topology of
-the output is unchanged (`verify_net` applies as usual) while the packing
-follows the SBUs instead of the idealization. Off by default; the geometry
-of default builds is unchanged.
+leaves its anchors along the direction the SBU's own chemistry points. The
+topology of the output is unchanged (`verify_net` applies as usual) while the
+packing follows the SBUs instead of the idealization. Off by default; the
+geometry of default builds is unchanged.
+
+**What it buys, measured.** Over the first 600 structures of CoRE MOF 2014,
+rebuilt from their own deconstructed fragments and kept only where the rebuild
+reproduces the experimental reduced formula (35 such structures on nets with
+free proportions):
+
+| | fixed slots | `relax_embedding=True` |
+|---|---|---|
+| built-vs-experimental density error, median | 0.260 | **0.079** |
+| inter-SBU bond deviation, median | 0.091 Å | 0.112 Å |
+| closest non-bonded contact, median | 0.84 Å | 0.97 Å |
+
+So the density error falls by about 3.3× and packing improves, at a cost of
+roughly 0.02 Å in bond closure. That trade is the point of the feature, not a
+side effect: the idealized embedding is systematically *more open* than real
+chemistry, and a single cell scale cannot repair a fractional coordinate.
+
+**What it does not buy.** Fully pinned blueprints — every slot on a special
+position, nothing symmetry-allowed to move — build bit-for-bit identically
+with the flag on or off. That is by construction, and it is worth knowing that
+such nets are the *exception*: over a 185-net sample of the shipped library
+only three are fully pinned. Conversely, a low-symmetry net can carry tens of
+free parameters (the sample's largest is 52), and the optimizer is Nelder-Mead,
+so relaxation on such a net is slower and its result less reliable than on a
+net with two or three.
+
+**Closure is protected by a guard, not by the objective.** Freeing the slots
+lets the optimizer trade bond closure against the anchor-direction terms, and
+on a net whose SBU-versus-slot shape mismatch is large that trade can go badly.
+Every relaxed build is therefore scored against two references — closure alone
+over the same free parameters, and the fixed-slot solution the flag-off build
+would give — and the relaxed result is kept only if its worst bond stays within
+0.2 Å of the best of them. The budget is deliberately not zero: a modest
+closure cost bought with a large packing gain is exactly what the feature is
+for. If you need a hard closure guarantee, set `bond_tolerance` as well.
 
 ## Batch enumeration
 

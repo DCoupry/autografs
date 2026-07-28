@@ -802,11 +802,22 @@ class _RodBuild:
         # the LATERAL slots. The other candidates are all unusable, by
         # construction rather than by choice:
         #
-        # - a helical run's axis line is a screw axis of the net, i.e. a
-        #   symmetry element, and a rotation of order >= 2 fixes no
-        #   transverse vector (order 2 sends v -> -v). Axis lines are
-        #   pinned outright, so rod-to-rod spacing is set by the cell -
-        #   which ``scale`` already varies.
+        # - a helical run's axis line is generally a screw axis of the
+        #   net, i.e. a symmetry element, and a rotation of order >= 2
+        #   fixes no transverse vector (order 2 sends v -> -v), so the
+        #   line cannot move and rod-to-rod spacing is set by the cell -
+        #   which ``scale`` already varies. Measured directly rather
+        #   than assumed: expanding every symmetry-allowed displacement
+        #   mode and looking for a common transverse shift of a run's
+        #   node slots gives EXACTLY zero on all six nets with helical
+        #   runs that the rod path is validated on (etb, etb-e, unc,
+        #   bmn, twt; srs is pinned outright). Caveat worth keeping:
+        #   the same test flags ~1 in 5 of a wider library sample, and
+        #   it is not established whether those are real axis-line
+        #   freedoms or an artifact of the test - ``helical_runs``
+        #   fits a screw geometrically, and the fitted screw's rotation
+        #   part being in the group does not put the LINE on a symmetry
+        #   element. None of them is known to be buildable. See #210.
         # - a run node's freedom is transverse (the nodes sit off the
         #   axis), but that moves the *helix radius*, and a harvested
         #   rod is rigid: placement reads only the node's azimuth and

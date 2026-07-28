@@ -57,7 +57,12 @@ is a ground-up rewrite around a small set of design choices:
   inter-SBU bond sits at its covalent (Cordero) bond length, with the crystal
   system's constraints enforced (a cubic net optimizes a single length).
   MOF-5 comes out cubic at 12.89 Å against the experimental 12.9 — *before*
-  any force-field relaxation.
+  any force-field relaxation. For lower-symmetry nets, whose idealized
+  blueprint fixes *proportions* no cell parameter can repair,
+  `build(..., relax_embedding=True)` additionally frees the slot positions
+  within their site symmetry: measured over CoRE MOF, that cuts the
+  built-versus-experimental density error about 3.3× (see
+  [embedding relaxation](docs/building.md#embedding-relaxation)).
 - **Fails loudly, never silently.** Optional hard gates (`max_rmsd`,
   `min_distance`) raise typed exceptions instead of returning distorted or
   interpenetrating structures. Identical inputs give identical outputs.
@@ -196,10 +201,23 @@ crystal. See [2D COFs and stacking](docs/cofs-and-stacking.md).
 deconstruction, and everything else are pure-Python. Install the relaxation
 backend with `pip install "autografs[relax]"`.
 
-**My SBU is rejected / I get `AlignmentError` — why?** The build gate is
-geometric: the SBU's connection-vector *shape* doesn't match the slot's within
+**My SBU is rejected / I get `AlignmentError` — why?** Usually the geometric
+gate: the SBU's connection-vector *shape* doesn't match the slot's within
 `max_rmsd`. Raise `max_rmsd`, pick a net whose vertex figure fits, or edit the
-SBU. Point-group symmetry is diagnostic metadata, not the gate.
+SBU. Point-group symmetry is diagnostic metadata, not the gate. If you passed
+`bond_tolerance`, the same exception also means the build did not *close* —
+correctly shaped units that no cell can bring to bonding distance.
+
+**My built structure is too open / its density looks wrong.** Most likely the
+blueprint's proportions rather than your SBUs. A build places every unit at
+its idealized slot centre and only varies the cell, and the idealized
+(maximum-symmetry, near-equal-edge) embedding is systematically *more open*
+than real chemistry — no single cell scale can fix a fractional coordinate.
+Try `build(..., relax_embedding=True)`, which frees the slot positions within
+their site symmetry; on nets that have any such freedom it cuts the density
+error about 3.3× over a CoRE MOF corpus. High-symmetry nets (pcu, dia, fcu)
+have nothing to free and are unaffected. Details and the measured trade-offs
+are in [embedding relaxation](docs/building.md#embedding-relaxation).
 
 **Is my net in the library?** 2686 RCSR nets ship; list them with
 `mofgen.list_topologies()`. 96.5 % are buildable out of the box — the rest, and
