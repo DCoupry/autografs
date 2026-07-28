@@ -155,6 +155,47 @@ _MATCH_ITERATIONS = 8
 # population, never on one material.
 DIRECTION_WEIGHT = 0.5
 
+# Minimum symmetry-allowed slot freedom for relaxation to be applied.
+# Below this the augmented objective buys nothing measurable, so the
+# build takes the legacy fixed-slot path instead of paying for extra
+# optimizer parameters and a less predictable result.
+#
+# Measured over the full CoRE MOF corpus (4764 structures, 272 verified
+# and composition-gated round trips), paired fixed vs relaxed on
+# |V_built/V_exp - 1|, Wilcoxon signed-rank with rank-biserial effect
+# size:
+#
+#   n_free      n   median fixed->relaxed   p       r_rb    improved
+#   0 (pinned) 202  0.255 -> 0.255          --      --      0/202 (exact)
+#   1           55  0.234 -> 0.306          0.70   -0.06    30/55
+#   2-5         12  0.095 -> 0.051          0.043  +0.67    10/12
+#   >5           3  0.154 -> 0.106          0.75   +0.33     2/3
+#   >=2 pooled  15  0.103 -> 0.055          0.064  +0.55    12/15
+#
+# Read the test, not the median. At n_free == 1 the median moves the
+# wrong way but the paired distribution is symmetric (p = 0.70, median
+# paired change -0.001, 30 of 55 improved): that shift is a handful of
+# large worsenings in the tail, NOT a systematic regression. An earlier
+# version of this comment called it one; it is not.
+#
+# So the honest case for the threshold is negative, not positive: one
+# free scalar delivers no measurable benefit, and falling back makes
+# those builds bit-identical to the default path for free. The case for
+# relaxation itself rests on the n_free >= 2 population, which is only
+# 15 structures at p = 0.064 - suggestive, not established. The strong
+# result is that the *defect* is real (see docs/building.md: 90.6% of
+# 1134 structures, sign test p < 1e-180); that relaxation *fixes* it at
+# scale is not yet demonstrated.
+#
+# The threshold is a population default with a known counterexample: a
+# net whose single free parameter is exactly the proportion that needs
+# fixing does benefit (tests/test_relax_embedding.py's alternating
+# chain is one by construction). Nothing at build time distinguishes
+# that case; the closure guard cannot, because the defect it would need
+# to see is packing against the *experimental* cell, which a build does
+# not have. Set to 1 to restore the previous behaviour.
+MIN_FREE_DISPLACEMENTS = 2
+
 
 def kabsch(sources: np.ndarray, targets: np.ndarray) -> np.ndarray:
     """Optimal proper rotation taking sources onto targets.
@@ -497,12 +538,14 @@ class BuildPlan:
     def _shifts(self, slot_free: np.ndarray) -> np.ndarray | None:
         """Per-topology-slot fractional displacements, or None.
 
-        None also for a relaxation-enabled plan on a fully pinned
-        blueprint: with no displacement to select between, the
+        None also for a relaxation-enabled plan whose blueprint has too
+        little freedom: with no displacement to select between, the
         augmented objective has nothing to steer and measurably makes
         the cell-only compromise worse (it trades bond closure against
-        the unresolvable arm mismatch), so pinned nets keep the legacy
-        objective exactly - flag or no flag.
+        the unresolvable arm mismatch), so such nets keep the legacy
+        objective exactly - flag or no flag. ``prepare_build`` already
+        drops ``slot_disp`` below ``MIN_FREE_DISPLACEMENTS``; the check
+        here also covers a plan constructed directly.
         """
         if self.slot_disp is None or self.slot_disp.n_free == 0:
             return None
@@ -966,7 +1009,18 @@ def prepare_build(
                 for orbit, basis in slot_disp.bases.items()
             }
             slot_disp = dataclass_replace(slot_disp, bases=bases)
-        if slot_disp.n_free:
+        if slot_disp.n_free < MIN_FREE_DISPLACEMENTS:
+            # too little freedom to be worth the augmented objective
+            # (see MIN_FREE_DISPLACEMENTS). Dropping slot_disp entirely
+            # rather than only suppressing the shifts keeps the legacy
+            # path bit-for-bit and leaves no dead optimizer parameters.
+            logger.debug(
+                f"Embedding relaxation on {topology.name!r} disabled: "
+                f"{slot_disp.n_free} free displacement(s), below "
+                f"{MIN_FREE_DISPLACEMENTS}."
+            )
+            slot_disp = None
+        else:
             logger.debug(
                 f"Embedding relaxation on {topology.name!r}: "
                 f"{slot_disp.n_free} slot parameters over "
