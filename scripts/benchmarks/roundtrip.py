@@ -46,11 +46,20 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from collections import Counter
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
+from _corpus import collect as _collect
 from _mapping_order import graded_indices, n_combinations
+
+# sibling driver: the same inter-unit bond measurement, so the two
+# benchmarks report the identical quantity. Imported at module level
+# like _mapping_order - callers put this directory on sys.path only
+# for the import, so a deferred import would not find it.
+from embedding import bond_residuals
 from pymatgen.core.composition import Composition
 
 from autografs import Autografs
@@ -129,7 +138,34 @@ def uncapped_composition(result) -> tuple[str | None, str | None]:
     return Composition(kept).reduced_formula, caps.reduced_formula
 
 
-def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
+def _geometry(framework, result) -> dict:
+    """Packing and closure of a rebuild, against the experimental cell.
+
+    ``volume_ratio`` is per-atom and divided by the interpenetration
+    fold, so it is invariant to supercell choice and compares a single
+    net against a catenated crystal. It is the quantity the embedding
+    relaxation of #174 moves; ``bond_residual`` is what that movement
+    costs. Reported together because the trade between them is the
+    whole point - either one alone is misleading.
+    """
+    built = framework.structure
+    experimental = result.structure
+    fold = result.n_periodic_components
+    return {
+        "volume_ratio": (built.volume / len(built))
+        / (experimental.volume / len(experimental) * fold),
+        "min_contact": framework.min_contact(),
+        "bond_residual": bond_residuals(framework),
+        "empty_slots": sorted(framework.graph.graph.get("empty_slots", ())),
+    }
+
+
+def roundtrip_one(
+    mofgen: Autografs,
+    source,
+    max_rmsd: float,
+    relax_embedding: bool = False,
+) -> dict:
     """Deconstruct one structure and attempt the verified rebuild."""
     record: dict = {"outcome": None, "net": None, "tier": None, "error": None}
     t0 = time.perf_counter()
@@ -174,6 +210,7 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
                     mappings=mappings,
                     max_rmsd=max_rmsd,
                     verify_net=True,
+                    relax_embedding=relax_embedding,
                 )
             except AutografsError:
                 continue
@@ -184,6 +221,7 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
             if built_formula == experimental_formula:
                 record["outcome"] = "closed"
                 record["rebuilt_net"] = net
+                record.update(_geometry(framework, result))
                 record["seconds"] = time.perf_counter() - t0
                 return record
             if uncapped_formula is not None and built_formula == uncapped_formula:
@@ -205,31 +243,128 @@ def roundtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
     return record
 
 
-def run(corpus: list[Path], mofgen: Autografs, max_rmsd: float) -> dict:
-    """Round-trip every structure; returns the results payload."""
-    records = {}
-    for path in sorted(corpus):
-        records[path.name] = roundtrip_one(mofgen, str(path), max_rmsd)
-        outcome = records[path.name]["outcome"]
-        print(f"  {path.name:<40} {outcome}")
+# one Autografs per worker process: the topology library costs seconds
+# to load and is read-only during a run, so it is built once in the
+# initializer rather than per structure
+_WORKER: dict = {}
+
+
+def _init_worker(topofile: str | None, max_rmsd: float, relax: bool) -> None:
+    _WORKER["mofgen"] = Autografs(topofile=topofile)
+    _WORKER["max_rmsd"] = max_rmsd
+    _WORKER["relax"] = relax
+
+
+def _run_worker(path: str) -> tuple[str, dict]:
+    """Round-trip one structure in a worker; never raises.
+
+    A corpus-scale sweep must not lose 4000 results to one pathological
+    CIF, and an unexpected exception is itself data - it becomes a
+    ``driver_error`` outcome rather than a traceback that kills the run.
+    """
+    name = Path(path).name
+    try:
+        record = roundtrip_one(
+            _WORKER["mofgen"], path, _WORKER["max_rmsd"], _WORKER["relax"]
+        )
+    except Exception as exc:  # noqa: BLE001 - deliberate: see docstring
+        record = {
+            "outcome": "driver_error",
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return name, record
+
+
+def _load_checkpoint(path: Path) -> dict:
+    """Read a JSONL checkpoint into ``{name: record}``.
+
+    Truncated trailing lines (a killed run mid-write) are dropped
+    rather than fatal.
+    """
+    records: dict = {}
+    if not path.exists():
+        return records
+    with path.open(encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            records[entry["name"]] = entry["record"]
+    return records
+
+
+def run(
+    corpus: list[Path],
+    mofgen: Autografs | None = None,
+    max_rmsd: float = 0.5,
+    *,
+    relax_embedding: bool = False,
+    topofile: str | None = None,
+    n_jobs: int = 1,
+    checkpoint: Path | None = None,
+) -> dict:
+    """Round-trip every structure; returns the results payload.
+
+    Deterministic in sorted corpus order regardless of ``n_jobs`` - the
+    results are keyed by structure name, so worker completion order
+    does not reach the output.
+
+    ``mofgen`` is used only by the serial path; workers build their own
+    (an Autografs does not survive pickling to a spawned process, and
+    the library load is why they are built in an initializer rather
+    than per structure).
+    """
+    records = _load_checkpoint(checkpoint) if checkpoint is not None else {}
+    if records:
+        print(f"  resuming: {len(records)} structures already done")
+    pending = [path for path in sorted(corpus) if path.name not in records]
+    handle = checkpoint.open("a", encoding="utf-8") if checkpoint is not None else None
+    try:
+        if n_jobs > 1 and pending:
+            executor = ProcessPoolExecutor(
+                max_workers=n_jobs,
+                initializer=_init_worker,
+                initargs=(topofile, max_rmsd, relax_embedding),
+            )
+            with executor:
+                stream = executor.map(
+                    _run_worker, [str(path) for path in pending], chunksize=1
+                )
+                for index, (name, record) in enumerate(stream, 1):
+                    records[name] = record
+                    _report(index, len(pending), name, record, handle)
+        elif pending:
+            if mofgen is None:
+                _init_worker(topofile, max_rmsd, relax_embedding)
+            else:
+                _WORKER.update(mofgen=mofgen, max_rmsd=max_rmsd, relax=relax_embedding)
+            for index, path in enumerate(pending, 1):
+                name, record = _run_worker(str(path))
+                records[name] = record
+                _report(index, len(pending), name, record, handle)
+    finally:
+        if handle is not None:
+            handle.close()
     outcomes = Counter(record["outcome"] for record in records.values())
     return {
         "benchmark": "roundtrip",
         "max_rmsd": max_rmsd,
+        "relax_embedding": relax_embedding,
         "n_structures": len(records),
         "outcomes": dict(sorted(outcomes.items())),
-        "structures": records,
+        "structures": dict(sorted(records.items())),
     }
 
 
-def _collect(spec: str) -> list[Path]:
-    path = Path(spec)
-    if path.is_dir():
-        return sorted(path.glob("*.cif"))
-    if any(char in spec for char in "*?["):
-        base = Path(spec).parent
-        return sorted(base.glob(Path(spec).name))
-    return [path]
+def _report(index: int, total: int, name: str, record: dict, handle) -> None:
+    print(f"  [{index}/{total}] {name:<40} {record['outcome']}", flush=True)
+    if handle is not None:
+        handle.write(json.dumps({"name": name, "record": record}) + "\n")
+        handle.flush()
 
 
 def main() -> None:
@@ -237,14 +372,43 @@ def main() -> None:
     parser.add_argument("corpus", help="directory, glob, or single CIF")
     parser.add_argument("-o", "--output", default="roundtrip.json")
     parser.add_argument("--max-rmsd", type=float, default=0.5)
+    parser.add_argument(
+        "--relax-embedding",
+        action="store_true",
+        help="rebuild with embedding relaxation (#174): symmetry-allowed "
+        "slot displacements + anchor-direction objective",
+    )
+    parser.add_argument(
+        "--limit", type=int, default=None, help="round-trip only the first N"
+    )
+    parser.add_argument(
+        "--n-jobs",
+        type=int,
+        default=1,
+        help="worker processes (default 1; -1 uses all cores)",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="JSONL file of finished structures; resumes from it if present",
+    )
     parser.add_argument("--topofile", default=None, help="topology library override")
     args = parser.parse_args()
 
     corpus = _collect(args.corpus)
+    if args.limit is not None:
+        corpus = corpus[: args.limit]
     if not corpus:
         raise SystemExit(f"no structures matched {args.corpus!r}")
-    mofgen = Autografs(topofile=args.topofile)
-    payload = run(corpus, mofgen, args.max_rmsd)
+    n_jobs = os.cpu_count() or 1 if args.n_jobs == -1 else args.n_jobs
+    payload = run(
+        corpus,
+        max_rmsd=args.max_rmsd,
+        relax_embedding=args.relax_embedding,
+        topofile=args.topofile,
+        n_jobs=n_jobs,
+        checkpoint=Path(args.checkpoint) if args.checkpoint else None,
+    )
     Path(args.output).write_text(json.dumps(payload, indent=1, default=str))
     print(f"\n{payload['n_structures']} structures -> {args.output}")
     for outcome, count in payload["outcomes"].items():
