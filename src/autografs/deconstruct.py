@@ -67,7 +67,7 @@ from pymatgen.analysis.graphs import StructureGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.structure import Molecule, Structure
 
-from autografs.exceptions import DeconstructionError
+from autografs.exceptions import AutografsError, DeconstructionError
 from autografs.fragment import Fragment
 
 # _canonical and _split_image are net's gauge conventions; the unit
@@ -944,6 +944,69 @@ def _unit_quotient(
     return edges
 
 
+def _rod_compatible_nets(
+    structure: Structure,
+    rods: list[RodUnit],
+    candidates: list[str],
+    topologies: Mapping[str, Topology],
+) -> list[str]:
+    """Drop candidate nets whose channels this structure's rods cannot fill.
+
+    A rod framework's quotient graph carries no blueprint edge centers,
+    so it matches on the contracted points-of-extension tier, which
+    compares **connectivity alone**. The rod's screw - the property that
+    decides whether it can occupy a channel - is discarded before the
+    comparison, and the identifier therefore proposes geometrically
+    impossible blueprints. Measured over CoRE MOF 2014 before this
+    filter: of 21 structures assigned ``etb``, whose channels are 3_1
+    helices, **17 had no three-fold axis in their space group**, one of
+    them P1. ``build_rod`` then correctly refused them; the assignment
+    was the error (#214).
+
+    Filtering is conservative. A rod whose canonical form cannot be
+    derived does not veto anything, and a candidate survives if *any*
+    harvested rod fits it: this removes impossible assignments without
+    inventing confidence about the rest.
+    """
+    if not candidates:
+        return candidates
+    from autografs.rod_build import rod_fits_topology
+    from autografs.rods import canonical_rod
+
+    screws: list[tuple[int, float]] = []
+    for rod in rods:
+        try:
+            repeat = canonical_rod(structure, rod)
+        except (AutografsError, ValueError, IndexError) as exc:
+            logger.debug(f"rod screw undetermined, not filtering nets: {exc}")
+            return candidates
+        screws.append((repeat.screw_order, repeat.screw_angle))
+
+    kept = []
+    for name in candidates:
+        topology = topologies[name]
+        try:
+            fits = any(
+                rod_fits_topology(topology, order, angle) for order, angle in screws
+            )
+        except (AutografsError, ValueError, IndexError) as exc:
+            logger.debug(f"run analysis failed on {name!r}, keeping it: {exc}")
+            fits = True
+        if fits:
+            kept.append(name)
+        else:
+            logger.info(
+                f"\t[x] dropping net {name!r}: no slot run can host a rod with "
+                f"screw order {screws[0][0]} ({screws[0][1]:.0f} deg)."
+            )
+    if not kept:
+        logger.info(
+            "\t[x] every candidate net was incompatible with the harvested "
+            "rod(s); reporting unidentified rather than an impossible net."
+        )
+    return kept
+
+
 def _identify_subframeworks(
     subframework_edges: list[Counter[Edge]],
     topologies: Mapping[str, Topology],
@@ -1165,6 +1228,10 @@ def deconstruct(
             ],
             topologies,
         )
+        if rods:
+            net_candidates = _rod_compatible_nets(
+                structure, rods, net_candidates, topologies
+            )
 
     return Deconstruction(
         structure=structure,

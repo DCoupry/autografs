@@ -55,6 +55,35 @@ usually match on the *contracted* tier — check
 framework connections still raises `DeconstructionError` (it is not a
 framework), as do 2-periodic (layer) building units.
 
+### Candidates are filtered on screw compatibility
+
+The contracted tier compares **connectivity alone**. The rod's screw —
+the property deciding whether it can occupy a given channel — is
+discarded before the comparison, so on its own that match will propose
+blueprints the structure cannot realise. Measured over CoRE MOF 2014
+before this was fixed: of 21 structures assigned `etb`, whose channels
+are 3₁ helices, **17 had no three-fold axis in their space group at
+all**, one of them P1.
+
+`deconstruct` therefore drops candidates no harvested rod can occupy,
+using the same run-matching `build_rod` applies:
+
+```python
+from autografs.rod_build import rod_fits_topology
+
+rod_fits_topology(mofgen.topologies["etb"], screw_order=1, screw_angle=0.0)
+# False - etb's channels are helical; a screwless rod cannot fill one
+rod_fits_topology(mofgen.topologies["etb"], screw_order=3, screw_angle=120.0)
+# True
+```
+
+The filter is conservative: a rod whose canonical form cannot be derived
+vetoes nothing, and a candidate survives if *any* of the structure's rods
+fits it. If every candidate is incompatible, the structure is reported
+unidentified rather than assigned an impossible net — so a rod MOF that
+used to come back with a confident wrong answer may now come back with
+none. That is the intended change.
+
 ## Canonical rod identity (screw-aware)
 
 A rod's identity is its *chemical* repeat, modulo everything the crystal
