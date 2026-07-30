@@ -1501,6 +1501,44 @@ def _select_runs(
     return [runs[0]]
 
 
+def rod_fits_topology(topology: Topology, screw_order: int, screw_angle: float) -> bool:
+    """Can a rod with this screw occupy any slot run of this blueprint?
+
+    The compatibility test ``_select_runs`` applies, exposed so that
+    *identification* can apply it too. A rod framework's quotient graph
+    carries no blueprint edge centers, so it matches on the contracted
+    points-of-extension tier - which compares connectivity alone and
+    discards the screw. Without this check the identifier proposes nets
+    whose channels the rod cannot occupy: measured over CoRE MOF, 17 of
+    21 structures assigned ``etb`` (3_1 helical channels) have no
+    three-fold axis in their space group at all, one of them P1 (#214).
+
+    Returns True when at least one run could host the rod. It is a
+    necessary condition, not a sufficient one - closure and contact
+    still gate the build.
+    """
+    if screw_order > 1:
+        for candidate in helical_runs(topology):
+            if candidate.screw_order != screw_order:
+                continue
+            if abs(abs(candidate.screw_angle) - abs(screw_angle)) <= 5.0:
+                return True
+        # a 2_1 screw still builds on a straight run: a ditopic linker's
+        # arm sign-flip is a no-op there. Higher orders cannot.
+        if screw_order != 2:
+            return False
+    runs = axial_runs(topology)
+    if not runs:
+        return False
+    for straight in runs:
+        nodes = _run_nodes(topology, straight)
+        if len(nodes.slots) == 1 or (nodes.even and _screw_fits(nodes, screw_angle)):
+            return True
+    # a multi-node run whose turn this rod does not match; _select_runs
+    # would fall back to it and the closure gate would reject the build
+    return False
+
+
 def _slot_adjacency(topology: Topology) -> dict[int, list[int]]:
     """Neighbour slot per half-edge, so len(adjacency[s]) is s's degree.
 

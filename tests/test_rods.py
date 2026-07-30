@@ -2399,3 +2399,50 @@ class TestSingleUnitContact:
         placed = build.evaluate(*build.unpack(build.initial_guess()))
         assert placed["placements"]
         assert math.isfinite(build.min_inter_unit_contact(placed))
+
+
+class TestRodNetCompatibility:
+    """#214: identification must not offer nets a rod cannot occupy.
+
+    A rod framework's quotient graph carries no blueprint edge centers,
+    so it matches on the contracted points-of-extension tier, which
+    compares connectivity alone. The rod's screw - the property that
+    decides whether it fits a channel - is discarded before the
+    comparison. Over CoRE MOF that put 17 of 21 structures assigned
+    ``etb`` (3_1 channels) in space groups with no three-fold axis, one
+    of them P1.
+    """
+
+    def test_straight_rod_is_refused_by_a_helical_net(self, bundled_topologies):
+        """etb's channels are 3_1 helices; a screwless rod cannot fill
+        one, and this is the check identification was missing."""
+        from autografs.rod_build import rod_fits_topology
+
+        etb = bundled_topologies["etb"]
+        assert not rod_fits_topology(etb, screw_order=1, screw_angle=0.0)
+
+    def test_matching_helical_rod_is_accepted(self, bundled_topologies):
+        """The same net accepts the 3_1 rod it was built for."""
+        from autografs.rod_build import rod_fits_topology
+
+        etb = bundled_topologies["etb"]
+        assert rod_fits_topology(etb, screw_order=3, screw_angle=120.0)
+        # handedness is per rod, so the mirror-image screw fits too
+        assert rod_fits_topology(etb, screw_order=3, screw_angle=-120.0)
+
+    def test_wrong_screw_order_is_refused(self, bundled_topologies):
+        """A 4_1 rod does not fit a 3_1 channel."""
+        from autografs.rod_build import rod_fits_topology
+
+        assert not rod_fits_topology(
+            bundled_topologies["etb"], screw_order=4, screw_angle=90.0
+        )
+
+    def test_straight_rod_accepted_by_a_straight_net(self, bundled_topologies):
+        """The filter must not reject what does fit: pcu carries
+        straight axial runs and hosts a screwless rod."""
+        from autografs.rod_build import rod_fits_topology
+
+        assert rod_fits_topology(
+            bundled_topologies["pcu"], screw_order=1, screw_angle=0.0
+        )
