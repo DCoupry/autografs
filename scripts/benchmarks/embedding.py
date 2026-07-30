@@ -65,6 +65,7 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+from _corpus import collect as _collect
 from _mapping_order import graded_indices, n_combinations
 
 from autografs import Autografs
@@ -596,16 +597,6 @@ def run(
         "summary": _summarize(records),
         "structures": records,
     }
-
-
-def _collect(spec: str) -> list[Path]:
-    path = Path(spec)
-    if path.is_dir():
-        return sorted(path.glob("*.cif"))
-    if any(char in spec for char in "*?["):
-        base = Path(spec).parent
-        return sorted(base.glob(Path(spec).name))
-    return [path]
 
 
 def main() -> None:

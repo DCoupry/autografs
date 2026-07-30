@@ -26,6 +26,8 @@ import time
 from collections import Counter
 from pathlib import Path
 
+from _corpus import collect as _collect
+
 from autografs import Autografs
 from autografs.exceptions import AutografsError
 
@@ -84,20 +86,19 @@ def run(corpus: list[Path], mofgen: Autografs, labels: dict) -> dict:
     }
 
 
-def _collect(spec: str) -> list[Path]:
-    path = Path(spec)
-    if path.is_dir():
-        return sorted(path.glob("*.cif"))
-    if any(char in spec for char in "*?["):
-        return sorted(Path(spec).parent.glob(Path(spec).name))
-    return [path]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("corpus", help="directory, glob, or single CIF")
     parser.add_argument("--labels", required=True, help="JSON name -> net(s)")
     parser.add_argument("-o", "--output", default="netid.json")
+    parser.add_argument(
+        "--labelled-only",
+        action="store_true",
+        help="skip structures with no reference label instead of "
+        "deconstructing them to report 'unlabelled' - a reference set "
+        "usually covers a fraction of a corpus, and the rest is work "
+        "whose result the benchmark discards",
+    )
     parser.add_argument("--topofile", default=None, help="topology library override")
     args = parser.parse_args()
 
@@ -105,6 +106,11 @@ def main() -> None:
     if not corpus:
         raise SystemExit(f"no structures matched {args.corpus!r}")
     labels = json.loads(Path(args.labels).read_text(encoding="utf-8"))
+    if args.labelled_only:
+        corpus = [path for path in corpus if path.name in labels]
+        if not corpus:
+            raise SystemExit("no structure in the corpus carries a label")
+        print(f"  {len(corpus)} labelled structures of {len(labels)} labels")
     mofgen = Autografs(topofile=args.topofile)
     payload = run(corpus, mofgen, labels)
     Path(args.output).write_text(json.dumps(payload, indent=1, default=str))
