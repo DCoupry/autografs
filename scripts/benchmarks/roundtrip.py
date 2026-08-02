@@ -71,21 +71,49 @@ from autografs.exceptions import AutografsError
 MAX_MAPPINGS_PER_NET = 16
 
 
-def candidate_mappings(topology, fragments: dict):
+def candidate_mappings(topology, fragments: dict, max_rmsd: float | None = None):
     """Yield fragment-per-slot-type assignments compatible by geometry.
 
     Enumerated in graded order (see ``_mapping_order``) rather than
     ``itertools.product`` order, so the budget varies every slot type
     instead of only the last one.
+
+    ``max_rmsd`` is the threshold the *build* will be gated at, and the
+    sieve must use the same one. Sieving at the library default (0.35)
+    while building at 0.5 silently reclassified structures: 95 of the
+    census's 150 geometry-blocked ``no_mapping`` structures had a
+    nearest fit within the build's own gate and were never attempted.
+
+    A **2-connected slot type may be assigned nothing**. That is a
+    library capability (an emptied slot's two neighbours bond directly,
+    with the periodic offset chained through it) and it is what
+    edge-decorated nets require in practice -- HKUST-1 builds on
+    ``tbo`` with its 96 two-connected slots empty. Not offering it made
+    this driver's ``no_mapping`` bucket measure the driver: 458 corpus
+    structures, 9.4% of the whole set, had *every* blocked slot type
+    2-connected, so the benchmark refused to attempt a build that the
+    library can perform. Most reach this state by being identified on
+    the contracted tier, where the net is named only after its
+    2-connected slots are contracted away -- so the blueprint that
+    matched has slots the deconstruction never produces, by
+    construction.
+
+    ``None`` is appended **last**, after any fragment that does fit, so
+    the graded enumeration still tries a real decoration first and the
+    first combination is unchanged. Emptying a slot is a fallback, not
+    a preference, and results that did not need it are unaffected.
     """
     slot_types = list(topology.mappings)
-    options = []
+    threshold = {} if max_rmsd is None else {"max_rmsd": max_rmsd}
+    options: list[list] = []
     for slot_type in slot_types:
-        fitting = [
+        fitting: list = [
             fragment
             for fragment in fragments.values()
-            if fragment.has_compatible_symmetry(slot_type)
+            if fragment.has_compatible_symmetry(slot_type, **threshold)
         ]
+        if len(slot_type.atoms.indices_from_symbol("X")) == 2:
+            fitting.append(None)
         if not fitting:
             return
         options.append(fitting)
@@ -157,6 +185,13 @@ def _geometry(framework, result) -> dict:
         "min_contact": framework.min_contact(),
         "bond_residual": bond_residuals(framework),
         "empty_slots": sorted(framework.graph.graph.get("empty_slots", ())),
+        # under relax_embedding: the EFFECTIVE freedom after empty-slot
+        # pinning, which candidate the closure guard kept, and the
+        # per-candidate worst-bond scores. Recorded so the relaxation
+        # analysis can stratify on what the build actually did rather
+        # than on the blueprint's own n_free -- the variable that
+        # misattributed 105 never-ran builds to the guard.
+        "relaxation": framework.graph.graph.get("relaxation"),
     }
 
 
@@ -202,7 +237,7 @@ def roundtrip_one(
     saw_uncapped = False
     for net in result.net_candidates:
         topology = mofgen.topologies[net]
-        for mappings in candidate_mappings(topology, result.fragments):
+        for mappings in candidate_mappings(topology, result.fragments, max_rmsd):
             saw_mapping = True
             try:
                 framework = mofgen.build(
