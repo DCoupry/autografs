@@ -1523,9 +1523,26 @@ def rod_fits_topology(topology: Topology, screw_order: int, screw_angle: float) 
                 continue
             if abs(abs(candidate.screw_angle) - abs(screw_angle)) <= 5.0:
                 return True
-        # a 2_1 screw still builds on a straight run: a ditopic linker's
-        # arm sign-flip is a no-op there. Higher orders cannot.
+        # a 2_1 screw still builds on any straight run: a ditopic
+        # linker's arm sign-flip is a no-op there. A higher order builds
+        # on a straight run only when the run chains several nodes whose
+        # own turn matches the screw (#168 - cds: two 4-c nodes 90 deg
+        # apart hosting a 4_1 rod). _select_runs accepts that build and
+        # it validates, so this filter must accept it too; refusing all
+        # straight runs at order > 2 disagreed with the builder.
         if screw_order != 2:
+            for straight in axial_runs(topology):
+                nodes = _run_nodes(topology, straight)
+                if (
+                    len(nodes.slots) > 1
+                    and nodes.even
+                    and _screw_fits(nodes, screw_angle)
+                ):
+                    return True
+            # a single-node straight run cannot turn with the screw:
+            # _select_runs would fall back to one and the closure gate
+            # would reject the build, so refusing here matches the
+            # builder's outcome
             return False
     runs = axial_runs(topology)
     if not runs:

@@ -87,12 +87,20 @@ def rodtrip_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
     record["n_rods"] = len(result.rod_units)
     record["n_fragments"] = len(result.fragments)
     record["net"] = result.net_candidates or None
+    record["topological_net"] = result.topological_candidates or None
+    record["poe_merged"] = result.poe_merged
     if not result.rod_units:
         record["outcome"] = "no_rod"
         record["seconds"] = time.perf_counter() - t0
         return record
     if not result.net_candidates:
-        record["outcome"] = "no_net"
+        # two different failures: the quotient graph matched nothing at
+        # all, or it matched nets whose every run the harvested rod
+        # cannot occupy and the #215 filter emptied the list. Pooling
+        # them as "no_net" over-claimed the identification miss.
+        record["outcome"] = (
+            "rod_incompatible" if result.topological_candidates else "no_net"
+        )
         record["seconds"] = time.perf_counter() - t0
         return record
 

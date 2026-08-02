@@ -75,6 +75,20 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
+Two refinements to rod identification are worth knowing about. First,
+candidates are filtered for **rod compatibility**: a matched net whose
+every channel the harvested rod's screw cannot occupy is removed from
+`net_candidates` (the buildable answer), but stays visible in
+`topological_candidates` (the quotient-graph answer) — the distinction
+between "matched but geometrically impossible for this rod" and
+"matched nothing". Second, when the per-atom PoE convention finds
+nothing rod-compatible, identification retries with a **grouped-PoE
+fallback**: cut endpoints of one rod at the same axial height merged
+into a single point of extension (a paddlewheel ring's four
+carboxylate carbons become one PoE, which is how O'Keeffe counts
+them); `result.poe_merged` records that the fallback answered. The
+fallback never moves a structure the primary convention answers.
+
 Rods get a canonical, screw-aware identity and a buildable form, and
 they can be **built forward again** — for straight and helical rods
 alike, including general (non-180°) screws such as MOF-74's. That is a

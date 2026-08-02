@@ -237,6 +237,21 @@ class Deconstruction:
         fragment, so they appear here instead of ``fragments`` /
         ``units``; in ``quotient_edges`` each rod is replaced by its
         points of extension (see RodUnit).
+    topological_candidates : list[str]
+        The identification consensus BEFORE the rod-compatibility
+        filter (#215). Identical to ``net_candidates`` for finite
+        frameworks; for rod frameworks it may name nets whose channels
+        the harvested rod cannot occupy - a statement about the
+        quotient graph alone, kept so "matched but rod-incompatible"
+        is distinguishable from "matched nothing".
+    poe_merged : bool
+        True when the candidates came from the grouped
+        points-of-extension convention: cut endpoints of one rod at
+        the same axial height merged into a single PoE vertex
+        (O'Keeffe's convention for e.g. paddlewheel chains). Tried
+        only as a fallback when the per-atom convention identifies
+        nothing that survives the rod filter, so existing assignments
+        never silently move.
     """
 
     structure: Structure
@@ -248,6 +263,8 @@ class Deconstruction:
     subframework_nets: list[NetMatches] = field(default_factory=list)
     guest_formulas: list[str] = field(default_factory=list)
     rod_units: list[RodUnit] = field(default_factory=list)
+    topological_candidates: list[str] = field(default_factory=list)
+    poe_merged: bool = False
 
     @property
     def is_catenated(self) -> bool:
@@ -1007,6 +1024,80 @@ def _rod_compatible_nets(
     return kept
 
 
+# Cut endpoints on one rod within this axial distance (Angstroms) are
+# one point of extension under the grouped convention: a paddlewheel
+# ring's four carboxylate carbons sit at one height and O'Keeffe counts
+# them as one PoE, while the per-atom convention gives them four
+# vertices and a quotient no library net matches. Measured on a sample
+# of unidentified rod structures, grouping is insensitive between 0.5
+# and 1.0 A; the value keeps genuinely consecutive PoE (>1 A apart on
+# every rod inspected) distinct.
+POE_MERGE_TOLERANCE = 0.5
+
+
+def _merged_poe_maps(
+    frac: np.ndarray,
+    lattice_matrix: np.ndarray,
+    unwraps: list[dict[int, np.ndarray]],
+    rods: list[RodUnit],
+    rod_unit_indices: list[int],
+    next_vertex: int,
+) -> tuple[dict[int, int], dict[int, np.ndarray], list[tuple[int, int, np.ndarray]]]:
+    """Per-atom PoE maps under the grouped (same-axial-height) convention.
+
+    Returns ``(poe_vertex, poe_images, rod_links)`` in the exact shape
+    ``_unit_quotient`` consumes. Groups are clustered along the axis at
+    ``POE_MERGE_TOLERANCE``; a cluster straddling the repeat boundary is
+    folded onto the first group one lattice generator back, so the wrap
+    link never counts one chemical position twice.
+    """
+    poe_vertex: dict[int, int] = {}
+    poe_images: dict[int, np.ndarray] = {}
+    rod_links: list[tuple[int, int, np.ndarray]] = []
+    for k, rod in zip(rod_unit_indices, rods, strict=True):
+        generator = np.asarray(rod.generator, dtype=int)
+        axis_hat = np.asarray(rod.axis, dtype=float)
+        heights = [
+            float(((frac[atom] + unwraps[k][atom]) @ lattice_matrix) @ axis_hat)
+            for atom in rod.poe_indices
+        ]
+        groups: list[dict] = []
+        for atom, z in zip(rod.poe_indices, heights, strict=True):
+            if groups and z - groups[-1]["z"] <= POE_MERGE_TOLERANCE:
+                groups[-1]["atoms"].append((atom, False))
+            else:
+                groups.append({"z": z, "atoms": [(atom, False)]})
+        if (
+            len(groups) > 1
+            and (heights[0] + rod.repeat_length) - groups[-1]["z"]
+            <= POE_MERGE_TOLERANCE
+        ):
+            for atom, _ in groups[-1]["atoms"]:
+                groups[0]["atoms"].append((atom, True))
+            groups.pop()
+        representatives = []
+        for group in groups:
+            positions = []
+            for atom, wrapped in group["atoms"]:
+                position = frac[atom] + unwraps[k][atom]
+                if wrapped:
+                    position = position - generator
+                positions.append(position)
+            image, _ = _split_image(np.mean(positions, axis=0))
+            for atom, _wrapped in group["atoms"]:
+                poe_vertex[atom] = next_vertex
+                poe_images[atom] = image
+            next_vertex += 1
+            representatives.append(group["atoms"][0][0])
+        if len(representatives) == 1:
+            rod_links.append((representatives[0], representatives[0], generator))
+        else:
+            for a, b in zip(representatives, representatives[1:], strict=False):
+                rod_links.append((a, b, np.zeros(3, dtype=int)))
+            rod_links.append((representatives[-1], representatives[0], generator))
+    return poe_vertex, poe_images, rod_links
+
+
 def _identify_subframeworks(
     subframework_edges: list[Counter[Edge]],
     topologies: Mapping[str, Topology],
@@ -1211,27 +1302,69 @@ def deconstruct(
 
     subframework_nets: list[NetMatches] = []
     net_candidates: list[str] = []
+    topological_candidates: list[str] = []
+    poe_merged = False
     if topologies is not None:
-        subframework_nets, net_candidates = _identify_subframeworks(
-            [
-                _unit_quotient(
-                    cuts,
-                    atom_to_unit,
-                    unwraps,
-                    unit_images,
-                    poe_vertex,
-                    poe_images,
-                    rod_links,
-                    atoms=component,
-                )
-                for component in periodic_components
-            ],
-            topologies,
+
+        def _identify_with(
+            vertex_map: dict[int, int],
+            image_map: dict[int, np.ndarray],
+            links: list[tuple[int, int, np.ndarray]],
+        ) -> tuple[list[NetMatches], list[str]]:
+            return _identify_subframeworks(
+                [
+                    _unit_quotient(
+                        cuts,
+                        atom_to_unit,
+                        unwraps,
+                        unit_images,
+                        vertex_map,
+                        image_map,
+                        links,
+                        atoms=component,
+                    )
+                    for component in periodic_components
+                ],
+                topologies,
+            )
+
+        subframework_nets, net_candidates = _identify_with(
+            poe_vertex, poe_images, rod_links
         )
+        topological_candidates = list(net_candidates)
         if rods:
             net_candidates = _rod_compatible_nets(
                 structure, rods, net_candidates, topologies
             )
+            if not net_candidates:
+                # fallback tier: the per-atom PoE convention found
+                # nothing the rod filter accepts, so retry with cut
+                # endpoints grouped by axial height (a paddlewheel
+                # ring's four carboxylate carbons become ONE point of
+                # extension, which is how O'Keeffe counts them).
+                # Fallback only - a structure the primary convention
+                # answers, buildably, never moves.
+                merged_maps = _merged_poe_maps(
+                    frac,
+                    structure.lattice.matrix,
+                    unwraps,
+                    rods,
+                    sorted(rod_indices),
+                    len(units),
+                )
+                if len(merged_maps[0]) > len(set(merged_maps[0].values())):
+                    merged_nets, merged_candidates = _identify_with(*merged_maps)
+                    if merged_candidates:
+                        subframework_nets = merged_nets
+                        topological_candidates = list(merged_candidates)
+                        poe_merged = True
+                        logger.info(
+                            "\t[x] grouped points-of-extension tier "
+                            f"matched: {', '.join(merged_candidates)}."
+                        )
+                        net_candidates = _rod_compatible_nets(
+                            structure, rods, merged_candidates, topologies
+                        )
 
     return Deconstruction(
         structure=structure,
@@ -1243,4 +1376,6 @@ def deconstruct(
         n_periodic_components=n_periodic,
         subframework_nets=subframework_nets,
         guest_formulas=sorted(guest_formulas),
+        topological_candidates=topological_candidates,
+        poe_merged=poe_merged,
     )

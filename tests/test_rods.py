@@ -2401,6 +2401,60 @@ class TestSingleUnitContact:
         assert math.isfinite(build.min_inter_unit_contact(placed))
 
 
+class TestMergedPoeMaps:
+    """The grouped points-of-extension convention (fallback tier).
+
+    A paddlewheel-chain rod carries several cut atoms at one axial
+    height; O'Keeffe counts them as one point of extension, the
+    per-atom convention as several. The grouped maps must cluster by
+    height, fold a cluster straddling the repeat boundary back one
+    generator, and keep the chain-plus-wrap link structure.
+    """
+
+    @staticmethod
+    def _maps(heights, repeat=10.0):
+        from autografs.deconstruct import _merged_poe_maps
+
+        lattice = np.diag([repeat, repeat, repeat])
+        frac = np.array([[0.0, 0.0, z / repeat] for z in heights])
+        order = sorted(range(len(heights)), key=lambda i: heights[i])
+        rod = RodUnit(
+            atom_indices=list(range(len(heights))),
+            axis=np.array([0.0, 0.0, 1.0]),
+            repeat_length=repeat,
+            generator=(0, 0, 1),
+            poe_indices=order,
+            n_connections=len(heights),
+            cut_vectors=[],
+            internal_bonds=[],
+        )
+        unwraps = [{i: np.zeros(3) for i in range(len(heights))}]
+        return _merged_poe_maps(frac, lattice, unwraps, [rod], [0], next_vertex=1)
+
+    def test_same_height_atoms_share_a_vertex(self):
+        vertex, _images, links = self._maps([1.0, 1.2, 6.0, 6.1])
+        assert vertex[0] == vertex[1]
+        assert vertex[2] == vertex[3]
+        assert vertex[0] != vertex[2]
+        # two groups: one intra-cell link plus the wrap link
+        voltages = sorted(tuple(int(x) for x in v) for _a, _b, v in links)
+        assert voltages == [(0, 0, 0), (0, 0, 1)]
+
+    def test_wraparound_cluster_folds_back(self):
+        vertex, _images, links = self._maps([0.1, 5.0, 9.8])
+        # 9.8 sits within tolerance of 0.1 one repeat up: same vertex
+        assert vertex[2] == vertex[0]
+        assert vertex[1] != vertex[0]
+        assert len(set(vertex.values())) == 2
+
+    def test_single_group_becomes_a_self_loop(self):
+        vertex, _images, links = self._maps([2.0, 2.3])
+        assert len(set(vertex.values())) == 1
+        (a, b, voltage) = links[0]
+        assert a == b
+        assert tuple(int(x) for x in voltage) == (0, 0, 1)
+
+
 class TestRodNetCompatibility:
     """#214: identification must not offer nets a rod cannot occupy.
 
@@ -2445,4 +2499,34 @@ class TestRodNetCompatibility:
 
         assert rod_fits_topology(
             bundled_topologies["pcu"], screw_order=1, screw_angle=0.0
+        )
+
+    def test_turning_multinode_straight_run_accepts_matching_screw(
+        self, bundled_topologies
+    ):
+        """The filter must agree with the builder on cds-class nets.
+
+        cds carries no helical run (its nodes sit on the axis, so a
+        positional screw fit is degenerate) but chains two 4-connected
+        nodes per period turned 90 degrees apart, and _select_runs
+        accepts - and validates - a 4_1 rod on that straight run. An
+        earlier filter refused every straight run at screw order > 2,
+        so a real 4_1-rod material correctly identified as cds would
+        have been reported as having no rod-compatible net.
+        """
+        from autografs.rod_build import rod_fits_topology
+
+        cds = bundled_topologies["cds"]
+        assert rod_fits_topology(cds, screw_order=4, screw_angle=90.0)
+        # the same run does not host a screw its node turn cannot match
+        assert not rod_fits_topology(cds, screw_order=6, screw_angle=60.0)
+
+    def test_single_node_straight_run_refuses_high_screw(self, bundled_topologies):
+        """pcu's one-node runs cannot turn with a 4_1 screw; the
+        builder's closure gate would reject that build, and the filter
+        must predict the same outcome."""
+        from autografs.rod_build import rod_fits_topology
+
+        assert not rod_fits_topology(
+            bundled_topologies["pcu"], screw_order=4, screw_angle=90.0
         )
