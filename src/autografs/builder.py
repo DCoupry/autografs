@@ -81,18 +81,79 @@ NELDER_MEAD_MAXITER = 100
 CLOSURE_REGRESSION_TOLERANCE = 0.2
 
 
-def _refine(plan, x0, objective=None):
+# Initial-simplex step for slot-displacement coordinates, in Angstroms
+# (the displacement bases are metric-orthonormalized, so a step IS a
+# distance). scipy seeds coordinates that start at exactly zero with
+# zdelt = 0.00025 - four orders of magnitude below both the cell
+# coordinates' steps and NELDER_MEAD_XATOL - and every displacement
+# starts at exactly zero, so by default the displacement block of the
+# simplex is born nearly degenerate and Nelder-Mead explores it slowly
+# or not at all.
+#
+# Deliberately applied ONLY to the closure-only guard reference, not to
+# the main relaxed solve. Seeding the main solve lets it reach the
+# relaxed objective's true optimum, and on shape-mismatched nets that
+# optimum IS the #197 pathology (measured here: pts x2.88 cell, etb-e
+# x1.58, guard-passing closure) - the shipped DIRECTION_WEIGHT was
+# calibrated against the hobbled explorer, so un-hobbling it without
+# recalibrating the weight re-opens the very failure #197 closed. The
+# closure-only reference is safe to seed: it starts AT the fixed-slot
+# solution and minimizes pure closure, so it can only refine that
+# solution locally, and unseeded it under-converged so badly it lost to
+# a solution its feasible set strictly contains.
+DISPLACEMENT_SIMPLEX_STEP = 0.25
+
+# Whether the MAIN relaxed solve gets the displacement-seeded simplex.
+# Off, by measurement, and not pending a better weight: the seeded
+# sweep (scripts/benchmarks/calibrate_direction_weight.py, first 600
+# CoRE MOF 2025, weights 0.1-2.0) found that at EVERY weight the seeded
+# explorer's optimum on shape-mismatched nets is the #197 pathology
+# (pts x2.9, tbo x2.3, at guard-passing closure - the relaxed candidate
+# closes acceptably, so no closure budget catches it), and no volume
+# screen separates that from genuine corrections (the corpus's largest
+# real win inflates x1.69; the etb-e pathology sits at x1.56). The
+# working design splits the explorers instead: unseeded for the relaxed
+# objective, seeded-from-the-fixed-solution for the closure-only
+# reference. The calibration driver flips this per arm.
+SEED_MAIN_SOLVE = False
+
+
+def _displacement_simplex(plan, x0) -> np.ndarray | None:
+    """A simplex whose displacement steps are bond-scale, not zdelt."""
+    if not plan.n_slot_free:
+        return None
+    x0 = np.asarray(x0, dtype=float)
+    n_cell = plan.cell_param.n_free
+    vertices = [x0]
+    for index in range(x0.size):
+        vertex = x0.copy()
+        if index < n_cell:
+            # scipy's own rule for the cell block, reproduced so the
+            # explicit simplex does not change behaviour there
+            vertex[index] += 0.05 * vertex[index] if vertex[index] else 0.00025
+        else:
+            vertex[index] += DISPLACEMENT_SIMPLEX_STEP
+        vertices.append(vertex)
+    return np.asarray(vertices)
+
+
+def _refine(plan, x0, objective=None, seed_displacements=False):
     """Nelder-Mead over a plan's free parameters."""
     n_free = plan.cell_param.n_free + plan.n_slot_free
+    options = {
+        "xatol": NELDER_MEAD_XATOL,
+        "fatol": NELDER_MEAD_FATOL,
+        "maxiter": NELDER_MEAD_MAXITER * n_free,
+    }
+    if seed_displacements:
+        simplex = _displacement_simplex(plan, x0)
+        if simplex is not None:
+            options["initial_simplex"] = simplex
     result = minimize(
         plan.residual if objective is None else objective,
         x0,
         method="Nelder-Mead",
-        options={
-            "xatol": NELDER_MEAD_XATOL,
-            "fatol": NELDER_MEAD_FATOL,
-            "maxiter": NELDER_MEAD_MAXITER * n_free,
-        },
+        options=options,
     )
     return result.x
 
@@ -185,13 +246,14 @@ def build_framework(
         empty_slots=empty_slots,
     )
     x0 = plan.initial_parameters()
+    relaxation_report: dict | None = None
     if refine_cell and plan.has_pairs:
         # Nelder-Mead on the bond-length pair residual over the
         # crystal system's free parameters only (a cubic net
         # optimizes a single length) plus, under embedding
         # relaxation, the slot displacements; the objective is pure
         # numpy, no object copies per evaluation
-        best_parameters = _refine(plan, x0)
+        best_parameters = _refine(plan, x0, seed_displacements=SEED_MAIN_SOLVE)
         if plan.n_slot_free:
             # freeing the slots must not COST closure (#197). The
             # relaxed objective carries the anchor-direction terms as
@@ -214,10 +276,25 @@ def build_framework(
             # of #174 (measured on the corpus: bond residual 0.091 ->
             # 0.214 A for a 5x better volume ratio), so only a
             # regression past CLOSURE_REGRESSION_TOLERANCE is refused.
+            fixed_parameters = _refine_cell_only(plan, x0)
             candidates = [
                 ("relaxed", best_parameters),
-                ("closure-only", _refine(plan, x0, objective=plan.closure_residual)),
-                ("fixed-slot", _refine_cell_only(plan, x0)),
+                # started from the FIXED-SLOT solution, not x0: its
+                # feasible set contains that solution (displacements at
+                # zero are admissible), so from this start it can only
+                # match or beat the reference. From x0 it routinely
+                # under-converged and lost to the reference it strictly
+                # contains, which quietly disarmed this candidate.
+                (
+                    "closure-only",
+                    _refine(
+                        plan,
+                        fixed_parameters,
+                        objective=plan.closure_residual,
+                        seed_displacements=True,
+                    ),
+                ),
+                ("fixed-slot", fixed_parameters),
             ]
             scored = [
                 (name, params, float(plan.closure_deviations(params).max()))
@@ -225,15 +302,21 @@ def build_framework(
             ]
             relaxed_worst = scored[0][2]
             budget = min(worst for _, _, worst in scored) + CLOSURE_REGRESSION_TOLERANCE
+            kept = "relaxed"
             if relaxed_worst > budget:
-                name, best_parameters, worst = min(scored[1:], key=lambda s: s[2])
+                kept, best_parameters, worst = min(scored[1:], key=lambda s: s[2])
                 logger.debug(
                     f"Embedding relaxation on {topology.name!r} closed to "
                     f"{relaxed_worst:.3f} A, past the "
                     f"{CLOSURE_REGRESSION_TOLERANCE:.2f} A budget over the "
-                    f"best reference; keeping the {name} solution "
+                    f"best reference; keeping the {kept} solution "
                     f"({worst:.3f} A)."
                 )
+            relaxation_report = {
+                "n_slot_free": plan.n_slot_free,
+                "kept": kept,
+                "closure_scores": {name: worst for name, _, worst in scored},
+            }
     else:
         if verbose:
             logger.info("\t[x] No cell refinement performed.")
@@ -281,6 +364,19 @@ def build_framework(
         # verify_net contracts these on the blueprint side, and
         # framework_io / replicated_graph keep the marker alive
         graph.graph["empty_slots"] = list(empty_slots)
+    if relax_embedding:
+        # diagnostic, not a schema commitment: which candidate the
+        # closure guard kept and at what worst-bond score, plus the
+        # EFFECTIVE freedom after empty-slot pinning. n_slot_free == 0
+        # means relaxation was requested and disabled -- without this
+        # marker that build is indistinguishable from a guard rejection,
+        # and a corpus analysis stratified on the blueprint's own count
+        # misattributed exactly that population (the paper's #174 arm).
+        graph.graph["relaxation"] = relaxation_report or {
+            "n_slot_free": plan.n_slot_free,
+            "kept": "fixed-slot" if plan.n_slot_free == 0 else "unrefined",
+            "closure_scores": None,
+        }
     framework = Framework(graph, name=topology.name)
     if min_distance is not None:
         contact = framework.min_contact(cutoff=min_distance)
