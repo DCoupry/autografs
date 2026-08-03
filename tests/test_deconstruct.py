@@ -782,6 +782,42 @@ class TestRodSelfTemplate:
     - the last library wall, removed for the single-rod case.
     """
 
+    def test_node_slots_sit_on_the_rods_own_axis(self, mofgen):
+        """A run node centre must lie on the rod's axis line.
+
+        The builder can only rotate the rod about the run axis and
+        slide it along: a node centre off that line is unreachable
+        geometry, and no (theta, z0) recovers it. Taking the centre as
+        the centroid of the points of extension put it 7.6-8.0 A off
+        the axis on real corpus rods - they are transverse to it, and
+        home-gauge wrapping moves them further - which left the rod ~6 A
+        from its own crystal position with bonds 3-7 A long.
+        """
+        import numpy as np
+
+        from autografs.extract_topology import rod_topology_from_deconstruction
+        from autografs.rods import _local_positions
+
+        result = mofgen.deconstruct(_rod_pillar_structure(1))
+        rod_unit = result.rod_units[0]
+        axis = np.asarray(rod_unit.axis, dtype=float)
+        axis = axis / np.linalg.norm(axis)
+        unwrapped = _local_positions(
+            result.structure,
+            rod_unit.atom_indices,
+            rod_unit.atom_indices[0],
+            rod_unit.internal_bonds,
+        )
+        centroid = unwrapped.mean(axis=0)
+        topology, run, _lateral_mapping, _fragment = rod_topology_from_deconstruction(
+            result
+        )
+        for slot_index in run.slots:
+            centre = np.asarray(topology.slots[slot_index].atoms[0].coords, dtype=float)
+            offset = centre - centroid
+            perpendicular = offset - np.dot(offset, axis) * axis
+            assert np.linalg.norm(perpendicular) == pytest.approx(0.0, abs=1e-6)
+
     def test_pillar_rebuilds_on_its_own_run(self, mofgen):
         import copy
 
