@@ -280,7 +280,9 @@ def _node_slots(topology: Topology, run: SlotRun | HelicalRun) -> list[int]:
     if run.nodes is not None:
         return list(run.nodes)
     return [
-        s for s in run.slots if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        s
+        for s in run.slots
+        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
     ]
 
 
