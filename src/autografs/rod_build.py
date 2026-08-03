@@ -256,11 +256,20 @@ def _unwrapped_run_positions(
 
 
 def _node_slots(topology: Topology, run: SlotRun | HelicalRun) -> list[int]:
-    """The run's point-of-extension slots (more than two connections)."""
+    """The run's point-of-extension slots.
+
+    A detected run alternates nodes with 2-connected edge centers, so
+    carrying more than two connections is what marks a node. A run that
+    knows its own nodes says so and is believed: a hand-built run - a
+    structure's own blueprint, say - has no edge centers to tell apart,
+    and a repeat binding only two laterals looks exactly like one under
+    the convention. Reading it literally there dropped real nodes and
+    collapsed the repeat arithmetic.
+    """
+    if run.nodes is not None:
+        return list(run.nodes)
     return [
-        s
-        for s in run.slots
-        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        s for s in run.slots if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
     ]
 
 

@@ -756,11 +756,19 @@ class SlotRun:
         smallest index.
     period : float
         Length of one period along the axis (|direction @ cell|).
+    nodes : tuple[int, ...] or None
+        The run's point-of-extension slots, when the caller knows them.
+        Detection leaves this None and rod building infers them from
+        the blueprint convention (a node out-connects the 2-connected
+        edge centers between them). A hand-built run - a structure's
+        own blueprint, say - has no edge centers to tell apart and
+        every slot on it is a node, which the convention cannot see.
     """
 
     direction: tuple[int, int, int]
     slots: tuple[int, ...]
     period: float
+    nodes: tuple[int, ...] | None = None
 
 
 def axial_runs(
@@ -898,6 +906,9 @@ class HelicalRun:
     axis_point : tuple[float, float, float]
         A cartesian point the screw axis line passes through (the
         perpendicular centroid of one period's node slots).
+    nodes : tuple[int, ...] or None
+        The run's point-of-extension slots when the caller knows them;
+        see :class:`SlotRun`.
     """
 
     direction: tuple[int, int, int]
@@ -906,6 +917,7 @@ class HelicalRun:
     screw_angle: float
     screw_order: int
     axis_point: tuple[float, float, float]
+    nodes: tuple[int, ...] | None = None
 
 
 def _directed_steps(
