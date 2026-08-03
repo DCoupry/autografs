@@ -426,13 +426,47 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
         )
         lateral_mapping[len(slots) - 1] = building_unit.name
 
+    # one node slot per CHEMICAL repeat, not per PoE atom. The builder's
+    # node convention filters slots with two or fewer connection points
+    # (a run "node" must out-connect an edge center), and a real rod's
+    # individual points of extension usually carry one or two cuts each
+    # - per-atom slots emptied every run and the repeat arithmetic
+    # divided by zero (measured: 181 of the 215 single-rod corpus
+    # attempts). Binning the PoE atoms by axial position into one bin
+    # per chemical repeat aggregates each repeat's cuts into one slot,
+    # which simultaneously clears the filter and makes the node count
+    # equal screw_order, the helical builder's expectation.
+    fragment = _rod_fragment(result.structure, rod_unit, name="self_rod")
+    n_bins = max(1, int(fragment.repeat.screw_order))
+    axis_hat = np.asarray(rod_unit.axis, dtype=float)
+    heights = {
+        atom: float(np.dot(poe_carts[atom], axis_hat)) for atom, _pos in poe_entries
+    }
+    z_min = min(heights.values())
+    chemical = float(rod_unit.repeat_length) / n_bins
+    bins: list[list[int]] = [[] for _ in range(n_bins)]
+    for atom, _pos in poe_entries:
+        index = int(np.floor((heights[atom] - z_min) / chemical + 1e-6))
+        bins[min(max(index, 0), n_bins - 1)].append(atom)
+
     run_slots: list[int] = []
-    for atom, pos in poe_entries:
-        connections = poe_cuts[atom]
-        if not connections:
-            raise TopologyExtractionError(f"Point of extension {atom} carries no cut.")
-        center = lattice.get_cartesian_coords(np.asarray(pos, dtype=float))
-        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
+    for bin_index, members in enumerate(bins):
+        if not members:
+            raise TopologyExtractionError(
+                f"Chemical repeat {bin_index} holds no point of "
+                "extension; the axial binning does not describe this rod."
+            )
+        connections = [
+            (cut_index, mid) for atom in members for cut_index, mid in poe_cuts[atom]
+        ]
+        if len(connections) <= 2:
+            raise TopologyExtractionError(
+                f"Chemical repeat {bin_index} carries "
+                f"{len(connections)} connection(s); the rod builder's "
+                "node convention needs more than two per repeat."
+            )
+        center = np.mean([poe_carts[atom] for atom in members], axis=0)
+        species = [get_el_sp(min(len(connections), 118))] + ["X"] * len(connections)
         carts = [center] + [
             lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
             for _index, mid in connections
@@ -441,7 +475,7 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
         slots.append(
             Fragment(
                 atoms=Molecule(species, carts, site_properties={"tags": tags}),
-                name=f"poe_{atom}",
+                name=f"repeat_{bin_index}",
             )
         )
         run_slots.append(len(slots) - 1)
@@ -455,7 +489,6 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
         is_2d=False,
     )
 
-    fragment = _rod_fragment(result.structure, rod_unit, name="self_rod")
     direction = (
         int(rod_unit.generator[0]),
         int(rod_unit.generator[1]),
