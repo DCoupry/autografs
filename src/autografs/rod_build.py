@@ -1874,19 +1874,36 @@ def build_rod_framework(
     # library-net heuristic
     build.initial_scale = initial_scale
 
-    # optimize: coarse rotation grid per axis family (a full product
-    # grid would be 16^families), then refine everything with Nelder-Mead
+    # optimize: coarse (rotation, axial phase) grid per axis family - a
+    # full product grid over families would be 16^families - then refine
+    # everything with Nelder-Mead. The two are swept TOGETHER because
+    # which arm meets which linker depends on both; the phase spans one
+    # chemical repeat, beyond which the placed rod maps onto itself, and
+    # the offsets are relative to initial_guess so its heuristic
+    # placement stays among the candidates. Sweeping the phase only pays
+    # once the node slots are ON the run axis: while a self-blueprint put
+    # them transverse to it the crystal's placement was unreachable at
+    # every start, and this grid moved a 6 A error by 0.1 A.
     def solve() -> Any:
         start = build.initial_guess()
+        angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+        phases = np.linspace(
+            0.0, float(build.rod.repeat.repeat_length), 8, endpoint=False
+        )
         for family in range(build.n_families):
-            angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+            base_z = float(start[2 + 2 * family])
 
-            def value_at(angle: float, family: int = family) -> float:
+            def value_at(
+                candidate: tuple[float, float], family: int = family, z: float = base_z
+            ) -> float:
                 trial = start.copy()
-                trial[1 + 2 * family] = angle
+                trial[1 + 2 * family] = candidate[0]
+                trial[2 + 2 * family] = z + candidate[1]
                 return build.objective(trial)
 
-            start[1 + 2 * family] = min(angles, key=value_at)
+            angle, phase = min(((a, p) for a in angles for p in phases), key=value_at)
+            start[1 + 2 * family] = angle
+            start[2 + 2 * family] = base_z + phase
         return minimize(
             build.objective,
             start,
