@@ -70,9 +70,7 @@ def selftemplate_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
     record["n_fragment_types"] = len(result.fragments)
     record["fold"] = result.n_periodic_components
     if result.rod_units:
-        record["outcome"] = "skipped_rod"
-        record["seconds"] = time.perf_counter() - start
-        return record
+        return _rod_selftemplate(mofgen, result, record, start)
     # catenated structures are IN scope: the recipe holds every
     # component's units, so the erected blueprint is a disconnected
     # quotient whose nets share the one real cell at their true
@@ -116,6 +114,83 @@ def selftemplate_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
     record["bond_residual"] = bond_residuals(framework)
     matched = (
         built.composition.reduced_formula == experimental.composition.reduced_formula
+    )
+    record["formula"] = built.composition.reduced_formula
+    record["experimental_formula"] = experimental.composition.reduced_formula
+    record["outcome"] = "closed_self" if matched else "composition_mismatch"
+    record["seconds"] = time.perf_counter() - start
+    return record
+
+
+def _rod_selftemplate(mofgen: Autografs, result, record: dict, start: float) -> dict:
+    """The rod arm: rebuild on the crystal's own slot run.
+
+    Single rod, single periodic component only (the multi-rod and
+    catenated-rod cases await their own increment). Closure gates on
+    composition and whole-supercell atom count - the builder stacks at
+    least two repeats - with per-atom packing recorded; exact net
+    verification is attempted and recorded, not gating, because the
+    rod-form verifier re-detects runs on the blueprint instead of
+    trusting the injected one and is known-conservative on distorted
+    self-blueprints (coverage plan, rod self-templates).
+    """
+    from autografs.extract_topology import rod_topology_from_deconstruction
+
+    if len(result.rod_units) != 1 or result.n_periodic_components != 1:
+        record["outcome"] = "skipped_multirod"
+        record["seconds"] = time.perf_counter() - start
+        return record
+    try:
+        topology, run, lateral_mapping, fragment = rod_topology_from_deconstruction(
+            result
+        )
+    except (TopologyExtractionError, AutografsError, ValueError) as exc:
+        record["outcome"] = "no_blueprint"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["seconds"] = time.perf_counter() - start
+        return record
+    laterals = {
+        index: copy.deepcopy(result.fragments[name])
+        for index, name in lateral_mapping.items()
+    }
+    from autografs.rod_build import build_rod_framework
+
+    try:
+        framework = build_rod_framework(
+            topology,
+            fragment,
+            laterals,
+            run=run,
+            min_distance=None,
+            bond_tolerance=10.0,
+            verify_net=False,
+        )
+    except AutografsError as exc:
+        record["outcome"] = "build_failed"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["seconds"] = time.perf_counter() - start
+        return record
+    except Exception as exc:  # noqa: BLE001 - a build bug is data
+        record["outcome"] = "build_failed"
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["seconds"] = time.perf_counter() - start
+        return record
+    built = framework.structure
+    experimental = result.structure
+    record["rod"] = True
+    record["volume_ratio"] = (built.volume / len(built)) / (
+        experimental.volume / len(experimental)
+    )
+    record["min_contact"] = framework.min_contact()
+    record["bond_residual"] = bond_residuals(framework)
+    try:
+        framework.verify_net(topology)
+        record["net_verified"] = True
+    except AutografsError:
+        record["net_verified"] = False
+    matched = (
+        built.composition.reduced_formula == experimental.composition.reduced_formula
+        and len(built) % len(experimental) == 0
     )
     record["formula"] = built.composition.reduced_formula
     record["experimental_formula"] = experimental.composition.reduced_formula

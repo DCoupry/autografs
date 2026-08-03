@@ -49,7 +49,11 @@ from autografs.topology import Topology
 if TYPE_CHECKING:
     from autografs.deconstruct import Deconstruction
 
-__all__ = ["topology_from_deconstruction", "topology_from_tetrahedral"]
+__all__ = [
+    "rod_topology_from_deconstruction",
+    "topology_from_deconstruction",
+    "topology_from_tetrahedral",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -319,3 +323,159 @@ def topology_from_deconstruction(
         ),
         mapping,
     )
+
+
+def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-rod"):
+    """The rod structure's own blueprint, its run, and its mappings.
+
+    The slot-run counterpart of ``topology_from_deconstruction``
+    (coverage plan, rod self-templates): the single rod's points of
+    extension become node slots along the crystal's own axis, finite
+    units become lateral slots, and the run handed back is built
+    directly from the rod's measured geometry - no run detection, no
+    library. ``build_rod_framework(topology, rod_fragment, laterals,
+    run=run)`` then reuses the validated rod builder unchanged.
+
+    Returns
+    -------
+    tuple
+        ``(topology, run, lateral_mapping)`` where ``run`` is a
+        ``SlotRun`` (screwless rod) or ``HelicalRun`` (its screw from
+        the rod's own canonical repeat) and ``lateral_mapping`` maps
+        lateral slot index -> fragment name (the identity assignment).
+
+    Raises
+    ------
+    TopologyExtractionError
+        For structures without exactly one rod and one periodic
+        component (the multi-rod and catenated-rod cases await their
+        own increment), or when a cut cannot be attributed to a point
+        of extension unambiguously.
+    """
+    from autografs.net import HelicalRun, SlotRun
+    from autografs.rods import rod_fragment as _rod_fragment
+
+    recipe = result.blueprint
+    if recipe is None or not recipe.rod_poe:
+        raise TopologyExtractionError("No rod recipe on this deconstruction.")
+    if len(result.rod_units) != 1 or result.n_periodic_components != 1:
+        raise TopologyExtractionError(
+            "Rod self-templates currently take exactly one rod and one "
+            "periodic component."
+        )
+    (rod_index, poe_entries), *_ = recipe.rod_poe.items()
+    rod_unit = result.rod_units[0]
+    lattice = result.structure.lattice
+
+    # attribute each rod-end cut to its point of extension: the
+    # midpoint sits half a bond from its own anchor and full bond
+    # lengths from any other PoE atom, so nearest-position wins; an
+    # ambiguous case is refused, not guessed
+    poe_carts = {
+        atom: lattice.get_cartesian_coords(np.asarray(pos, dtype=float))
+        for atom, pos in poe_entries
+    }
+    unit_is_rod = [center is None for center in recipe.centers]
+
+    def poe_of(mid_frac: tuple) -> int:
+        mid = lattice.get_cartesian_coords(np.asarray(mid_frac, dtype=float))
+        ranked = sorted(
+            poe_carts, key=lambda atom: float(np.linalg.norm(poe_carts[atom] - mid))
+        )
+        if len(ranked) > 1:
+            best = float(np.linalg.norm(poe_carts[ranked[0]] - mid))
+            runner = float(np.linalg.norm(poe_carts[ranked[1]] - mid))
+            if runner - best < 0.2:
+                raise TopologyExtractionError(
+                    f"Ambiguous cut-to-PoE attribution ({best:.2f} vs {runner:.2f} A)."
+                )
+        return ranked[0]
+
+    poe_cuts: dict[int, list[tuple[int, tuple]]] = {atom: [] for atom, _ in poe_entries}
+    lateral_cuts: dict[int, list[tuple[int, tuple]]] = {}
+    for cut_index, (unit_a, unit_b, mid_a, mid_b) in enumerate(recipe.cuts):
+        for unit, mid in ((unit_a, mid_a), (unit_b, mid_b)):
+            if unit_is_rod[unit]:
+                poe_cuts[poe_of(mid)].append((cut_index, mid))
+            else:
+                lateral_cuts.setdefault(unit, []).append((cut_index, mid))
+
+    slots: list[Fragment] = []
+    lateral_mapping: dict[int, str] = {}
+    # recipe indices follow the RAW unit partition (rod included);
+    # result.units is the compacted finite list in the same order
+    finite_raw = [index for index, is_rod in enumerate(unit_is_rod) if not is_rod]
+    for k, building_unit in zip(finite_raw, result.units, strict=True):
+        connections = lateral_cuts.get(k, [])
+        if not connections:
+            raise TopologyExtractionError(
+                f"Lateral unit {k} ({building_unit.name}) carries no cut bond."
+            )
+        center = np.asarray(recipe.centers[k], dtype=float)
+        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
+        frac_coords = [center] + [
+            np.asarray(mid, dtype=float) for _index, mid in connections
+        ]
+        carts = [lattice.get_cartesian_coords(fc) for fc in frac_coords]
+        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
+        slots.append(
+            Fragment(
+                atoms=Molecule(species, carts, site_properties={"tags": tags}),
+                name=f"slot_{k}",
+            )
+        )
+        lateral_mapping[len(slots) - 1] = building_unit.name
+
+    run_slots: list[int] = []
+    for atom, pos in poe_entries:
+        connections = poe_cuts[atom]
+        if not connections:
+            raise TopologyExtractionError(f"Point of extension {atom} carries no cut.")
+        center = lattice.get_cartesian_coords(np.asarray(pos, dtype=float))
+        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
+        carts = [center] + [
+            lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
+            for _index, mid in connections
+        ]
+        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
+        slots.append(
+            Fragment(
+                atoms=Molecule(species, carts, site_properties={"tags": tags}),
+                name=f"poe_{atom}",
+            )
+        )
+        run_slots.append(len(slots) - 1)
+
+    topology = Topology(
+        name=name,
+        slots=slots,
+        cell=lattice,
+        equivalence_classes=list(range(len(slots))),
+        spacegroup_number=1,
+        is_2d=False,
+    )
+
+    fragment = _rod_fragment(result.structure, rod_unit, name="self_rod")
+    direction = (
+        int(rod_unit.generator[0]),
+        int(rod_unit.generator[1]),
+        int(rod_unit.generator[2]),
+    )
+    period = float(rod_unit.repeat_length)
+    if fragment.repeat.screw_order > 1:
+        axis_point = np.mean([poe_carts[atom] for atom, _ in poe_entries], axis=0)
+        run: SlotRun | HelicalRun = HelicalRun(
+            direction=direction,
+            slots=tuple(run_slots),
+            period=period,
+            screw_angle=float(fragment.repeat.screw_angle),
+            screw_order=int(fragment.repeat.screw_order),
+            axis_point=(
+                float(axis_point[0]),
+                float(axis_point[1]),
+                float(axis_point[2]),
+            ),
+        )
+    else:
+        run = SlotRun(direction=direction, slots=tuple(run_slots), period=period)
+    return topology, run, lateral_mapping, fragment
