@@ -454,7 +454,16 @@ def _species_of(linker: Fragment) -> _Species:
     anchor_rows = _linker_anchor_rows(linker)
     symbols = [site.specie.symbol for site in linker.atoms]
     center = coords[dummy_rows].mean(axis=0)
-    arm_units = _unit_rows(coords[dummy_rows] - center)
+    arms = coords[dummy_rows] - center
+    if len(dummy_rows) == 1:
+        # a monotopic cap has no dummy spread to measure an arm against:
+        # the dummy centroid IS its one dummy, so the difference above is
+        # zero. The direction that orients it is the one its own bond
+        # points along, anchor -> dummy. Rod self-templates raise these
+        # routinely - a solvent capping the rod is a building unit like
+        # any other, where a harvested library drops monotopic caps.
+        arms = coords[dummy_rows] - coords[anchor_rows]
+    arm_units = _unit_rows(arms)
     relief_axis = None
     if len(dummy_rows) == 2 and -arm_units[0] @ arm_units[1] > RELIEF_COLLINEAR_DOT:
         # a straight ditopic linker: its anchors sit on the arm axis, so
