@@ -73,12 +73,10 @@ def selftemplate_one(mofgen: Autografs, source, max_rmsd: float) -> dict:
         record["outcome"] = "skipped_rod"
         record["seconds"] = time.perf_counter() - start
         return record
-    if result.n_periodic_components > 1:
-        # one blueprint would hold every catenated component; the build
-        # core places one connected net. Out of scope for this arm.
-        record["outcome"] = "skipped_catenated"
-        record["seconds"] = time.perf_counter() - start
-        return record
+    # catenated structures are IN scope: the recipe holds every
+    # component's units, so the erected blueprint is a disconnected
+    # quotient whose nets share the one real cell at their true
+    # relative offset, and the build places all of them together
     try:
         topology, mapping = topology_from_deconstruction(result)
     except TopologyExtractionError as exc:

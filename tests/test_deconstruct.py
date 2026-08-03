@@ -699,3 +699,68 @@ class TestSelfTemplatedRoundTrip:
         assert result.blueprint is None
         with pytest.raises(TopologyExtractionError, match="rod"):
             topology_from_deconstruction(result)
+
+
+def _catenated_pcu_pair() -> Structure:
+    """Two interpenetrated single-bridged pcu nets, offset body-center.
+
+    Each net is one Zn plus two-carbon bridges along x, y and z; the
+    second net is the first translated by (1/2, 1/2, 1/2). The closest
+    inter-net contact is ~4 A, so bond perception keeps the components
+    separate and the deconstruction reports fold 2.
+    """
+    a = 5.6
+    lo, hi = 2.1, 3.5
+    base = [
+        (0.0, 0.0, 0.0),
+        (lo, 0.0, 0.0),
+        (hi, 0.0, 0.0),
+        (0.0, lo, 0.0),
+        (0.0, hi, 0.0),
+        (0.0, 0.0, lo),
+        (0.0, 0.0, hi),
+    ]
+    shift = a / 2
+    species = (["Zn"] + ["C"] * 6) * 2
+    carts = base + [(x + shift, y + shift, z + shift) for x, y, z in base]
+    return Structure(Lattice.cubic(a), species, carts, coords_are_cartesian=True)
+
+
+class TestCatenatedSelfTemplate:
+    """A 2-fold interpenetrated pair rebuilds from its own blueprint.
+
+    The recipe holds every component's units, so the erected blueprint
+    is a disconnected quotient whose two nets share the one real cell
+    at their true relative offset; the build places both and the exact
+    verification compares like with like. This is what the library arm
+    structurally cannot do - it rebuilds one net of a catenated pair
+    and fails the composition gate.
+    """
+
+    def test_two_fold_pair_closes(self, mofgen):
+        import copy
+
+        from autografs.builder import build_framework
+        from autografs.extract_topology import topology_from_deconstruction
+
+        result = mofgen.deconstruct(_catenated_pcu_pair())
+        assert result.n_periodic_components == 2
+        topology, mapping = topology_from_deconstruction(result)
+        # one Zn node and three two-carbon bridges per net, two nets
+        assert len(topology) == len(result.units) == 8
+        mappings = {
+            index: copy.deepcopy(result.fragments[name])
+            for index, name in mapping.items()
+        }
+        rebuilt = build_framework(topology, mappings, max_rmsd=0.5, verify_net=True)
+        assert (
+            rebuilt.structure.composition.reduced_formula
+            == result.structure.composition.reduced_formula
+        )
+        assert len(rebuilt) == len(result.structure)
+        # the fixture's synthetic Zn-C bonds (2.1 A) sit above the
+        # covalent target the cell objective optimizes toward, so the
+        # rebuilt cell is correctly a few percent smaller; both nets
+        # must still share it at the true relative offset
+        ratio = rebuilt.structure.volume / result.structure.volume
+        assert 0.75 < ratio < 1.1
