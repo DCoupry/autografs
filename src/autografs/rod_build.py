@@ -249,7 +249,18 @@ def _unwrapped_run_positions(
     pos = {run.slots[0]: wrapped[run.slots[0]]}
     cur = run.slots[0]
     for nxt in run.slots[1:]:
-        disp = next(d for w, d in steps[cur] if w == nxt)
+        # a run detected on a blueprint steps between quotient-adjacent
+        # slots, but a caller-supplied run need not: a self-derived
+        # blueprint cuts only rod-to-lateral bonds, so its run nodes -
+        # related through the rod itself - share no edge at all. Fall
+        # back to the minimum image of the two centres, which is the
+        # same displacement whenever an edge does exist and is right by
+        # construction for a self-blueprint (its slot centres are
+        # already unwrapped onto the run axis).
+        disp = next((d for w, d in steps[cur] if w == nxt), None)
+        if disp is None:
+            delta = wrapped[nxt] - wrapped[cur]
+            disp = delta - np.round(delta @ np.linalg.inv(cell)) @ cell
         pos[nxt] = pos[cur] + disp
         cur = nxt
     return pos
