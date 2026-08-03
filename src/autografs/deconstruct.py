@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from autografs.topology import Topology
 
 __all__ = [
+    "BlueprintRecipe",
     "BuildingUnit",
     "Deconstruction",
     "RodUnit",
@@ -135,6 +136,34 @@ class BuildingUnit:
     kind: str
     atom_indices: list[int]
     n_connections: int
+
+
+@dataclass
+class BlueprintRecipe:
+    """The geometric recipe a self-templated blueprint is built from.
+
+    Everything ``extract_topology.topology_from_deconstruction`` needs
+    to erect the structure's OWN blueprint - one slot per building
+    unit at its real position, one shared connection point per cut
+    bond - without re-perceiving anything. Fractional coordinates are
+    in each unit's home-cell gauge (the ``_unit_images`` convention
+    shared with autografs.net), so the fractional difference between a
+    cut's two midpoint expressions is exactly the cut's integer
+    voltage.
+
+    Attributes
+    ----------
+    centers : list[tuple[float, float, float]]
+        Home-cell fractional centroid per finite unit, indexed like
+        ``Deconstruction.units``.
+    cuts : list[tuple[int, int, tuple, tuple]]
+        One entry per cut bond: ``(unit_a, unit_b, midpoint_in_a,
+        midpoint_in_b)``, the same physical bond midpoint expressed in
+        each end's home gauge (fractional).
+    """
+
+    centers: list[tuple[float, float, float]]
+    cuts: list[tuple[int, int, tuple, tuple]]
 
 
 @dataclass
@@ -256,6 +285,11 @@ class Deconstruction:
         Number of parallel-bridge bundles fused into composite units
         (0 unless ``fuse_parallel_bridges`` was requested and parallel
         ditopic bridges were found; see ``_fuse_parallel_bridges``).
+    blueprint : BlueprintRecipe or None
+        The geometric recipe for the structure's own blueprint
+        (self-templated round trips, coverage plan stage 3). None when
+        the structure contains rod units, whose blueprint form needs
+        slot runs rather than point slots.
     """
 
     structure: Structure
@@ -270,6 +304,7 @@ class Deconstruction:
     topological_candidates: list[str] = field(default_factory=list)
     poe_merged: bool = False
     fused_bridges: int = 0
+    blueprint: BlueprintRecipe | None = None
 
     @property
     def is_catenated(self) -> bool:
@@ -1495,6 +1530,33 @@ def deconstruct(
         cuts, atom_to_unit, unwraps, unit_images, poe_vertex, poe_images, rod_links
     )
 
+    # the self-templated blueprint recipe (coverage plan stage 3): unit
+    # centroids and cut midpoints in each unit's home gauge, so the
+    # structure's own blueprint can be erected without re-perception.
+    # Rod frameworks need slot runs, not point slots - no recipe yet.
+    blueprint_recipe: BlueprintRecipe | None = None
+    if not rods:
+        recipe_centers = []
+        for k, unit in enumerate(units):
+            centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
+            home = centroid - unit_images[k]
+            recipe_centers.append((float(home[0]), float(home[1]), float(home[2])))
+        recipe_cuts = []
+        for u, v, jimage in cuts:
+            shift = np.asarray(jimage, dtype=float)
+            ka, kb = atom_to_unit[u], atom_to_unit[v]
+            mid_a = (frac[u] + frac[v] + shift) / 2.0 + unwraps[ka][u] - unit_images[ka]
+            mid_b = (frac[u] + frac[v] - shift) / 2.0 + unwraps[kb][v] - unit_images[kb]
+            recipe_cuts.append(
+                (
+                    ka,
+                    kb,
+                    (float(mid_a[0]), float(mid_a[1]), float(mid_a[2])),
+                    (float(mid_b[0]), float(mid_b[1]), float(mid_b[2])),
+                )
+            )
+        blueprint_recipe = BlueprintRecipe(centers=recipe_centers, cuts=recipe_cuts)
+
     subframework_nets: list[NetMatches] = []
     net_candidates: list[str] = []
     topological_candidates: list[str] = []
@@ -1574,4 +1636,5 @@ def deconstruct(
         topological_candidates=topological_candidates,
         poe_merged=poe_merged,
         fused_bridges=fused_bridges,
+        blueprint=blueprint_recipe,
     )

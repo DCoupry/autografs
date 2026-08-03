@@ -18,26 +18,38 @@ shared with the CGD path rather than re-implemented.
 
 Interrupted frameworks (terminal OH/F on a T site, IZA dash codes) are
 rejected: a T atom with fewer than four bridges has no 4-c vertex, and
-the extracted net would not be the framework type. General MOF
-topology extraction (from arbitrary deconstructions) is a separate,
-harder problem and deliberately out of scope here.
+the extracted net would not be the framework type.
+
+``topology_from_deconstruction`` is the general path (coverage plan
+stage 3): any finite deconstruction's own blueprint, one slot per
+building unit at its real position, one shared connection point per
+cut bond - the self-templated round trip's template. Unlike the
+tetrahedral path it makes no idealization at all: the blueprint IS the
+crystal's embedding, so a rebuild against it tests whether rigid
+representative units regenerate the material, with the idealized
+embedding removed from the question entirely.
 """
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 from pymatgen.core.periodic_table import get_el_sp
-from pymatgen.core.structure import Structure
+from pymatgen.core.structure import Molecule, Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from autografs.cgd import analyze, orbit_equivalence_classes
 from autografs.exceptions import TopologyExtractionError
+from autografs.fragment import Fragment
 from autografs.topology import Topology
 
-__all__ = ["topology_from_tetrahedral"]
+if TYPE_CHECKING:
+    from autografs.deconstruct import Deconstruction
+
+__all__ = ["topology_from_deconstruction", "topology_from_tetrahedral"]
 
 logger = logging.getLogger(__name__)
 
@@ -200,3 +212,108 @@ def topologies_from_tetrahedral_cifs(
     for name, reason in sorted(failures.items()):
         logger.info(f"    - {name}: {reason}")
     return converted
+
+
+def topology_from_deconstruction(
+    result: Deconstruction, name: str = "self"
+) -> tuple[Topology, dict[int, str]]:
+    """The structure's own blueprint, plus its identity slot mapping.
+
+    Erects a Topology directly from a deconstruction's
+    ``BlueprintRecipe``: one slot per building unit, centered at the
+    unit's real (home-gauge) centroid, with one X dummy per cut bond at
+    the real bond midpoint. Each cut's two dummy expressions - the same
+    physical point in each end's gauge - share one tag, which is
+    exactly the pairing convention ``alignment.prepare_build`` consumes,
+    and their fractional difference is the cut's integer voltage by
+    construction.
+
+    Slot center species encode the connectivity (Z = number of
+    connections, the CGD ``NODE`` convention). The spacegroup is set to
+    1 (triclinic): a real crystal's symmetry is approximate, and P1
+    gives the cell optimizer full freedom rather than a constraint the
+    embedding may not satisfy; crystallographic orbits are attempted on
+    the erected net and fall back to one class per slot.
+
+    Returns ``(topology, mapping)`` where ``mapping`` is the identity
+    assignment ``{slot index: fragment name}`` - each slot takes its
+    own unit's (deduplicated, representative) fragment.
+
+    Raises
+    ------
+    TopologyExtractionError
+        When the deconstruction has no blueprint recipe (rod-containing
+        structures) or a unit exceeds the library's connectivity range.
+    """
+    recipe = result.blueprint
+    if recipe is None:
+        raise TopologyExtractionError(
+            "No blueprint recipe: rod-containing deconstructions have "
+            "no point-slot blueprint form (yet)."
+        )
+    lattice = result.structure.lattice
+    per_unit_cuts: dict[int, list[tuple[int, tuple]]] = {}
+    for cut_index, (unit_a, unit_b, mid_a, mid_b) in enumerate(recipe.cuts):
+        per_unit_cuts.setdefault(unit_a, []).append((cut_index, mid_a))
+        per_unit_cuts.setdefault(unit_b, []).append((cut_index, mid_b))
+
+    slots: list[Fragment] = []
+    mapping: dict[int, str] = {}
+    for k, unit in enumerate(result.units):
+        connections = per_unit_cuts.get(k, [])
+        if not connections:
+            raise TopologyExtractionError(
+                f"Unit {k} ({unit.name}) carries no cut bond; a "
+                "disconnected unit has no slot."
+            )
+        if len(connections) > 118:
+            raise TopologyExtractionError(
+                f"Unit {k} carries {len(connections)} connections; no "
+                "element encodes that connectivity."
+            )
+        center = np.asarray(recipe.centers[k], dtype=float)
+        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
+        frac_coords = [center] + [
+            np.asarray(mid, dtype=float) for _index, mid in connections
+        ]
+        carts = [lattice.get_cartesian_coords(fc) for fc in frac_coords]
+        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
+        molecule = Molecule(species, carts, site_properties={"tags": tags})
+        slots.append(Fragment(atoms=molecule, name=f"slot_{k}"))
+        mapping[k] = unit.name
+
+    # orbits on the erected net, so symmetric self-templates group
+    # their slots; a distorted P1 crystal degrades gracefully to one
+    # class per slot
+    all_species: list = []
+    all_frac: list[np.ndarray] = []
+    for slot in slots:
+        for site in slot.atoms:
+            all_species.append(site.specie)
+            all_frac.append(lattice.get_fractional_coords(site.coords))
+    try:
+        erected = Structure(
+            lattice, all_species, np.array(all_frac), coords_are_cartesian=False
+        )
+        centers_idx = []
+        offset = 0
+        for slot in slots:
+            centers_idx.append(offset)
+            offset += len(slot.atoms)
+        classes = orbit_equivalence_classes(erected, centers_idx)
+    except Exception:  # noqa: BLE001 - orbits are an optimization only
+        classes = []
+    if len(classes) != len(slots):
+        classes = list(range(len(slots)))
+
+    return (
+        Topology(
+            name=name,
+            slots=slots,
+            cell=lattice,
+            equivalence_classes=classes,
+            spacegroup_number=1,
+            is_2d=False,
+        ),
+        mapping,
+    )

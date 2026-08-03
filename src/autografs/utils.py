@@ -389,14 +389,41 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)
     for i, mmtype in enumerate(mmtypes):
         mg.molecule[i].properties["ufftype"] = mmtype
-    # transfer tags from dummies
+    # transfer tags from dummies, AND keep the per-dummy pairing as a
+    # list: a single anchor atom can carry several connections (a
+    # one-atom metal node, a rod anchor, an oxo bridge), and the node
+    # "tags" attribute holds one value, so the last write wins and the
+    # other connections would silently lose their bonds. The list keeps
+    # every (tag, anchor) pair through the strip; fragments_to_networkx
+    # bonds from it. Indices are post-strip.
+    dummy_set = set(dummies_idx)
+    removed_before = {
+        index: sum(1 for d in dummies_idx if d < index)
+        for index in range(len(mg.molecule))
+    }
+    real_indices = [i for i in range(len(mg.molecule)) if i not in dummy_set]
+    coords = mg.molecule.cart_coords
+    anchor_tags: list[tuple[int, int]] = []
     if "tags" in mg.molecule.site_properties:
         for dummy_idx in dummies_idx:
             tag = mg.molecule[dummy_idx].properties["tags"]
             for site in mg.get_connected_sites(dummy_idx):
-                mg.molecule[site.index].properties["tags"] = tag
+                if site.index not in dummy_set:
+                    mg.molecule[site.index].properties["tags"] = tag
+            if tag > 0 and real_indices:
+                # the anchor is the dummy's NEAREST real atom (the
+                # alignment convention), not a perceived bond: on a
+                # crowded one-atom node the neighbour strategy can
+                # decline the longer dummy contacts, and every arm
+                # must keep its anchor regardless
+                nearest = min(
+                    real_indices,
+                    key=lambda i: float(np.linalg.norm(coords[i] - coords[dummy_idx])),
+                )
+                anchor_tags.append((int(tag), nearest - removed_before[nearest]))
     # remove dummies
     mg.remove_nodes(list(dummies_idx))
+    mg.graph.graph["anchor_tags"] = anchor_tags
     return mg
 
 
@@ -470,12 +497,26 @@ def fragments_to_networkx(
                 )
                 full_graph.add_edge(i + offset, j + offset, bond_order=bo)
         offset += this_len
-    # interfragment edges: atoms sharing a positive tag are the two
-    # sides of a blueprint dummy and bond together
+    # interfragment edges: the two sides of a blueprint dummy bond
+    # together. Pairing uses the per-dummy anchor lists rather than the
+    # node "tag" attribute, because an anchor atom carrying several
+    # connections keeps only its last-written tag - bonding from the
+    # attribute silently dropped the others (one-atom nodes, oxo
+    # bridges, any multi-connection anchor).
     nodes_by_tag: dict[int, list[int]] = defaultdict(list)
-    for node, data in full_graph.nodes(data=True):
-        if data["tag"] > 0:
-            nodes_by_tag[data["tag"]].append(node)
+    offset = 0
+    for subgraph in subgraphs:
+        pairs = subgraph.graph.graph.get("anchor_tags")
+        if pairs is None:
+            # graphs from an older path: fall back to the attribute scan
+            for local in range(len(subgraph.molecule)):
+                tag = subgraph.molecule[local].properties.get("tags", 0)
+                if tag and tag > 0:
+                    nodes_by_tag[tag].append(local + offset)
+        else:
+            for tag, local in pairs:
+                nodes_by_tag[tag].append(local + offset)
+        offset += len(subgraph.molecule)
     for tag, nodes in nodes_by_tag.items():
         if len(nodes) == 2:
             full_graph.add_edge(nodes[0], nodes[1], bond_order=1.0)

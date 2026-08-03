@@ -129,6 +129,24 @@ class TestMappingGap:
         assert gap._slot_verdict(two_connected, [two_connected], 0.35)["wall"] is None
 
 
+class TestSelfTemplate:
+    """The driver that rebuilds a crystal from its own blueprint.
+
+    A structure this library built must survive its own self-templated
+    round trip: the blueprint is its real embedding and the fragments
+    are its own units, so anything short of closed_self means the
+    stage-3 machinery, not the chemistry, broke.
+    """
+
+    def test_selfbuilt_structure_closes(self, mofgen, mof5_cif):
+        st = _load("selftemplate")
+        payload = st.run([mof5_cif], topofile=FIXTURE_PATH, n_jobs=1)
+        record = payload["structures"]["mof5.cif"]
+        assert record["outcome"] == "closed_self"
+        assert 0.9 < record["volume_ratio"] < 1.1
+        json.dumps(payload, default=str)
+
+
 class TestUnidentifiedProbe:
     """The driver that attributes roundtrip's ``unidentified`` bucket.
 
