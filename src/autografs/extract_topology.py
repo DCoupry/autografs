@@ -485,7 +485,12 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     heights = {
         atom: float(np.dot(poe_carts[atom], axis_hat)) for atom, _pos in poe_entries
     }
-    z_min = min(heights.values())
+    # slab origin: the rod's OWN lowest atom, which is where
+    # rods.rod_fragment starts counting chemical repeats. Measuring from
+    # the lowest point of extension instead shifts every boundary and
+    # splits a repeat's cuts across two bins, so the blueprint's node
+    # slots stop matching the fragment's arms-per-repeat.
+    z_min = float(np.min(unwrapped @ axis_hat))
     chemical = float(rod_unit.repeat_length) / n_bins
     bins: list[list[int]] = [[] for _ in range(n_bins)]
     for atom, _pos in poe_entries:
@@ -505,11 +510,10 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
             for atom in members
             for cut_index, mid in poe_cuts[atom]
         ]
-        if len(node_cuts) <= 2:
+        if not node_cuts:
             raise TopologyExtractionError(
-                f"Chemical repeat {bin_index} carries "
-                f"{len(node_cuts)} connection(s); the rod builder's "
-                "node convention needs more than two per repeat."
+                f"Chemical repeat {bin_index} carries no connection to "
+                "any lateral unit, so it has nothing to build against."
             )
         # ON the axis line, at this repeat's own height - not the PoE
         # centroid, which is transverse to it
@@ -548,6 +552,9 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     period = float(rod_unit.repeat_length)
     if fragment.repeat.screw_order > 1:
         axis_point = axis_origin
+        # every slot on this run is a point of extension by construction
+        # (one per chemical repeat, no edge centers), which the
+        # builder's dummy-count convention cannot infer - so declare it
         run: SlotRun | HelicalRun = HelicalRun(
             direction=direction,
             slots=tuple(run_slots),
@@ -559,7 +566,13 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
                 float(axis_point[1]),
                 float(axis_point[2]),
             ),
+            nodes=tuple(run_slots),
         )
     else:
-        run = SlotRun(direction=direction, slots=tuple(run_slots), period=period)
+        run = SlotRun(
+            direction=direction,
+            slots=tuple(run_slots),
+            period=period,
+            nodes=tuple(run_slots),
+        )
     return topology, run, lateral_mapping, fragment

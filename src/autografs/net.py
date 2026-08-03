@@ -756,11 +756,19 @@ class SlotRun:
         smallest index.
     period : float
         Length of one period along the axis (|direction @ cell|).
+    nodes : tuple[int, ...] or None
+        The run's point-of-extension slots, when the caller knows them.
+        Detection leaves this None and rod building infers them from
+        the blueprint convention (a node out-connects the 2-connected
+        edge centers between them). A hand-built run - a structure's
+        own blueprint, say - has no edge centers to tell apart and
+        every slot on it is a node, which the convention cannot see.
     """
 
     direction: tuple[int, int, int]
     slots: tuple[int, ...]
     period: float
+    nodes: tuple[int, ...] | None = None
 
 
 def axial_runs(
@@ -898,6 +906,9 @@ class HelicalRun:
     axis_point : tuple[float, float, float]
         A cartesian point the screw axis line passes through (the
         perpendicular centroid of one period's node slots).
+    nodes : tuple[int, ...] or None
+        The run's point-of-extension slots when the caller knows them;
+        see :class:`SlotRun`.
     """
 
     direction: tuple[int, int, int]
@@ -906,6 +917,7 @@ class HelicalRun:
     screw_angle: float
     screw_order: int
     axis_point: tuple[float, float, float]
+    nodes: tuple[int, ...] | None = None
 
 
 def _directed_steps(
@@ -1150,10 +1162,23 @@ def topology_rod_quotient_edges(
     """
     runs = run if isinstance(run, list) else [run]
     run_slots = {s for a_run in runs for s in a_run.slots}
+    # a run that knows its own nodes is believed, exactly as in rod
+    # building: under the two-connection convention a hand-built run's
+    # node - a chemical repeat binding two laterals - reads as an edge
+    # center and gets contracted away, which silently halves the bond
+    # count the build is then measured against.
     node_slots = {
         s
-        for s in run_slots
-        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        for a_run in runs
+        for s in (
+            a_run.nodes
+            if a_run.nodes is not None
+            else [
+                t
+                for t in a_run.slots
+                if len(topology.slots[t].atoms.indices_from_symbol("X")) > 2
+            ]
+        )
     }
     adjacency = _adjacency(topology_quotient_edges(topology))
     for slot in (run_slots - node_slots) | set(empty_slots):
