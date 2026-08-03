@@ -353,6 +353,7 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
         of extension unambiguously.
     """
     from autografs.net import HelicalRun, SlotRun
+    from autografs.rods import _local_positions
     from autografs.rods import rod_fragment as _rod_fragment
 
     recipe = result.blueprint
@@ -439,6 +440,48 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     fragment = _rod_fragment(result.structure, rod_unit, name="self_rod")
     n_bins = max(1, int(fragment.repeat.screw_order))
     axis_hat = np.asarray(rod_unit.axis, dtype=float)
+    axis_hat = axis_hat / np.linalg.norm(axis_hat)
+
+    # The recipe's PoE positions are in the home gauge, so a rod crossing
+    # a cell boundary has some of them wrapped to the far side - and a
+    # wrapped copy sits off the rod's axis. That matters because the
+    # builder anchors placement to the node centre and can only rotate
+    # about, and slide along, the run axis: a centre off the true axis
+    # line is unreachable geometry, no (theta, z0) recovers it (measured:
+    # node centres 7.6-8.0 A off the axis of rods whose own atoms sit
+    # within 2.2 A of it, and a 128-start rotation x phase grid could not
+    # touch the resulting 6 A error). So work in the rod's UNWRAPPED
+    # gauge throughout: heights, the axis line, and the cut midpoints all
+    # shifted by their own atom's unwrap image. The slot then differs
+    # from its home-cell placement by a lattice vector at most, which is
+    # just a periodic image and leaves the quotient unchanged.
+    unwrapped = _local_positions(
+        result.structure,
+        rod_unit.atom_indices,
+        rod_unit.atom_indices[0],
+        rod_unit.internal_bonds,
+    )
+    row_of_site = {site: row for row, site in enumerate(rod_unit.atom_indices)}
+    lattice_matrix = lattice.matrix
+    inverse_matrix = np.linalg.inv(lattice_matrix)
+    poe_shift = {}
+    for atom, _pos in poe_entries:
+        row = row_of_site.get(atom)
+        if row is None:
+            raise TopologyExtractionError(
+                f"Point of extension {atom} is not among the rod's atoms."
+            )
+        home = np.asarray(result.structure[atom].coords, dtype=float)
+        poe_shift[atom] = np.rint((unwrapped[row] - home) @ inverse_matrix)
+    poe_carts = {
+        atom: cart + poe_shift[atom] @ lattice_matrix
+        for atom, cart in poe_carts.items()
+    }
+    # the axis line: perpendicular centroid of the rod's own unwrapped
+    # atoms, which is canonical_rod's convention and the only transverse
+    # origin a screw symmetry admits
+    centroid = unwrapped.mean(axis=0)
+    axis_origin = centroid - float(np.dot(centroid, axis_hat)) * axis_hat
     heights = {
         atom: float(np.dot(poe_carts[atom], axis_hat)) for atom, _pos in poe_entries
     }
@@ -456,22 +499,30 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
                 f"Chemical repeat {bin_index} holds no point of "
                 "extension; the axial binning does not describe this rod."
             )
-        connections = [
-            (cut_index, mid) for atom in members for cut_index, mid in poe_cuts[atom]
+        # each midpoint follows its own PoE atom into the unwrapped gauge
+        node_cuts = [
+            (cut_index, mid, atom)
+            for atom in members
+            for cut_index, mid in poe_cuts[atom]
         ]
-        if len(connections) <= 2:
+        if len(node_cuts) <= 2:
             raise TopologyExtractionError(
                 f"Chemical repeat {bin_index} carries "
-                f"{len(connections)} connection(s); the rod builder's "
+                f"{len(node_cuts)} connection(s); the rod builder's "
                 "node convention needs more than two per repeat."
             )
-        center = np.mean([poe_carts[atom] for atom in members], axis=0)
-        species = [get_el_sp(min(len(connections), 118))] + ["X"] * len(connections)
+        # ON the axis line, at this repeat's own height - not the PoE
+        # centroid, which is transverse to it
+        center = (
+            axis_origin + float(np.mean([heights[atom] for atom in members])) * axis_hat
+        )
+        species = [get_el_sp(min(len(node_cuts), 118))] + ["X"] * len(node_cuts)
         carts = [center] + [
             lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
-            for _index, mid in connections
+            + poe_shift[atom] @ lattice_matrix
+            for _index, mid, atom in node_cuts
         ]
-        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
+        tags = [0] + [cut_index + 1 for cut_index, _mid, _atom in node_cuts]
         slots.append(
             Fragment(
                 atoms=Molecule(species, carts, site_properties={"tags": tags}),
@@ -496,7 +547,7 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     )
     period = float(rod_unit.repeat_length)
     if fragment.repeat.screw_order > 1:
-        axis_point = np.mean([poe_carts[atom] for atom, _ in poe_entries], axis=0)
+        axis_point = axis_origin
         run: SlotRun | HelicalRun = HelicalRun(
             direction=direction,
             slots=tuple(run_slots),
