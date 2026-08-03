@@ -595,7 +595,19 @@ class _Lateral:
 
 
 class _RodBuild:
-    """Geometry of one rod build, evaluated per (scale, theta, z0)."""
+    """Geometry of one rod build, evaluated per (scale, theta, z0).
+
+    ``initial_scale``, when set, overrides ``initial_guess``'s scale
+    heuristic outright. A self-derived blueprint (a rod self-template)
+    is already at the crystal's own size, so its correct start is
+    exactly 1.0 by construction - the heuristic below measures
+    node-to-lateral separations that were calibrated for idealized
+    library nets and can land whole orders of magnitude off on a real
+    P1 embedding (measured: transverse scale 183 on one corpus
+    structure whose correct value was 1).
+    """
+
+    initial_scale: float | None = None
 
     def __init__(
         self,
@@ -1253,7 +1265,9 @@ class _RodBuild:
 
     def initial_guess(self) -> np.ndarray:
         """(scale, then theta/z0 per family) good enough for Nelder-Mead."""
-        if self.helical:
+        if self.initial_scale is not None:
+            scale0 = float(self.initial_scale)
+        elif self.helical:
             # scale: the rod sits on the run's cylinder, so match the
             # rod's own radius to the (unscaled) blueprint node radius
             spec = self.rod_specs[0]
@@ -1648,6 +1662,7 @@ def build_rod_framework(
     verify_net: bool = False,
     verbose: bool = False,
     relax_embedding: bool = False,
+    initial_scale: float | None = None,
 ) -> Framework:
     """Build a rod framework - straight or helical - from a rod and linkers.
 
@@ -1827,6 +1842,11 @@ def build_rod_framework(
         runs if len(runs) > 1 else runs[0],
         relax_embedding=relax_embedding,
     )
+    # a caller who knows the blueprint's true size (a self-derived
+    # blueprint is at the crystal's own scale by construction) starts
+    # the transverse-scale optimization there instead of at the
+    # library-net heuristic
+    build.initial_scale = initial_scale
 
     # optimize: coarse rotation grid per axis family (a full product
     # grid would be 16^families), then refine everything with Nelder-Mead

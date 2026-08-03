@@ -164,6 +164,11 @@ def _rod_selftemplate(mofgen: Autografs, result, record: dict, start: float) -> 
             min_distance=None,
             bond_tolerance=10.0,
             verify_net=False,
+            # the self-blueprint is at the crystal's own size, so the
+            # transverse scale starts at exactly 1 - the library-net
+            # heuristic landed orders of magnitude off on real P1
+            # embeddings (measured: scale 183 where 1 was correct)
+            initial_scale=1.0,
         )
     except AutografsError as exc:
         record["outcome"] = "build_failed"
