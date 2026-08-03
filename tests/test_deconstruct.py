@@ -558,3 +558,70 @@ def test_hill_formula():
     assert _hill_formula(["C", "H", "H", "C", "O"]) == "C2H2O"
     assert _hill_formula(["Zn", "O", "Zn"]) == "OZn2"
     assert _hill_formula(["H", "O", "H"]) == "H2O"
+
+
+def _doubly_bridged_pcu() -> Structure:
+    """A pcu-like crystal whose x edges carry parallel double bridges.
+
+    One Zn node per cubic cell; single one-carbon bridges along y and z;
+    TWO parallel one-carbon bridges along x, offset to +-1.1 A so they
+    do not bond each other. The node therefore perceives 8 connections
+    where the underlying net has 6 - the doubled-node signature that
+    dominates the census's no_mapping bucket (a paddlewheel bridged by
+    parallel linker pairs reads as 8-connected on a 4-c net).
+    """
+    a = 4.2
+    species = ["Zn", "C", "C", "C", "C"]
+    carts = [
+        (0.0, 0.0, 0.0),
+        (a / 2, 1.1, 0.0),  # x bridge, upper
+        (a / 2, -1.1, 0.0),  # x bridge, lower (parallel to the upper)
+        (0.0, a / 2, 0.0),  # y bridge, single
+        (0.0, 0.0, a / 2),  # z bridge, single
+    ]
+    return Structure(Lattice.cubic(a), species, carts, coords_are_cartesian=True)
+
+
+class TestParallelBridgeFusion:
+    """Opt-in fusion of parallel ditopic bridges (coverage plan stage 1).
+
+    Identification's coordination-sequence walk counts a double bridge
+    once; the mapper counts every dummy on the doubled node. Fusion
+    restores agreement by merging the parallel pair into one composite
+    unit with one connection per end - both molecules kept, so
+    composition stays exact.
+    """
+
+    def test_default_leaves_units_alone(self, mofgen):
+        result = mofgen.deconstruct(_doubly_bridged_pcu())
+        assert result.fused_bridges == 0
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 8
+
+    def test_fusion_restores_the_net_arm_count(self, mofgen):
+        result = mofgen.deconstruct(_doubly_bridged_pcu(), fuse_parallel_bridges=True)
+        assert result.fused_bridges == 1
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 6
+        # the composite carries BOTH bridge molecules on 2 connections,
+        # so the fused fragment is ditopic and composition-complete
+        composite = next(
+            u for u in result.units if u.kind == "linker" and "C2" in u.name
+        )
+        assert composite.n_connections == 2
+        placed = Counter(atom for u in result.units for atom in u.atom_indices)
+        assert len(placed) == len(result.structure)
+        assert max(placed.values()) == 1
+        assert result.net_candidates == ["pcu"]
+
+    def test_fusion_requires_identical_composition(self, mofgen):
+        # hang a hydrogen on one of the parallel bridges: CH vs C no
+        # longer match, so nothing fuses and the request is a clean
+        # no-op (a nitrogen swap would not test this - the metal-oxo
+        # rule absorbs a carbon-free N into the node)
+        structure = _doubly_bridged_pcu()
+        structure.append("H", (2.1, -1.1, 0.9), coords_are_cartesian=True)
+        result = mofgen.deconstruct(structure, fuse_parallel_bridges=True)
+        assert result.fused_bridges == 0
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 8

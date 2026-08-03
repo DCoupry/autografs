@@ -1287,7 +1287,9 @@ class Autografs:
         return out_dict
 
     def deconstruct(
-        self, source: Structure | str | Path
+        self,
+        source: Structure | str | Path,
+        fuse_parallel_bridges: bool = False,
     ) -> autografs.deconstruct.Deconstruction:
         """Deconstruct a structure into SBUs and identify its net.
 
@@ -1316,7 +1318,11 @@ class Autografs:
         ['pcu']
         >>> result.write_xyz("harvested_sbus.xyz")
         """
-        return autografs.deconstruct.deconstruct(source, topologies=self.topologies)
+        return autografs.deconstruct.deconstruct(
+            source,
+            topologies=self.topologies,
+            fuse_parallel_bridges=fuse_parallel_bridges,
+        )
 
     def harvest(
         self,

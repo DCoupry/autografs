@@ -200,17 +200,27 @@ def roundtrip_one(
     source,
     max_rmsd: float,
     relax_embedding: bool = False,
+    _fused=None,
 ) -> dict:
-    """Deconstruct one structure and attempt the verified rebuild."""
+    """Deconstruct one structure and attempt the verified rebuild.
+
+    ``_fused`` is the internal recursion handle for the parallel-bridge
+    fallback: a pre-computed fused Deconstruction to attempt instead of
+    deconstructing again (and a guard against a second fallback).
+    """
     record: dict = {"outcome": None, "net": None, "tier": None, "error": None}
     t0 = time.perf_counter()
-    try:
-        result = mofgen.deconstruct(source)
-    except (AutografsError, ValueError, KeyError, IndexError) as exc:
-        record["outcome"] = "deconstruction_failed"
-        record["error"] = f"{type(exc).__name__}: {exc}"
-        record["seconds"] = time.perf_counter() - t0
-        return record
+    _already_fused = _fused is not None
+    if _already_fused:
+        result = _fused
+    else:
+        try:
+            result = mofgen.deconstruct(source)
+        except (AutografsError, ValueError, KeyError, IndexError) as exc:
+            record["outcome"] = "deconstruction_failed"
+            record["error"] = f"{type(exc).__name__}: {exc}"
+            record["seconds"] = time.perf_counter() - t0
+            return record
     record["n_fragments"] = len(result.fragments)
     record["fold"] = result.n_periodic_components
     record["guests"] = result.guest_formulas
@@ -274,6 +284,28 @@ def roundtrip_one(
         record["outcome"] = "rebuild_failed"
     else:
         record["outcome"] = "no_mapping"
+        # fallback convention, mirroring the grouped-PoE tier: when the
+        # standard units admit no mapping, retry with parallel ditopic
+        # bridges fused into composite units - the dominant no_mapping
+        # mechanism is a doubled node the identifier reads at single
+        # multiplicity. A structure the standard convention answers
+        # never reaches this branch.
+        if not _already_fused:
+            try:
+                fused_result = mofgen.deconstruct(source, fuse_parallel_bridges=True)
+            except (AutografsError, ValueError, KeyError, IndexError):
+                fused_result = None
+            if fused_result is not None and fused_result.fused_bridges:
+                fused_record = roundtrip_one(
+                    mofgen,
+                    source,
+                    max_rmsd,
+                    relax_embedding,
+                    _fused=fused_result,
+                )
+                if fused_record["outcome"] != "no_mapping":
+                    fused_record["fused_bridges"] = fused_result.fused_bridges
+                    return fused_record
     record["seconds"] = time.perf_counter() - t0
     return record
 

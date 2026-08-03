@@ -252,6 +252,10 @@ class Deconstruction:
         only as a fallback when the per-atom convention identifies
         nothing that survives the rod filter, so existing assignments
         never silently move.
+    fused_bridges : int
+        Number of parallel-bridge bundles fused into composite units
+        (0 unless ``fuse_parallel_bridges`` was requested and parallel
+        ditopic bridges were found; see ``_fuse_parallel_bridges``).
     """
 
     structure: Structure
@@ -265,6 +269,7 @@ class Deconstruction:
     rod_units: list[RodUnit] = field(default_factory=list)
     topological_candidates: list[str] = field(default_factory=list)
     poe_merged: bool = False
+    fused_bridges: int = 0
 
     @property
     def is_catenated(self) -> bool:
@@ -881,6 +886,174 @@ def _extract_fragments(
     return fragments, built_units
 
 
+def _cut_voltage(
+    cut: tuple[int, int, tuple[int, int, int]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+    unit_images: dict[int, np.ndarray],
+) -> np.ndarray:
+    """Voltage of one cut, oriented u -> v, in the _unit_quotient gauge."""
+    u, v, jimage = cut
+    shift = np.asarray(jimage, dtype=int) + (
+        unwraps[atom_to_unit[u]][u] - unwraps[atom_to_unit[v]][v]
+    )
+    return np.asarray(
+        unit_images[atom_to_unit[v]] + shift - unit_images[atom_to_unit[u]]
+    )
+
+
+def _fuse_parallel_bridges(
+    structure: Structure,
+    units: list[set[int]],
+    cuts: list[tuple[int, int, tuple[int, int, int]]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+    rod_indices: set[int],
+    generators: dict[int, np.ndarray],
+) -> tuple[
+    list[set[int]],
+    list[tuple[int, int, tuple[int, int, int]]],
+    dict[int, int],
+    list[dict[int, np.ndarray]],
+    set[int],
+    dict[int, np.ndarray],
+    int,
+]:
+    """Fuse parallel ditopic bridges into composite building units.
+
+    A pair of identical ditopic linkers bridging the same two units
+    through the same net voltage is one edge of the crystal's net -
+    identification's coordination-sequence walk counts it once - but
+    the mapper counts every dummy on the doubled node, so the structure
+    falls between the two conventions (measured on the census: the
+    dominant ``no_mapping`` mechanism, 133 structures failing at
+    exactly twice every blocked slot's arm count). Fusing the bundle
+    into one composite unit with one connection per end restores
+    agreement: the node's fragment carries one arm per bundle, the
+    composite carries both molecules (so composition stays exact), and
+    the rebuilt framework realizes one bond per merged end - a
+    documented convention, not an oversight.
+
+    Only metal-free, exactly-ditopic units of identical composition
+    bridging the same finite unit pair at the same contracted voltage
+    are fused. Everything else - including rod-adjacent bridges - is
+    left alone. Returns the rewritten
+    ``(units, cuts, atom_to_unit, unwraps, rod_indices, generators,
+    n_bundles)``; when no bundle exists the inputs come back unchanged
+    with ``n_bundles = 0``.
+    """
+    frac = structure.frac_coords
+    unit_images = _unit_images(frac, units, unwraps, rod_indices)
+
+    # per-unit cut inventory
+    unit_cuts: dict[int, list[int]] = defaultdict(list)
+    for index, (u, v, _jimage) in enumerate(cuts):
+        unit_cuts[atom_to_unit[u]].append(index)
+        unit_cuts[atom_to_unit[v]].append(index)
+
+    def linker_end(cut_index: int, linker: int) -> tuple[int, int, int, np.ndarray]:
+        """(linker atom, partner atom, partner unit, voltage linker->partner)."""
+        u, v, jimage = cuts[cut_index]
+        if atom_to_unit[u] == linker:
+            voltage = _cut_voltage(cuts[cut_index], atom_to_unit, unwraps, unit_images)
+            return u, v, atom_to_unit[v], voltage
+        voltage = -_cut_voltage(cuts[cut_index], atom_to_unit, unwraps, unit_images)
+        return v, u, atom_to_unit[u], voltage
+
+    def partner_of(cut_index: int, linker: int) -> int:
+        u, v, _jimage = cuts[cut_index]
+        return atom_to_unit[v] if atom_to_unit[u] == linker else atom_to_unit[u]
+
+    bundles: dict[tuple, list[int]] = defaultdict(list)
+    for k, unit in enumerate(units):
+        if k in rod_indices or len(unit_cuts[k]) != 2:
+            continue
+        if any(_is_metal(structure, atom) for atom in unit):
+            continue
+        # rod partners carry per-atom images, not a unit home image, so
+        # the voltage bookkeeping below does not apply to them
+        if any(partner_of(index, k) in rod_indices for index in unit_cuts[k]):
+            continue
+        ends = [linker_end(index, k) for index in unit_cuts[k]]
+        # contracted edge this linker decorates, canonicalized so the
+        # two traversal directions give one key; composition joins the
+        # key so only identical molecules fuse
+        (_, _, unit_a, voltage_a), (_, _, unit_b, voltage_b) = ends
+        edge = _canonical(unit_a, unit_b, voltage_b - voltage_a)
+        formula = tuple(
+            sorted(Counter(structure[i].specie.symbol for i in unit).items())
+        )
+        bundles[(edge, formula)].append(k)
+
+    fused = {key: members for key, members in bundles.items() if len(members) > 1}
+    if not fused:
+        return units, cuts, atom_to_unit, unwraps, rod_indices, generators, 0
+
+    removed: set[int] = set()
+    dropped_cuts: set[int] = set()
+    new_units = [set(unit) for unit in units]
+    new_unwraps = [dict(unwrap) for unwrap in unwraps]
+
+    def anchor_shift(linker: int, anchor_unit: int) -> np.ndarray:
+        """Gauge shift taking the linker's unwrap into the anchor's."""
+        for index in unit_cuts[linker]:
+            atom, partner, partner_unit, _voltage = linker_end(index, linker)
+            if partner_unit == anchor_unit:
+                u, _v, jimage = cuts[index]
+                step = np.asarray(jimage, dtype=int)
+                # pymatgen bond semantics: v at image (X + jimage)
+                # bonds u at image X, so anchoring on the partner's
+                # unwrapped image places the linker atom one step
+                # against (or along) the stored offset
+                if atom == u:
+                    image = new_unwraps[partner_unit][partner] - step
+                else:
+                    image = new_unwraps[partner_unit][partner] + step
+                return np.asarray(image - unwraps[linker][atom])
+        raise DeconstructionError(
+            "parallel-bridge fusion lost its anchor cut"
+        )  # pragma: no cover - bundle members bridge the anchor by construction
+
+    for (edge, _formula), members in sorted(fused.items(), key=lambda kv: kv[1]):
+        survivor, *merged = sorted(members)
+        anchor_unit = edge[0]
+        base = anchor_shift(survivor, anchor_unit)
+        for linker in merged:
+            shift = anchor_shift(linker, anchor_unit) - base
+            for atom in units[linker]:
+                new_units[survivor].add(atom)
+                new_unwraps[survivor][atom] = unwraps[linker][atom] + shift
+            removed.add(linker)
+            dropped_cuts.update(unit_cuts[linker])
+        logger.info(
+            f"\t[x] fused {len(members)} parallel ditopic bridges into one "
+            f"composite unit ({len(new_units[survivor])} atoms)."
+        )
+
+    keep = [k for k in range(len(new_units)) if k not in removed]
+    remap = {old: new for new, old in enumerate(keep)}
+    units_out = [new_units[k] for k in keep]
+    unwraps_out = [new_unwraps[k] for k in keep]
+    atom_to_unit_out = {
+        atom: remap[k]
+        for k, unit in enumerate(new_units)
+        if k in remap
+        for atom in unit
+    }
+    cuts_out = [cut for index, cut in enumerate(cuts) if index not in dropped_cuts]
+    rod_out = {remap[k] for k in rod_indices}
+    generators_out = {remap[k]: g for k, g in generators.items()}
+    return (
+        units_out,
+        cuts_out,
+        atom_to_unit_out,
+        unwraps_out,
+        rod_out,
+        generators_out,
+        len(fused),
+    )
+
+
 def _unit_images(
     frac: np.ndarray,
     units: list[set[int]],
@@ -1130,6 +1303,7 @@ def _identify_subframeworks(
 def deconstruct(
     source: Structure | str | Path,
     topologies: Mapping[str, Topology] | None = None,
+    fuse_parallel_bridges: bool = False,
 ) -> Deconstruction:
     """Deconstruct a periodic structure into SBUs and its net.
 
@@ -1142,6 +1316,13 @@ def deconstruct(
         Topology library to identify the net against (e.g.
         Autografs.topologies). When None, net identification is
         skipped and ``net_candidates`` stays empty.
+    fuse_parallel_bridges : bool, optional
+        Fuse parallel ditopic bridges - identical linkers joining the
+        same unit pair through the same net voltage - into one
+        composite building unit with one connection per end (see
+        ``_fuse_parallel_bridges``). Off by default: it changes what a
+        building unit is, so callers opt in (the round-trip census uses
+        it as a fallback when the standard units admit no mapping).
 
     Returns
     -------
@@ -1201,6 +1382,20 @@ def deconstruct(
                 "layer); only molecular and rod (1-periodic) building "
                 "units are supported."
             )
+
+    fused_bridges = 0
+    if fuse_parallel_bridges:
+        (
+            units,
+            cuts,
+            atom_to_unit,
+            unwraps,
+            rod_indices,
+            generators,
+            fused_bridges,
+        ) = _fuse_parallel_bridges(
+            structure, units, cuts, atom_to_unit, unwraps, rod_indices, generators
+        )
 
     fragments, built_units = _extract_fragments(
         structure, units, node_atoms, cuts, atom_to_unit, unwraps, rod_indices
@@ -1378,4 +1573,5 @@ def deconstruct(
         guest_formulas=sorted(guest_formulas),
         topological_candidates=topological_candidates,
         poe_merged=poe_merged,
+        fused_bridges=fused_bridges,
     )

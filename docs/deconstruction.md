@@ -75,6 +75,16 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
+One opt-in convention changes what a building unit is. Real crystals
+often join two nodes by a **pair of parallel identical linkers**; the
+net has one edge there, and identification counts it once, but the
+doubled node's fragment carries twice the arms and fits no slot of the
+identified net. `deconstruct(..., fuse_parallel_bridges=True)` fuses
+such a bundle into one composite unit with one connection per end —
+both molecules kept, so composition is exact; the merged end realizes
+a single bond in a rebuilt framework, as a documented convention. Off
+by default; `result.fused_bridges` counts the bundles when on.
+
 Two refinements to rod identification are worth knowing about. First,
 candidates are filtered for **rod compatibility**: a matched net whose
 every channel the harvested rod's screw cannot occupy is removed from
