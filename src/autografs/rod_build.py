@@ -98,7 +98,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import networkx
 import numpy as np
@@ -608,6 +608,7 @@ class _RodBuild:
     """
 
     initial_scale: float | None = None
+    frozen_scale: float | None = None
 
     def __init__(
         self,
@@ -1241,11 +1242,20 @@ class _RodBuild:
         """(scale, theta per family, z0 per family) from a flat vector.
 
         Reads the head only; any trailing lateral-displacement block
-        (embedding relaxation) is left to ``lateral_shifts``.
+        (embedding relaxation) is left to ``lateral_shifts``. With
+        ``frozen_scale`` set the scale coordinate is inert: every
+        evaluation sees the frozen value, so a re-optimization cannot
+        leave the caller's basin whatever the objective prefers - the
+        fallback arm of the scale band (see build_rod_framework).
         """
         head = np.asarray(params[1 : 1 + 2 * self.n_families], dtype=float)
         rest = head.reshape(self.n_families, 2)
-        return float(params[0]), rest[:, 0], rest[:, 1]
+        scale = (
+            float(self.frozen_scale)
+            if self.frozen_scale is not None
+            else float(params[0])
+        )
+        return scale, rest[:, 0], rest[:, 1]
 
     def lateral_shifts(self, params: np.ndarray) -> np.ndarray | None:
         """Per-slot fractional displacements from the parameter tail."""
@@ -1663,6 +1673,7 @@ def build_rod_framework(
     verbose: bool = False,
     relax_embedding: bool = False,
     initial_scale: float | None = None,
+    scale_band: float | None = None,
 ) -> Framework:
     """Build a rod framework - straight or helical - from a rod and linkers.
 
@@ -1704,6 +1715,19 @@ def build_rod_framework(
         ``NetMismatchError`` if it does not realize the blueprint net.
     verbose : bool, optional
         Log the optimized cell and residuals.
+    initial_scale : float or None, optional
+        Start the transverse-scale optimization here instead of at the
+        library-net heuristic. A self-derived blueprint (rod
+        self-template) is at the crystal's own size, so its correct
+        start is exactly 1.
+    scale_band : float or None, optional
+        Trust band around ``initial_scale``, as a relative half-width
+        (0.25 = +/-25%). The greedy port-image pairing makes the
+        objective multi-modal over the transverse scale, and a spurious
+        pairing at a compressed cell can outscore the true branch - so
+        when the free solve's scale leaves the band, the build re-solves
+        with the scale frozen at ``initial_scale`` (theta/z0 only) and
+        keeps that solution unconditionally. Requires ``initial_scale``.
 
     Returns
     -------
@@ -1729,6 +1753,8 @@ def build_rod_framework(
         )
     if not rod.arms:
         raise AlignmentError(f"Rod {rod.name!r} has no connection arms.")
+    if scale_band is not None and initial_scale is None:
+        raise ValueError("scale_band needs initial_scale as its reference")
 
     from autografs.rods import STRAIGHT_SCREW_TOL
 
@@ -1850,23 +1876,42 @@ def build_rod_framework(
 
     # optimize: coarse rotation grid per axis family (a full product
     # grid would be 16^families), then refine everything with Nelder-Mead
-    start = build.initial_guess()
-    for family in range(build.n_families):
-        angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+    def solve() -> Any:
+        start = build.initial_guess()
+        for family in range(build.n_families):
+            angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
 
-        def value_at(angle: float, family: int = family) -> float:
-            trial = start.copy()
-            trial[1 + 2 * family] = angle
-            return build.objective(trial)
+            def value_at(angle: float, family: int = family) -> float:
+                trial = start.copy()
+                trial[1 + 2 * family] = angle
+                return build.objective(trial)
 
-        start[1 + 2 * family] = min(angles, key=value_at)
-    result = minimize(
-        build.objective,
-        start,
-        method="Nelder-Mead",
-        options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
-    )
+            start[1 + 2 * family] = min(angles, key=value_at)
+        return minimize(
+            build.objective,
+            start,
+            method="Nelder-Mead",
+            options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
+        )
+
+    result = solve()
     scale, theta, z0 = build.unpack(result.x)
+    if (
+        scale_band is not None
+        and initial_scale is not None
+        and abs(scale / initial_scale - 1.0) > scale_band
+    ):
+        # The free solve left the caller's trust band. The greedy
+        # port-image pairing makes the objective multi-modal over the
+        # transverse scale, and a spurious pairing at a compressed or
+        # inflated cell can genuinely score better than the true branch
+        # (the CAXVOO lesson, again) - so the free objective cannot be
+        # the referee here. Freeze the scale at the reference and
+        # re-solve theta/z0 only; the frozen solution replaces the free
+        # one unconditionally.
+        build.frozen_scale = float(initial_scale)
+        result = solve()
+        scale, theta, z0 = build.unpack(result.x)
     shifts = build.lateral_shifts(result.x)
     # the polytopic arm assignments were fixed at the blueprint cell;
     # re-solve them now that the cell has moved

@@ -811,6 +811,7 @@ class TestRodSelfTemplate:
             bond_tolerance=10.0,
             verify_net=False,
             initial_scale=1.0,
+            scale_band=0.25,
         )
         built = rebuilt.structure.composition
         experimental = result.structure.composition
