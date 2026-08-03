@@ -382,21 +382,57 @@ def _screw_fits(nodes: _RunNodes, screw_angle: float) -> bool:
     )
 
 
-def _repeat_counts(nodes_per_period: int, screw_order: int) -> tuple[int, int]:
+def _min_safe_repeats(rod: RodFragment, limit: int = 6) -> int:
+    """Fewest repeats that keep every rod bond a distinct graph edge.
+
+    Laying down ``n`` repeats wires bond ``(a, b, m)`` between atom *a*
+    of repeat *i* and atom *b* of repeat ``(i + m) % n``, which spoils
+    two ways when ``n`` is too small: two bonds over the same atom pair
+    whose offsets agree modulo ``n`` collapse into one graph edge (a
+    real bond silently lost), and a bond from an atom to *itself* one
+    repeat on becomes a self-loop when ``m`` vanishes modulo ``n``.
+
+    Two repeats clear both for any rod carrying a continuation bond
+    over a pair it also bonds internally, or one that bonds its own
+    image - which is why two was the blanket rule. Computing the actual
+    bound instead lets the rods that need neither lay down a single
+    repeat, and that is what makes a **diagonal** run buildable at all:
+    stacking a second blueprint period along a diagonal is a supercell
+    transformation rod building does not do (#173).
+    """
+    offsets: dict[tuple[int, int], list[int]] = {}
+    self_bonds: list[int] = []
+    for a, b, m in rod.bonds:
+        if a == b:
+            self_bonds.append(int(m))
+            continue
+        pair = (min(a, b), max(a, b))
+        offsets.setdefault(pair, []).append(int(m) if a <= b else -int(m))
+    for n in range(1, limit + 1):
+        if any(m % n == 0 for m in self_bonds):
+            continue
+        if all(len({m % n for m in ms}) == len(ms) for ms in offsets.values()):
+            return n
+    return limit
+
+
+def _repeat_counts(
+    nodes_per_period: int, screw_order: int, min_repeats: int = 2
+) -> tuple[int, int]:
     """(blueprint periods to stack, rod repeats laid down) for a run.
 
     One blueprint period already holds ``nodes_per_period`` of the rod's
     chemical repeats - one per point-of-extension node. Enough periods
-    are stacked to close the rod's screw and to reach at least two
-    repeats, so a continuation bond is always a distinct node pair
-    rather than a parallel edge.
+    are stacked to close the rod's screw and to reach ``min_repeats``,
+    the count below which the rod's own bonds stop being distinct graph
+    edges (``_min_safe_repeats``; two unless a caller knows better).
 
     The familiar cases fall out: a one-node straight run (pcu) stacks
     two periods for two repeats, a helical run's period already holds
     its whole screw so it stacks one, and a straight run chaining k
     nodes needs no supercell at all once k is two or more (#168).
     """
-    wanted = max(2, screw_order)
+    wanted = max(min_repeats, screw_order)
     copies = max(1, -(-wanted // nodes_per_period))
     return copies, nodes_per_period * copies
 
@@ -640,8 +676,12 @@ class _RodBuild:
         # has screw_order of them; a straight run usually one, but 66
         # library nets chain several per period (#168).
         self.nodes_per_period = len(_node_slots(topology, primary))
+        # a diagonal run cannot stack periods (that is a supercell
+        # transformation), so it gets the rod's true minimum instead of
+        # the blanket two - see _min_safe_repeats
+        min_repeats = _min_safe_repeats(rod) if _run_axis(primary)[0] is None else 2
         self.copies, self.n_repeats = _repeat_counts(
-            self.nodes_per_period, rod.repeat.screw_order
+            self.nodes_per_period, rod.repeat.screw_order, min_repeats
         )
         self.axis_length = self.n_repeats * self.period
 
@@ -1798,7 +1838,9 @@ def build_rod_framework(
             # library's diagonal runs chain enough nodes per period not
             # to need it.
             copies, _repeats = _repeat_counts(
-                max(len(node_slots), 1), rod.repeat.screw_order
+                max(len(node_slots), 1),
+                rod.repeat.screw_order,
+                _min_safe_repeats(rod),
             )
             if copies != 1:
                 raise AlignmentError(
@@ -1807,7 +1849,8 @@ def build_rod_framework(
                     f"period, so rod {rod.name!r} would need {copies} periods "
                     "stacked along the diagonal - a supercell transformation "
                     "rod building does not do. A run chaining more nodes per "
-                    "period (or a rod of lower screw order) needs none."
+                    "period (or a rod whose bonds stay distinct over fewer "
+                    "repeats) needs none."
                 )
         if isinstance(a_run, HelicalRun):
             # a helical run's nodes are the screw's own orbit, filled
