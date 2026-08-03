@@ -316,6 +316,86 @@ def orbit_equivalence_classes(
     return classes
 
 
+def epinet_entries(text: str) -> str:
+    """One EPINET ``.cgd`` file rewritten into the RCSR dialect.
+
+    EPINET's per-net files differ from RCSR's in four ways: a
+    ``PERIODIC_GRAPH`` block precedes the crystal data; several
+    ``CRYSTAL`` blocks describe the same net (a maximal-symmetry
+    barycentric embedding plus relaxed variants); blocks are keyed
+    ``ID``/``ATOM`` where RCSR writes ``NAME``/``NODE``; and payload
+    rows continue a keyword on tab-led lines instead of repeating it.
+    This picks the ``*_maximal`` embedding (the analogue of the RCSR
+    convention the builder consumes) and emits one RCSR-dialect entry
+    that ``read_cgd_data`` parses unchanged. Returns an empty string
+    when no crystal block is found.
+    """
+    keywords = {"ID", "GROUP", "CELL", "ATOM", "EDGE"}
+    blocks: list[dict] = []
+    block: dict | None = None
+    key: str | None = None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        if stripped == "CRYSTAL":
+            block = {"ID": [], "GROUP": [], "CELL": [], "ATOM": [], "EDGE": []}
+            blocks.append(block)
+            key = None
+            continue
+        if stripped == "END":
+            block = None
+            key = None
+            continue
+        if block is None:
+            continue  # PERIODIC_GRAPH block and anything else
+        tokens = stripped.split()
+        if tokens[0].upper() in keywords:
+            key = tokens[0].upper()
+            payload = tokens[1:]
+        else:
+            payload = tokens
+        if key is not None and payload:
+            block[key].append(payload)
+    if not blocks:
+        return ""
+    chosen = next(
+        (
+            candidate
+            for candidate in blocks
+            if candidate["ID"] and candidate["ID"][0][0].endswith("_maximal")
+        ),
+        blocks[0],
+    )
+    if not (chosen["ID"] and chosen["GROUP"] and chosen["CELL"]):
+        return ""
+    name = chosen["ID"][0][0].removesuffix("_maximal")
+    lines = [
+        "CRYSTAL",
+        f"  NAME {name}",
+        f"  GROUP {chosen['GROUP'][0][0]}",
+        f"  CELL {' '.join(chosen['CELL'][0])}",
+    ]
+    lines += [f"  NODE {' '.join(row)}" for row in chosen["ATOM"]]
+    lines += [f"  EDGE {' '.join(row)}" for row in chosen["EDGE"]]
+    # EPINET writes no EDGE_CENTER lines, but the importer's slot
+    # stitching depends on them: a node's quarter-point dummy pairs
+    # with a 2-connected edge-center slot's coincident dummy, and
+    # without the center the two facing node dummies sit half an edge
+    # apart and pair with nothing (zero quotient edges). Emitting the
+    # midpoints also lands EPINET nets in the same edge-decorated
+    # convention as every RCSR import.
+    for row in chosen["EDGE"]:
+        half = len(row) // 2
+        ends = np.array(
+            [[float(x) for x in row[:half]], [float(x) for x in row[half:]]]
+        )
+        midpoint = ends.mean(axis=0)
+        lines.append(f"  EDGE_CENTER {' '.join(f'{x:.6f}' for x in midpoint)}")
+    lines.append("END")
+    return "\n".join(lines)
+
+
 def read_cgd_data(cgd: str, max_sites: int = MAX_FRAGMENT_SITES) -> dict[str, Topology]:
     """Convert the entries of a CGD file into Topology objects."""
     topologies: dict[str, Topology] = {}
@@ -410,6 +490,23 @@ def main(argv: list[str] | None = None) -> None:
         ),
     )
     parser.add_argument(
+        "--use_epinet",
+        action="store_true",
+        help=(
+            "fetch the EPINET s-net CGD files (license gate, slow polite "
+            "sweep to a local cache) and convert their maximal-symmetry "
+            "embeddings into topologies under their sqc names. EPINET is "
+            "CC BY-NC-ND: the resulting library file is for YOUR local, "
+            "non-commercial use and must not be redistributed."
+        ),
+    )
+    parser.add_argument(
+        "--epinet-max-id",
+        type=int,
+        default=None,
+        help="highest sqc id to sweep (default: the full catalogue).",
+    )
+    parser.add_argument(
         "--accept-licenses",
         action="store_true",
         help="accept external sources' terms non-interactively (batch use).",
@@ -453,6 +550,26 @@ def main(argv: list[str] | None = None) -> None:
             accept_licenses=args.accept_licenses,
         )
         topologies.update(topologies_from_tetrahedral_cifs(cifs))
+    if args.use_epinet:
+        from autografs.fetch import EPINET_MAX_ID, fetch_epinet_cgds
+
+        cgds = fetch_epinet_cgds(
+            cache_dir=Path(args.cache_dir) if args.cache_dir else None,
+            accept_licenses=args.accept_licenses,
+            max_id=args.epinet_max_id or EPINET_MAX_ID,
+        )
+        logger.info(f"Converting {len(cgds)} EPINET s-nets (maximal embeddings).")
+        entries = "\n".join(
+            entry
+            for path in sorted(cgds.values())
+            if (entry := epinet_entries(path.read_text(encoding="utf-8")))
+        )
+        topologies.update(read_cgd_data(entries, max_sites=args.max_connectivity))
+        logger.warning(
+            "The output library now contains EPINET-derived entries "
+            "(CC BY-NC-ND): keep it LOCAL and non-commercial - do not "
+            "redistribute it or bundle it into anything you share."
+        )
 
     if args.output.endswith((".json", ".json.gz")):
         topology_io.save_topologies(topologies, args.output)

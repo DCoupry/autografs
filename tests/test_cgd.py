@@ -75,3 +75,75 @@ class TestEntrySplitting:
         """Entry text ending in C/R/Y/S/T/A/L letters is not eaten."""
         topologies = read_cgd_data(TRAILING_LETTERS_CGD)
         assert set(topologies) == {"METAL"}
+
+
+EPINET_DIALECT = """PERIODIC_GRAPH
+ID sqctest
+EDGES
+  1 1 1 0 0
+END
+
+CRYSTAL
+  ID sqctest_relaxed
+  GROUP Pm-3m
+  CELL 1.1 1.1 1.1 90.0 90.0 90.0
+  ATOM\t1 6 0.0 0.0 0.0
+  EDGE\t0.0 0.0 0.0 1.0 0.0 0.0
+END
+
+CRYSTAL
+  ID sqctest_maximal
+  GROUP Pm-3m
+  CELL 1.0 1.0 1.0 90.0 90.0 90.0
+  ATOM\t1 6 0.0 0.0 0.0
+  EDGE\t0.0 0.0 0.0 1.0 0.0 0.0
+\t0.0 0.0 0.0 0.0 1.0 0.0
+\t0.0 0.0 0.0 0.0 0.0 1.0
+END
+"""
+
+
+class TestEpinetDialect:
+    """The EPINET .cgd dialect adapter (coverage plan stage 2).
+
+    The fixture is a SYNTHETIC file - pcu written in EPINET's format
+    conventions (PERIODIC_GRAPH preamble, several CRYSTAL blocks,
+    ID/ATOM keywords, tab-led continuation rows). No EPINET data enters
+    this repository: its CC BY-NC-ND license does not permit it.
+    """
+
+    def test_maximal_block_is_chosen_and_translated(self):
+        from autografs.cgd import epinet_entries
+
+        entry = epinet_entries(EPINET_DIALECT)
+        assert "NAME sqctest" in entry
+        assert "GROUP Pm-3m" in entry
+        assert "CELL 1.0 1.0 1.0 90.0 90.0 90.0" in entry
+        assert entry.count("NODE") == 1
+        # the continuation rows became explicit EDGE lines, and every
+        # edge gained the EDGE_CENTER the importer's slot stitching
+        # needs (EPINET files carry none)
+        assert entry.count("EDGE_CENTER") == 3
+        assert entry.count("EDGE") == 6
+        assert "1.1" not in entry
+
+    def test_translated_entry_parses_and_identifies(self):
+        import os
+
+        from autografs.cgd import epinet_entries, read_cgd_data
+        from autografs.net import identify_net, topology_quotient_edges
+        from autografs.topology_io import load_topologies
+
+        topologies = read_cgd_data(epinet_entries(EPINET_DIALECT))
+        assert set(topologies) == {"sqctest"}
+        fixture = os.path.join(
+            os.path.dirname(__file__), "data", "topologies_fixture.json"
+        )
+        library = load_topologies(fixture)
+        edges = topology_quotient_edges(topologies["sqctest"])
+        assert identify_net(edges, library) == ["pcu"]
+
+    def test_empty_input_is_empty_not_fatal(self):
+        from autografs.cgd import epinet_entries
+
+        assert epinet_entries("PERIODIC_GRAPH\nID x\nEND\n") == ""
