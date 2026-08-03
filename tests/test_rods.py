@@ -945,6 +945,65 @@ class TestRodFragment:
         assert fragment.arms == []
         assert fragment.repeat.screw_order == 4
 
+    def test_template_bonds_survive_an_unwrap_bridge(self):
+        """Every recorded template bond must be a real bond length.
+
+        ``bonds`` carries a repeat offset per bond, and the template is
+        only buildable if evaluating the bond at that offset reproduces
+        the contact. The offset used to be read from the bond's
+        home-cell image against coordinates ``_local_positions`` had
+        already image-corrected, so a bond whose atom the unwrap placed
+        through a periodic image counted that image twice and landed a
+        whole repeat away.
+
+        The pendant below is what exposes it: it hangs off the metal
+        across the c boundary, so it is unreachable through zero-offset
+        bonds and the unwrap must bridge to it - exactly the branched
+        metal-oxo geometry real rod MOFs have, and what a chain fixture
+        (connected in the home gauge whatever the origin) cannot show.
+        """
+        from pymatgen.analysis.local_env import CovalentRadius
+
+        from autografs.rods import rod_fragment
+
+        repeat_length, bond = 3.76, 1.88
+        lattice = Lattice.tetragonal(20.0, repeat_length)
+        # metal mid-cell; the chain oxygen sits a bond below it, the
+        # pendant a bond above - which wraps past c to the cell floor
+        metal_z = 3.0
+        pendant = np.array([1.2, 0.0, 1.45])  # |pendant| == bond
+        coords = [
+            [0.0, 0.0, metal_z],
+            [0.0, 0.0, metal_z - bond],
+            [pendant[0], 0.0, (metal_z + pendant[2]) % repeat_length],
+        ]
+        structure = Structure(
+            lattice, ["Zn", "O", "O"], coords, coords_are_cartesian=True
+        )
+        rod = RodUnit(
+            atom_indices=[0, 1, 2],
+            axis=np.array([0.0, 0.0, 1.0]),
+            repeat_length=repeat_length,
+            generator=(0, 0, 1),
+            poe_indices=[0],
+            n_connections=1,
+            internal_bonds=[(0, 1, (0, 0, 0)), (0, 2, (0, 0, 1))],
+        )
+        fragment = rod_fragment(structure, rod)
+        assert fragment.bonds
+        for a, b, m in fragment.bonds:
+            shift = np.array([0.0, 0.0, m * fragment.repeat.repeat_length])
+            distance = float(
+                np.linalg.norm(fragment.positions[a] - shift - fragment.positions[b])
+            )
+            target = sum(
+                CovalentRadius.radius[fragment.repeat.symbols[row]] for row in (a, b)
+            )
+            assert distance == pytest.approx(target, abs=0.6), (
+                f"bond {a}-{b} at repeat offset {m} spans {distance:.2f} A "
+                f"against a {target:.2f} A target"
+            )
+
 
 class TestRodSerialization:
     def test_round_trip(self, mofgen, tmp_path):
