@@ -1162,10 +1162,23 @@ def topology_rod_quotient_edges(
     """
     runs = run if isinstance(run, list) else [run]
     run_slots = {s for a_run in runs for s in a_run.slots}
+    # a run that knows its own nodes is believed, exactly as in rod
+    # building: under the two-connection convention a hand-built run's
+    # node - a chemical repeat binding two laterals - reads as an edge
+    # center and gets contracted away, which silently halves the bond
+    # count the build is then measured against.
     node_slots = {
         s
-        for s in run_slots
-        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+        for a_run in runs
+        for s in (
+            a_run.nodes
+            if a_run.nodes is not None
+            else [
+                t
+                for t in a_run.slots
+                if len(topology.slots[t].atoms.indices_from_symbol("X")) > 2
+            ]
+        )
     }
     adjacency = _adjacency(topology_quotient_edges(topology))
     for slot in (run_slots - node_slots) | set(empty_slots):
