@@ -98,7 +98,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import networkx
 import numpy as np
@@ -595,7 +595,20 @@ class _Lateral:
 
 
 class _RodBuild:
-    """Geometry of one rod build, evaluated per (scale, theta, z0)."""
+    """Geometry of one rod build, evaluated per (scale, theta, z0).
+
+    ``initial_scale``, when set, overrides ``initial_guess``'s scale
+    heuristic outright. A self-derived blueprint (a rod self-template)
+    is already at the crystal's own size, so its correct start is
+    exactly 1.0 by construction - the heuristic below measures
+    node-to-lateral separations that were calibrated for idealized
+    library nets and can land whole orders of magnitude off on a real
+    P1 embedding (measured: transverse scale 183 on one corpus
+    structure whose correct value was 1).
+    """
+
+    initial_scale: float | None = None
+    frozen_scale: float | None = None
 
     def __init__(
         self,
@@ -1229,11 +1242,20 @@ class _RodBuild:
         """(scale, theta per family, z0 per family) from a flat vector.
 
         Reads the head only; any trailing lateral-displacement block
-        (embedding relaxation) is left to ``lateral_shifts``.
+        (embedding relaxation) is left to ``lateral_shifts``. With
+        ``frozen_scale`` set the scale coordinate is inert: every
+        evaluation sees the frozen value, so a re-optimization cannot
+        leave the caller's basin whatever the objective prefers - the
+        fallback arm of the scale band (see build_rod_framework).
         """
         head = np.asarray(params[1 : 1 + 2 * self.n_families], dtype=float)
         rest = head.reshape(self.n_families, 2)
-        return float(params[0]), rest[:, 0], rest[:, 1]
+        scale = (
+            float(self.frozen_scale)
+            if self.frozen_scale is not None
+            else float(params[0])
+        )
+        return scale, rest[:, 0], rest[:, 1]
 
     def lateral_shifts(self, params: np.ndarray) -> np.ndarray | None:
         """Per-slot fractional displacements from the parameter tail."""
@@ -1253,7 +1275,9 @@ class _RodBuild:
 
     def initial_guess(self) -> np.ndarray:
         """(scale, then theta/z0 per family) good enough for Nelder-Mead."""
-        if self.helical:
+        if self.initial_scale is not None:
+            scale0 = float(self.initial_scale)
+        elif self.helical:
             # scale: the rod sits on the run's cylinder, so match the
             # rod's own radius to the (unscaled) blueprint node radius
             spec = self.rod_specs[0]
@@ -1523,9 +1547,26 @@ def rod_fits_topology(topology: Topology, screw_order: int, screw_angle: float) 
                 continue
             if abs(abs(candidate.screw_angle) - abs(screw_angle)) <= 5.0:
                 return True
-        # a 2_1 screw still builds on a straight run: a ditopic linker's
-        # arm sign-flip is a no-op there. Higher orders cannot.
+        # a 2_1 screw still builds on any straight run: a ditopic
+        # linker's arm sign-flip is a no-op there. A higher order builds
+        # on a straight run only when the run chains several nodes whose
+        # own turn matches the screw (#168 - cds: two 4-c nodes 90 deg
+        # apart hosting a 4_1 rod). _select_runs accepts that build and
+        # it validates, so this filter must accept it too; refusing all
+        # straight runs at order > 2 disagreed with the builder.
         if screw_order != 2:
+            for straight in axial_runs(topology):
+                nodes = _run_nodes(topology, straight)
+                if (
+                    len(nodes.slots) > 1
+                    and nodes.even
+                    and _screw_fits(nodes, screw_angle)
+                ):
+                    return True
+            # a single-node straight run cannot turn with the screw:
+            # _select_runs would fall back to one and the closure gate
+            # would reject the build, so refusing here matches the
+            # builder's outcome
             return False
     runs = axial_runs(topology)
     if not runs:
@@ -1631,6 +1672,8 @@ def build_rod_framework(
     verify_net: bool = False,
     verbose: bool = False,
     relax_embedding: bool = False,
+    initial_scale: float | None = None,
+    scale_band: float | None = None,
 ) -> Framework:
     """Build a rod framework - straight or helical - from a rod and linkers.
 
@@ -1672,6 +1715,19 @@ def build_rod_framework(
         ``NetMismatchError`` if it does not realize the blueprint net.
     verbose : bool, optional
         Log the optimized cell and residuals.
+    initial_scale : float or None, optional
+        Start the transverse-scale optimization here instead of at the
+        library-net heuristic. A self-derived blueprint (rod
+        self-template) is at the crystal's own size, so its correct
+        start is exactly 1.
+    scale_band : float or None, optional
+        Trust band around ``initial_scale``, as a relative half-width
+        (0.25 = +/-25%). The greedy port-image pairing makes the
+        objective multi-modal over the transverse scale, and a spurious
+        pairing at a compressed cell can outscore the true branch - so
+        when the free solve's scale leaves the band, the build re-solves
+        with the scale frozen at ``initial_scale`` (theta/z0 only) and
+        keeps that solution unconditionally. Requires ``initial_scale``.
 
     Returns
     -------
@@ -1697,6 +1753,8 @@ def build_rod_framework(
         )
     if not rod.arms:
         raise AlignmentError(f"Rod {rod.name!r} has no connection arms.")
+    if scale_band is not None and initial_scale is None:
+        raise ValueError("scale_band needs initial_scale as its reference")
 
     from autografs.rods import STRAIGHT_SCREW_TOL
 
@@ -1810,26 +1868,50 @@ def build_rod_framework(
         runs if len(runs) > 1 else runs[0],
         relax_embedding=relax_embedding,
     )
+    # a caller who knows the blueprint's true size (a self-derived
+    # blueprint is at the crystal's own scale by construction) starts
+    # the transverse-scale optimization there instead of at the
+    # library-net heuristic
+    build.initial_scale = initial_scale
 
     # optimize: coarse rotation grid per axis family (a full product
     # grid would be 16^families), then refine everything with Nelder-Mead
-    start = build.initial_guess()
-    for family in range(build.n_families):
-        angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
+    def solve() -> Any:
+        start = build.initial_guess()
+        for family in range(build.n_families):
+            angles = np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False)
 
-        def value_at(angle: float, family: int = family) -> float:
-            trial = start.copy()
-            trial[1 + 2 * family] = angle
-            return build.objective(trial)
+            def value_at(angle: float, family: int = family) -> float:
+                trial = start.copy()
+                trial[1 + 2 * family] = angle
+                return build.objective(trial)
 
-        start[1 + 2 * family] = min(angles, key=value_at)
-    result = minimize(
-        build.objective,
-        start,
-        method="Nelder-Mead",
-        options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
-    )
+            start[1 + 2 * family] = min(angles, key=value_at)
+        return minimize(
+            build.objective,
+            start,
+            method="Nelder-Mead",
+            options={"xatol": 1e-4, "fatol": 1e-6, "maxiter": 2000},
+        )
+
+    result = solve()
     scale, theta, z0 = build.unpack(result.x)
+    if (
+        scale_band is not None
+        and initial_scale is not None
+        and abs(scale / initial_scale - 1.0) > scale_band
+    ):
+        # The free solve left the caller's trust band. The greedy
+        # port-image pairing makes the objective multi-modal over the
+        # transverse scale, and a spurious pairing at a compressed or
+        # inflated cell can genuinely score better than the true branch
+        # (the CAXVOO lesson, again) - so the free objective cannot be
+        # the referee here. Freeze the scale at the reference and
+        # re-solve theta/z0 only; the frozen solution replaces the free
+        # one unconditionally.
+        build.frozen_scale = float(initial_scale)
+        result = solve()
+        scale, theta, z0 = build.unpack(result.x)
     shifts = build.lateral_shifts(result.x)
     # the polytopic arm assignments were fixed at the blueprint cell;
     # re-solve them now that the cell has moved

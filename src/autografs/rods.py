@@ -449,10 +449,26 @@ def rod_fragment(
     positions = _local_positions(
         structure, rod.atom_indices, anchor_index, rod.internal_bonds
     )
+    # the unwrap walks bond images, so every atom carries a lattice
+    # shift away from its home-cell position. A recorded bond offset is
+    # in the HOME gauge, so reading it against unwrapped coordinates
+    # counts the image twice on the bonds the walk already followed -
+    # ``unwrap_shift`` is what re-expresses one gauge in the other.
+    home_coords = np.asarray(
+        [structure[i].coords for i in rod.atom_indices], dtype=float
+    )
+    unwrap_shift = np.rint(
+        (positions - home_coords) @ np.linalg.inv(structure.lattice.matrix)
+    )
     axial, radial, angular, basis = _cylindrical_frame(positions, rod.axis)
     length = float(rod.repeat_length)
     symbols = [structure[i].specie.symbol for i in rod.atom_indices]
-    axial = (axial - axial.min()) % length
+    axial = axial - axial.min()
+    # keep the unwrapped axial: the modulo below folds an atom that the
+    # walk laid out past one repeat back to the other end, which is a
+    # further whole-repeat shift the bond arithmetic must not inherit
+    axial_unwrapped = axial.copy()
+    axial = axial % length
 
     chemical, order, screw = _chemical_reduction(
         symbols, axial, radial, angular, length, tolerance
@@ -528,11 +544,19 @@ def rod_fragment(
 
         seen: set[tuple[int, int, int]] = set()
         for i, j, off in rod.internal_bonds:
-            a = _template_row(row_of[i])
-            b = _template_row(row_of[j])
-            off_axial = float((np.asarray(off, dtype=float) @ matrix) @ axis_hat)
-            n_i = round((axial[row_of[i]] - kept_axial[a]) / chemical)
-            n_j = round((axial[row_of[j]] + off_axial - kept_axial[b]) / chemical)
+            row_i, row_j = row_of[i], row_of[j]
+            a = _template_row(row_i)
+            b = _template_row(row_j)
+            # the bond's residual image in the UNWRAPPED gauge: zero for
+            # every bond the unwrap walk followed (its image is already
+            # in the coordinates), the true image for the closure bonds
+            # it did not
+            residual = (
+                np.asarray(off, dtype=float) + unwrap_shift[row_i] - unwrap_shift[row_j]
+            )
+            off_axial = float((residual @ matrix) @ axis_hat)
+            n_i = round((axial_unwrapped[row_i] - kept_axial[a]) / chemical)
+            n_j = round((axial_unwrapped[row_j] + off_axial - kept_axial[b]) / chemical)
             m = int(n_j - n_i)
             key = (a, b, m) if (a, b, m) <= (b, a, -m) else (b, a, -m)
             if key in seen:

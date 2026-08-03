@@ -75,6 +75,30 @@ centers, rod nets typically match on the contracted tier (check
 framework connections still raises `DeconstructionError`, as do
 2-periodic (layer) building units.
 
+One opt-in convention changes what a building unit is. Real crystals
+often join two nodes by a **pair of parallel identical linkers**; the
+net has one edge there, and identification counts it once, but the
+doubled node's fragment carries twice the arms and fits no slot of the
+identified net. `deconstruct(..., fuse_parallel_bridges=True)` fuses
+such a bundle into one composite unit with one connection per end —
+both molecules kept, so composition is exact; the merged end realizes
+a single bond in a rebuilt framework, as a documented convention. Off
+by default; `result.fused_bridges` counts the bundles when on.
+
+Two refinements to rod identification are worth knowing about. First,
+candidates are filtered for **rod compatibility**: a matched net whose
+every channel the harvested rod's screw cannot occupy is removed from
+`net_candidates` (the buildable answer), but stays visible in
+`topological_candidates` (the quotient-graph answer) — the distinction
+between "matched but geometrically impossible for this rod" and
+"matched nothing". Second, when the per-atom PoE convention finds
+nothing rod-compatible, identification retries with a **grouped-PoE
+fallback**: cut endpoints of one rod at the same axial height merged
+into a single point of extension (a paddlewheel ring's four
+carboxylate carbons become one PoE, which is how O'Keeffe counts
+them); `result.poe_merged` records that the fallback answered. The
+fallback never moves a structure the primary convention answers.
+
 Rods get a canonical, screw-aware identity and a buildable form, and
 they can be **built forward again** — for straight and helical rods
 alike, including general (non-180°) screws such as MOF-74's. That is a

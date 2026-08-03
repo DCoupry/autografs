@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from autografs.topology import Topology
 
 __all__ = [
+    "BlueprintRecipe",
     "BuildingUnit",
     "Deconstruction",
     "RodUnit",
@@ -135,6 +136,46 @@ class BuildingUnit:
     kind: str
     atom_indices: list[int]
     n_connections: int
+
+
+@dataclass
+class BlueprintRecipe:
+    """The geometric recipe a self-templated blueprint is built from.
+
+    Everything ``extract_topology.topology_from_deconstruction`` needs
+    to erect the structure's OWN blueprint - one slot per building
+    unit at its real position, one shared connection point per cut
+    bond - without re-perceiving anything. Fractional coordinates are
+    in each unit's home-cell gauge (the ``_unit_images`` convention
+    shared with autografs.net), so the fractional difference between a
+    cut's two midpoint expressions is exactly the cut's integer
+    voltage.
+
+    Attributes
+    ----------
+    centers : list[tuple[float, float, float] or None]
+        Home-cell fractional centroid per finite unit, indexed like
+        ``Deconstruction.units`` when the structure is rod-free. When
+        rods are present the indexing follows the raw unit partition
+        (rods included), and a rod unit's entry is None - an infinite
+        unit has no centroid; its geometry lives in ``rod_poe``.
+    cuts : list[tuple[int, int, tuple, tuple]]
+        One entry per cut bond: ``(unit_a, unit_b, midpoint_in_a,
+        midpoint_in_b)``, the same physical bond midpoint expressed in
+        each end's home gauge (fractional). For a rod end the gauge is
+        that PoE atom's own home image (the ``_unit_quotient``
+        convention), so voltages still fall out of fractional
+        differences.
+    rod_poe : dict[int, list[tuple[int, tuple]]] or None
+        Per rod unit index: the points of extension as
+        ``(atom index, home-gauge fractional position)`` in axial
+        order - the node-slot chain a self-derived run is built from.
+        None for rod-free structures.
+    """
+
+    centers: list[tuple[float, float, float] | None]
+    cuts: list[tuple[int, int, tuple, tuple]]
+    rod_poe: dict[int, list[tuple[int, tuple]]] | None = None
 
 
 @dataclass
@@ -237,6 +278,32 @@ class Deconstruction:
         fragment, so they appear here instead of ``fragments`` /
         ``units``; in ``quotient_edges`` each rod is replaced by its
         points of extension (see RodUnit).
+    topological_candidates : list[str]
+        The identification consensus BEFORE the rod-compatibility
+        filter (#215). Identical to ``net_candidates`` for finite
+        frameworks; for rod frameworks it may name nets whose channels
+        the harvested rod cannot occupy - a statement about the
+        quotient graph alone, kept so "matched but rod-incompatible"
+        is distinguishable from "matched nothing".
+    poe_merged : bool
+        True when the candidates came from the grouped
+        points-of-extension convention: cut endpoints of one rod at
+        the same axial height merged into a single PoE vertex
+        (O'Keeffe's convention for e.g. paddlewheel chains). Tried
+        only as a fallback when the per-atom convention identifies
+        nothing that survives the rod filter, so existing assignments
+        never silently move.
+    fused_bridges : int
+        Number of parallel-bridge bundles fused into composite units
+        (0 unless ``fuse_parallel_bridges`` was requested and parallel
+        ditopic bridges were found; see ``_fuse_parallel_bridges``).
+    blueprint : BlueprintRecipe or None
+        The geometric recipe for the structure's own blueprint
+        (self-templated round trips, coverage plan stage 3). Always
+        recorded; rod units contribute their points of extension
+        (``rod_poe``) instead of a centroid. The point-slot
+        constructor (``topology_from_deconstruction``) consumes the
+        rod-free case; the rod case awaits the slot-run constructor.
     """
 
     structure: Structure
@@ -248,6 +315,10 @@ class Deconstruction:
     subframework_nets: list[NetMatches] = field(default_factory=list)
     guest_formulas: list[str] = field(default_factory=list)
     rod_units: list[RodUnit] = field(default_factory=list)
+    topological_candidates: list[str] = field(default_factory=list)
+    poe_merged: bool = False
+    fused_bridges: int = 0
+    blueprint: BlueprintRecipe | None = None
 
     @property
     def is_catenated(self) -> bool:
@@ -864,6 +935,174 @@ def _extract_fragments(
     return fragments, built_units
 
 
+def _cut_voltage(
+    cut: tuple[int, int, tuple[int, int, int]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+    unit_images: dict[int, np.ndarray],
+) -> np.ndarray:
+    """Voltage of one cut, oriented u -> v, in the _unit_quotient gauge."""
+    u, v, jimage = cut
+    shift = np.asarray(jimage, dtype=int) + (
+        unwraps[atom_to_unit[u]][u] - unwraps[atom_to_unit[v]][v]
+    )
+    return np.asarray(
+        unit_images[atom_to_unit[v]] + shift - unit_images[atom_to_unit[u]]
+    )
+
+
+def _fuse_parallel_bridges(
+    structure: Structure,
+    units: list[set[int]],
+    cuts: list[tuple[int, int, tuple[int, int, int]]],
+    atom_to_unit: dict[int, int],
+    unwraps: list[dict[int, np.ndarray]],
+    rod_indices: set[int],
+    generators: dict[int, np.ndarray],
+) -> tuple[
+    list[set[int]],
+    list[tuple[int, int, tuple[int, int, int]]],
+    dict[int, int],
+    list[dict[int, np.ndarray]],
+    set[int],
+    dict[int, np.ndarray],
+    int,
+]:
+    """Fuse parallel ditopic bridges into composite building units.
+
+    A pair of identical ditopic linkers bridging the same two units
+    through the same net voltage is one edge of the crystal's net -
+    identification's coordination-sequence walk counts it once - but
+    the mapper counts every dummy on the doubled node, so the structure
+    falls between the two conventions (measured on the census: the
+    dominant ``no_mapping`` mechanism, 133 structures failing at
+    exactly twice every blocked slot's arm count). Fusing the bundle
+    into one composite unit with one connection per end restores
+    agreement: the node's fragment carries one arm per bundle, the
+    composite carries both molecules (so composition stays exact), and
+    the rebuilt framework realizes one bond per merged end - a
+    documented convention, not an oversight.
+
+    Only metal-free, exactly-ditopic units of identical composition
+    bridging the same finite unit pair at the same contracted voltage
+    are fused. Everything else - including rod-adjacent bridges - is
+    left alone. Returns the rewritten
+    ``(units, cuts, atom_to_unit, unwraps, rod_indices, generators,
+    n_bundles)``; when no bundle exists the inputs come back unchanged
+    with ``n_bundles = 0``.
+    """
+    frac = structure.frac_coords
+    unit_images = _unit_images(frac, units, unwraps, rod_indices)
+
+    # per-unit cut inventory
+    unit_cuts: dict[int, list[int]] = defaultdict(list)
+    for index, (u, v, _jimage) in enumerate(cuts):
+        unit_cuts[atom_to_unit[u]].append(index)
+        unit_cuts[atom_to_unit[v]].append(index)
+
+    def linker_end(cut_index: int, linker: int) -> tuple[int, int, int, np.ndarray]:
+        """(linker atom, partner atom, partner unit, voltage linker->partner)."""
+        u, v, jimage = cuts[cut_index]
+        if atom_to_unit[u] == linker:
+            voltage = _cut_voltage(cuts[cut_index], atom_to_unit, unwraps, unit_images)
+            return u, v, atom_to_unit[v], voltage
+        voltage = -_cut_voltage(cuts[cut_index], atom_to_unit, unwraps, unit_images)
+        return v, u, atom_to_unit[u], voltage
+
+    def partner_of(cut_index: int, linker: int) -> int:
+        u, v, _jimage = cuts[cut_index]
+        return atom_to_unit[v] if atom_to_unit[u] == linker else atom_to_unit[u]
+
+    bundles: dict[tuple, list[int]] = defaultdict(list)
+    for k, unit in enumerate(units):
+        if k in rod_indices or len(unit_cuts[k]) != 2:
+            continue
+        if any(_is_metal(structure, atom) for atom in unit):
+            continue
+        # rod partners carry per-atom images, not a unit home image, so
+        # the voltage bookkeeping below does not apply to them
+        if any(partner_of(index, k) in rod_indices for index in unit_cuts[k]):
+            continue
+        ends = [linker_end(index, k) for index in unit_cuts[k]]
+        # contracted edge this linker decorates, canonicalized so the
+        # two traversal directions give one key; composition joins the
+        # key so only identical molecules fuse
+        (_, _, unit_a, voltage_a), (_, _, unit_b, voltage_b) = ends
+        edge = _canonical(unit_a, unit_b, voltage_b - voltage_a)
+        formula = tuple(
+            sorted(Counter(structure[i].specie.symbol for i in unit).items())
+        )
+        bundles[(edge, formula)].append(k)
+
+    fused = {key: members for key, members in bundles.items() if len(members) > 1}
+    if not fused:
+        return units, cuts, atom_to_unit, unwraps, rod_indices, generators, 0
+
+    removed: set[int] = set()
+    dropped_cuts: set[int] = set()
+    new_units = [set(unit) for unit in units]
+    new_unwraps = [dict(unwrap) for unwrap in unwraps]
+
+    def anchor_shift(linker: int, anchor_unit: int) -> np.ndarray:
+        """Gauge shift taking the linker's unwrap into the anchor's."""
+        for index in unit_cuts[linker]:
+            atom, partner, partner_unit, _voltage = linker_end(index, linker)
+            if partner_unit == anchor_unit:
+                u, _v, jimage = cuts[index]
+                step = np.asarray(jimage, dtype=int)
+                # pymatgen bond semantics: v at image (X + jimage)
+                # bonds u at image X, so anchoring on the partner's
+                # unwrapped image places the linker atom one step
+                # against (or along) the stored offset
+                if atom == u:
+                    image = new_unwraps[partner_unit][partner] - step
+                else:
+                    image = new_unwraps[partner_unit][partner] + step
+                return np.asarray(image - unwraps[linker][atom])
+        raise DeconstructionError(
+            "parallel-bridge fusion lost its anchor cut"
+        )  # pragma: no cover - bundle members bridge the anchor by construction
+
+    for (edge, _formula), members in sorted(fused.items(), key=lambda kv: kv[1]):
+        survivor, *merged = sorted(members)
+        anchor_unit = edge[0]
+        base = anchor_shift(survivor, anchor_unit)
+        for linker in merged:
+            shift = anchor_shift(linker, anchor_unit) - base
+            for atom in units[linker]:
+                new_units[survivor].add(atom)
+                new_unwraps[survivor][atom] = unwraps[linker][atom] + shift
+            removed.add(linker)
+            dropped_cuts.update(unit_cuts[linker])
+        logger.info(
+            f"\t[x] fused {len(members)} parallel ditopic bridges into one "
+            f"composite unit ({len(new_units[survivor])} atoms)."
+        )
+
+    keep = [k for k in range(len(new_units)) if k not in removed]
+    remap = {old: new for new, old in enumerate(keep)}
+    units_out = [new_units[k] for k in keep]
+    unwraps_out = [new_unwraps[k] for k in keep]
+    atom_to_unit_out = {
+        atom: remap[k]
+        for k, unit in enumerate(new_units)
+        if k in remap
+        for atom in unit
+    }
+    cuts_out = [cut for index, cut in enumerate(cuts) if index not in dropped_cuts]
+    rod_out = {remap[k] for k in rod_indices}
+    generators_out = {remap[k]: g for k, g in generators.items()}
+    return (
+        units_out,
+        cuts_out,
+        atom_to_unit_out,
+        unwraps_out,
+        rod_out,
+        generators_out,
+        len(fused),
+    )
+
+
 def _unit_images(
     frac: np.ndarray,
     units: list[set[int]],
@@ -1007,6 +1246,80 @@ def _rod_compatible_nets(
     return kept
 
 
+# Cut endpoints on one rod within this axial distance (Angstroms) are
+# one point of extension under the grouped convention: a paddlewheel
+# ring's four carboxylate carbons sit at one height and O'Keeffe counts
+# them as one PoE, while the per-atom convention gives them four
+# vertices and a quotient no library net matches. Measured on a sample
+# of unidentified rod structures, grouping is insensitive between 0.5
+# and 1.0 A; the value keeps genuinely consecutive PoE (>1 A apart on
+# every rod inspected) distinct.
+POE_MERGE_TOLERANCE = 0.5
+
+
+def _merged_poe_maps(
+    frac: np.ndarray,
+    lattice_matrix: np.ndarray,
+    unwraps: list[dict[int, np.ndarray]],
+    rods: list[RodUnit],
+    rod_unit_indices: list[int],
+    next_vertex: int,
+) -> tuple[dict[int, int], dict[int, np.ndarray], list[tuple[int, int, np.ndarray]]]:
+    """Per-atom PoE maps under the grouped (same-axial-height) convention.
+
+    Returns ``(poe_vertex, poe_images, rod_links)`` in the exact shape
+    ``_unit_quotient`` consumes. Groups are clustered along the axis at
+    ``POE_MERGE_TOLERANCE``; a cluster straddling the repeat boundary is
+    folded onto the first group one lattice generator back, so the wrap
+    link never counts one chemical position twice.
+    """
+    poe_vertex: dict[int, int] = {}
+    poe_images: dict[int, np.ndarray] = {}
+    rod_links: list[tuple[int, int, np.ndarray]] = []
+    for k, rod in zip(rod_unit_indices, rods, strict=True):
+        generator = np.asarray(rod.generator, dtype=int)
+        axis_hat = np.asarray(rod.axis, dtype=float)
+        heights = [
+            float(((frac[atom] + unwraps[k][atom]) @ lattice_matrix) @ axis_hat)
+            for atom in rod.poe_indices
+        ]
+        groups: list[dict] = []
+        for atom, z in zip(rod.poe_indices, heights, strict=True):
+            if groups and z - groups[-1]["z"] <= POE_MERGE_TOLERANCE:
+                groups[-1]["atoms"].append((atom, False))
+            else:
+                groups.append({"z": z, "atoms": [(atom, False)]})
+        if (
+            len(groups) > 1
+            and (heights[0] + rod.repeat_length) - groups[-1]["z"]
+            <= POE_MERGE_TOLERANCE
+        ):
+            for atom, _ in groups[-1]["atoms"]:
+                groups[0]["atoms"].append((atom, True))
+            groups.pop()
+        representatives = []
+        for group in groups:
+            positions = []
+            for atom, wrapped in group["atoms"]:
+                position = frac[atom] + unwraps[k][atom]
+                if wrapped:
+                    position = position - generator
+                positions.append(position)
+            image, _ = _split_image(np.mean(positions, axis=0))
+            for atom, _wrapped in group["atoms"]:
+                poe_vertex[atom] = next_vertex
+                poe_images[atom] = image
+            next_vertex += 1
+            representatives.append(group["atoms"][0][0])
+        if len(representatives) == 1:
+            rod_links.append((representatives[0], representatives[0], generator))
+        else:
+            for a, b in zip(representatives, representatives[1:], strict=False):
+                rod_links.append((a, b, np.zeros(3, dtype=int)))
+            rod_links.append((representatives[-1], representatives[0], generator))
+    return poe_vertex, poe_images, rod_links
+
+
 def _identify_subframeworks(
     subframework_edges: list[Counter[Edge]],
     topologies: Mapping[str, Topology],
@@ -1039,6 +1352,7 @@ def _identify_subframeworks(
 def deconstruct(
     source: Structure | str | Path,
     topologies: Mapping[str, Topology] | None = None,
+    fuse_parallel_bridges: bool = False,
 ) -> Deconstruction:
     """Deconstruct a periodic structure into SBUs and its net.
 
@@ -1051,6 +1365,13 @@ def deconstruct(
         Topology library to identify the net against (e.g.
         Autografs.topologies). When None, net identification is
         skipped and ``net_candidates`` stays empty.
+    fuse_parallel_bridges : bool, optional
+        Fuse parallel ditopic bridges - identical linkers joining the
+        same unit pair through the same net voltage - into one
+        composite building unit with one connection per end (see
+        ``_fuse_parallel_bridges``). Off by default: it changes what a
+        building unit is, so callers opt in (the round-trip census uses
+        it as a fallback when the standard units admit no mapping).
 
     Returns
     -------
@@ -1110,6 +1431,20 @@ def deconstruct(
                 "layer); only molecular and rod (1-periodic) building "
                 "units are supported."
             )
+
+    fused_bridges = 0
+    if fuse_parallel_bridges:
+        (
+            units,
+            cuts,
+            atom_to_unit,
+            unwraps,
+            rod_indices,
+            generators,
+            fused_bridges,
+        ) = _fuse_parallel_bridges(
+            structure, units, cuts, atom_to_unit, unwraps, rod_indices, generators
+        )
 
     fragments, built_units = _extract_fragments(
         structure, units, node_atoms, cuts, atom_to_unit, unwraps, rod_indices
@@ -1209,29 +1544,125 @@ def deconstruct(
         cuts, atom_to_unit, unwraps, unit_images, poe_vertex, poe_images, rod_links
     )
 
+    # the self-templated blueprint recipe (coverage plan stage 3): unit
+    # centroids and cut midpoints in each end's home gauge, so the
+    # structure's own blueprint can be erected without re-perception.
+    # Rod units contribute their points of extension instead of a
+    # centroid, in the per-atom PoE gauge the quotient already uses.
+    def _end_image(atom: int) -> np.ndarray:
+        if atom in poe_images:
+            return poe_images[atom]
+        return unit_images[atom_to_unit[atom]]
+
+    recipe_centers: list[tuple[float, float, float] | None] = []
+    for k, unit in enumerate(units):
+        if k in rod_indices:
+            recipe_centers.append(None)
+            continue
+        centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
+        home = centroid - unit_images[k]
+        recipe_centers.append((float(home[0]), float(home[1]), float(home[2])))
+    recipe_cuts = []
+    for u, v, jimage in cuts:
+        shift = np.asarray(jimage, dtype=float)
+        ka, kb = atom_to_unit[u], atom_to_unit[v]
+        mid_a = (frac[u] + frac[v] + shift) / 2.0 + unwraps[ka][u] - _end_image(u)
+        mid_b = (frac[u] + frac[v] - shift) / 2.0 + unwraps[kb][v] - _end_image(v)
+        recipe_cuts.append(
+            (
+                ka,
+                kb,
+                (float(mid_a[0]), float(mid_a[1]), float(mid_a[2])),
+                (float(mid_b[0]), float(mid_b[1]), float(mid_b[2])),
+            )
+        )
+    recipe_rod_poe: dict[int, list[tuple[int, tuple]]] | None = None
+    if rods:
+        recipe_rod_poe = {}
+        for k in sorted(rod_indices):
+            entries = []
+            for atom in rod_poe[k]:
+                home_frac = frac[atom] + unwraps[k][atom] - poe_images[atom]
+                entries.append(
+                    (
+                        atom,
+                        (
+                            float(home_frac[0]),
+                            float(home_frac[1]),
+                            float(home_frac[2]),
+                        ),
+                    )
+                )
+            recipe_rod_poe[k] = entries
+    blueprint_recipe = BlueprintRecipe(
+        centers=recipe_centers, cuts=recipe_cuts, rod_poe=recipe_rod_poe
+    )
+
     subframework_nets: list[NetMatches] = []
     net_candidates: list[str] = []
+    topological_candidates: list[str] = []
+    poe_merged = False
     if topologies is not None:
-        subframework_nets, net_candidates = _identify_subframeworks(
-            [
-                _unit_quotient(
-                    cuts,
-                    atom_to_unit,
-                    unwraps,
-                    unit_images,
-                    poe_vertex,
-                    poe_images,
-                    rod_links,
-                    atoms=component,
-                )
-                for component in periodic_components
-            ],
-            topologies,
+
+        def _identify_with(
+            vertex_map: dict[int, int],
+            image_map: dict[int, np.ndarray],
+            links: list[tuple[int, int, np.ndarray]],
+        ) -> tuple[list[NetMatches], list[str]]:
+            return _identify_subframeworks(
+                [
+                    _unit_quotient(
+                        cuts,
+                        atom_to_unit,
+                        unwraps,
+                        unit_images,
+                        vertex_map,
+                        image_map,
+                        links,
+                        atoms=component,
+                    )
+                    for component in periodic_components
+                ],
+                topologies,
+            )
+
+        subframework_nets, net_candidates = _identify_with(
+            poe_vertex, poe_images, rod_links
         )
+        topological_candidates = list(net_candidates)
         if rods:
             net_candidates = _rod_compatible_nets(
                 structure, rods, net_candidates, topologies
             )
+            if not net_candidates:
+                # fallback tier: the per-atom PoE convention found
+                # nothing the rod filter accepts, so retry with cut
+                # endpoints grouped by axial height (a paddlewheel
+                # ring's four carboxylate carbons become ONE point of
+                # extension, which is how O'Keeffe counts them).
+                # Fallback only - a structure the primary convention
+                # answers, buildably, never moves.
+                merged_maps = _merged_poe_maps(
+                    frac,
+                    structure.lattice.matrix,
+                    unwraps,
+                    rods,
+                    sorted(rod_indices),
+                    len(units),
+                )
+                if len(merged_maps[0]) > len(set(merged_maps[0].values())):
+                    merged_nets, merged_candidates = _identify_with(*merged_maps)
+                    if merged_candidates:
+                        subframework_nets = merged_nets
+                        topological_candidates = list(merged_candidates)
+                        poe_merged = True
+                        logger.info(
+                            "\t[x] grouped points-of-extension tier "
+                            f"matched: {', '.join(merged_candidates)}."
+                        )
+                        net_candidates = _rod_compatible_nets(
+                            structure, rods, merged_candidates, topologies
+                        )
 
     return Deconstruction(
         structure=structure,
@@ -1243,4 +1674,8 @@ def deconstruct(
         n_periodic_components=n_periodic,
         subframework_nets=subframework_nets,
         guest_formulas=sorted(guest_formulas),
+        topological_candidates=topological_candidates,
+        poe_merged=poe_merged,
+        fused_bridges=fused_bridges,
+        blueprint=blueprint_recipe,
     )

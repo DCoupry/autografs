@@ -201,11 +201,23 @@ benefit, and nothing at build time distinguishes that case. Set
 lets the optimizer trade bond closure against the anchor-direction terms, and
 on a net whose SBU-versus-slot shape mismatch is large that trade can go badly.
 Every relaxed build is therefore scored against two references — closure alone
-over the same free parameters, and the fixed-slot solution the flag-off build
-would give — and the relaxed result is kept only if its worst bond stays within
-0.2 Å of the best of them. The budget is deliberately not zero: a modest
-closure cost bought with a large packing gain is exactly what the feature is
-for. If you need a hard closure guarantee, set `bond_tolerance` as well.
+over the same free parameters (started from the fixed-slot solution, which its
+feasible set contains, so it can only refine that solution), and the fixed-slot
+solution the flag-off build would give — and the relaxed result is kept only if
+its worst bond stays within 0.2 Å of the best of them. The budget is
+deliberately not zero: a modest closure cost bought with a large packing gain
+is exactly what the feature is for. If you need a hard closure guarantee, set
+`bond_tolerance` as well.
+
+Two interactions worth knowing. **Empty slots pin their displacements**: an
+orbit whose every slot is empty has no placement to move, so an edge-decorated
+net built with its 2-connected slots empty usually falls below
+`MIN_FREE_DISPLACEMENTS` and relaxation silently does not run — check the
+`relaxation` graph marker (`framework.graph.graph["relaxation"]`), which
+records the effective free-displacement count, which candidate the guard kept,
+and the per-candidate worst-bond scores. And the guard's decision is made at
+the pre-`finalize` arm assignment; the `verbose` bond report re-solves the
+assignment at the final cell, so the two can differ on hard structures.
 
 ## Batch enumeration
 

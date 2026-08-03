@@ -461,6 +461,28 @@ class TestRelaxationOnRealNets:
         assert relaxed.structure.volume < 1.25 * fixed.structure.volume
 
 
+class TestMainSolveStaysUnseeded:
+    """The main relaxed solve must NOT get the seeded simplex.
+
+    Measured, not a preference (scripts/benchmarks/
+    calibrate_direction_weight.py): with the main solve's displacement
+    simplex properly seeded, the relaxed objective's true optimum on
+    shape-mismatched nets is the #197 pathology at EVERY weight from
+    0.1 to 2.0 -- pts inflates x2.9 and tbo x2.3 at guard-passing
+    closure, invisible to any closure budget, and inseparable from
+    genuine corrections by any volume screen (largest real corpus win
+    x1.69 vs a fixture pathology at x1.56). Only the closure-only
+    guard reference, whose objective cannot trade volume for
+    alignment, gets the seeded explorer. If you flip this constant,
+    re-run the sweep first.
+    """
+
+    def test_seed_main_solve_is_off(self):
+        from autografs import builder
+
+        assert builder.SEED_MAIN_SOLVE is False
+
+
 class TestMinFreeDisplacements:
     """The population default: relaxation is off below the threshold."""
 

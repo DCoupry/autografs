@@ -945,6 +945,65 @@ class TestRodFragment:
         assert fragment.arms == []
         assert fragment.repeat.screw_order == 4
 
+    def test_template_bonds_survive_an_unwrap_bridge(self):
+        """Every recorded template bond must be a real bond length.
+
+        ``bonds`` carries a repeat offset per bond, and the template is
+        only buildable if evaluating the bond at that offset reproduces
+        the contact. The offset used to be read from the bond's
+        home-cell image against coordinates ``_local_positions`` had
+        already image-corrected, so a bond whose atom the unwrap placed
+        through a periodic image counted that image twice and landed a
+        whole repeat away.
+
+        The pendant below is what exposes it: it hangs off the metal
+        across the c boundary, so it is unreachable through zero-offset
+        bonds and the unwrap must bridge to it - exactly the branched
+        metal-oxo geometry real rod MOFs have, and what a chain fixture
+        (connected in the home gauge whatever the origin) cannot show.
+        """
+        from pymatgen.analysis.local_env import CovalentRadius
+
+        from autografs.rods import rod_fragment
+
+        repeat_length, bond = 3.76, 1.88
+        lattice = Lattice.tetragonal(20.0, repeat_length)
+        # metal mid-cell; the chain oxygen sits a bond below it, the
+        # pendant a bond above - which wraps past c to the cell floor
+        metal_z = 3.0
+        pendant = np.array([1.2, 0.0, 1.45])  # |pendant| == bond
+        coords = [
+            [0.0, 0.0, metal_z],
+            [0.0, 0.0, metal_z - bond],
+            [pendant[0], 0.0, (metal_z + pendant[2]) % repeat_length],
+        ]
+        structure = Structure(
+            lattice, ["Zn", "O", "O"], coords, coords_are_cartesian=True
+        )
+        rod = RodUnit(
+            atom_indices=[0, 1, 2],
+            axis=np.array([0.0, 0.0, 1.0]),
+            repeat_length=repeat_length,
+            generator=(0, 0, 1),
+            poe_indices=[0],
+            n_connections=1,
+            internal_bonds=[(0, 1, (0, 0, 0)), (0, 2, (0, 0, 1))],
+        )
+        fragment = rod_fragment(structure, rod)
+        assert fragment.bonds
+        for a, b, m in fragment.bonds:
+            shift = np.array([0.0, 0.0, m * fragment.repeat.repeat_length])
+            distance = float(
+                np.linalg.norm(fragment.positions[a] - shift - fragment.positions[b])
+            )
+            target = sum(
+                CovalentRadius.radius[fragment.repeat.symbols[row]] for row in (a, b)
+            )
+            assert distance == pytest.approx(target, abs=0.6), (
+                f"bond {a}-{b} at repeat offset {m} spans {distance:.2f} A "
+                f"against a {target:.2f} A target"
+            )
+
 
 class TestRodSerialization:
     def test_round_trip(self, mofgen, tmp_path):
@@ -2401,6 +2460,60 @@ class TestSingleUnitContact:
         assert math.isfinite(build.min_inter_unit_contact(placed))
 
 
+class TestMergedPoeMaps:
+    """The grouped points-of-extension convention (fallback tier).
+
+    A paddlewheel-chain rod carries several cut atoms at one axial
+    height; O'Keeffe counts them as one point of extension, the
+    per-atom convention as several. The grouped maps must cluster by
+    height, fold a cluster straddling the repeat boundary back one
+    generator, and keep the chain-plus-wrap link structure.
+    """
+
+    @staticmethod
+    def _maps(heights, repeat=10.0):
+        from autografs.deconstruct import _merged_poe_maps
+
+        lattice = np.diag([repeat, repeat, repeat])
+        frac = np.array([[0.0, 0.0, z / repeat] for z in heights])
+        order = sorted(range(len(heights)), key=lambda i: heights[i])
+        rod = RodUnit(
+            atom_indices=list(range(len(heights))),
+            axis=np.array([0.0, 0.0, 1.0]),
+            repeat_length=repeat,
+            generator=(0, 0, 1),
+            poe_indices=order,
+            n_connections=len(heights),
+            cut_vectors=[],
+            internal_bonds=[],
+        )
+        unwraps = [{i: np.zeros(3) for i in range(len(heights))}]
+        return _merged_poe_maps(frac, lattice, unwraps, [rod], [0], next_vertex=1)
+
+    def test_same_height_atoms_share_a_vertex(self):
+        vertex, _images, links = self._maps([1.0, 1.2, 6.0, 6.1])
+        assert vertex[0] == vertex[1]
+        assert vertex[2] == vertex[3]
+        assert vertex[0] != vertex[2]
+        # two groups: one intra-cell link plus the wrap link
+        voltages = sorted(tuple(int(x) for x in v) for _a, _b, v in links)
+        assert voltages == [(0, 0, 0), (0, 0, 1)]
+
+    def test_wraparound_cluster_folds_back(self):
+        vertex, _images, links = self._maps([0.1, 5.0, 9.8])
+        # 9.8 sits within tolerance of 0.1 one repeat up: same vertex
+        assert vertex[2] == vertex[0]
+        assert vertex[1] != vertex[0]
+        assert len(set(vertex.values())) == 2
+
+    def test_single_group_becomes_a_self_loop(self):
+        vertex, _images, links = self._maps([2.0, 2.3])
+        assert len(set(vertex.values())) == 1
+        (a, b, voltage) = links[0]
+        assert a == b
+        assert tuple(int(x) for x in voltage) == (0, 0, 1)
+
+
 class TestRodNetCompatibility:
     """#214: identification must not offer nets a rod cannot occupy.
 
@@ -2445,4 +2558,34 @@ class TestRodNetCompatibility:
 
         assert rod_fits_topology(
             bundled_topologies["pcu"], screw_order=1, screw_angle=0.0
+        )
+
+    def test_turning_multinode_straight_run_accepts_matching_screw(
+        self, bundled_topologies
+    ):
+        """The filter must agree with the builder on cds-class nets.
+
+        cds carries no helical run (its nodes sit on the axis, so a
+        positional screw fit is degenerate) but chains two 4-connected
+        nodes per period turned 90 degrees apart, and _select_runs
+        accepts - and validates - a 4_1 rod on that straight run. An
+        earlier filter refused every straight run at screw order > 2,
+        so a real 4_1-rod material correctly identified as cds would
+        have been reported as having no rod-compatible net.
+        """
+        from autografs.rod_build import rod_fits_topology
+
+        cds = bundled_topologies["cds"]
+        assert rod_fits_topology(cds, screw_order=4, screw_angle=90.0)
+        # the same run does not host a screw its node turn cannot match
+        assert not rod_fits_topology(cds, screw_order=6, screw_angle=60.0)
+
+    def test_single_node_straight_run_refuses_high_screw(self, bundled_topologies):
+        """pcu's one-node runs cannot turn with a 4_1 screw; the
+        builder's closure gate would reject that build, and the filter
+        must predict the same outcome."""
+        from autografs.rod_build import rod_fits_topology
+
+        assert not rod_fits_topology(
+            bundled_topologies["pcu"], screw_order=4, screw_angle=90.0
         )

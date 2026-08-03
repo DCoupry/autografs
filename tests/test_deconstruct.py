@@ -558,3 +558,270 @@ def test_hill_formula():
     assert _hill_formula(["C", "H", "H", "C", "O"]) == "C2H2O"
     assert _hill_formula(["Zn", "O", "Zn"]) == "OZn2"
     assert _hill_formula(["H", "O", "H"]) == "H2O"
+
+
+def _doubly_bridged_pcu() -> Structure:
+    """A pcu-like crystal whose x edges carry parallel double bridges.
+
+    One Zn node per cubic cell; single two-carbon bridges along y and
+    z; TWO parallel two-carbon bridges along x, offset to +-1.2 A so
+    they do not bond each other. The node therefore perceives 8
+    connections where the underlying net has 6 - the doubled-node
+    signature that dominates the census's no_mapping bucket (a
+    paddlewheel bridged by parallel linker pairs reads as 8-connected
+    on a 4-c net). Bridges are two atoms so every bond has its own
+    partner atom: the single Zn still carries all 8 connections on one
+    anchor - the multi-connection-anchor case bond formation must
+    survive - while no linker bonds the same atom pair through two
+    images, which the simple-graph min-image representation cannot
+    hold.
+    """
+    a = 5.6
+    lo, hi = 2.1, 3.5  # C-C at 1.4 A, Zn-C at 2.1-2.4 A
+    species = ["Zn"] + ["C"] * 8
+    carts = [
+        (0.0, 0.0, 0.0),
+        (lo, 1.2, 0.0),  # x bridge, upper pair
+        (hi, 1.2, 0.0),
+        (lo, -1.2, 0.0),  # x bridge, lower pair (parallel to the upper)
+        (hi, -1.2, 0.0),
+        (0.0, lo, 0.0),  # y bridge, single
+        (0.0, hi, 0.0),
+        (0.0, 0.0, lo),  # z bridge, single
+        (0.0, 0.0, hi),
+    ]
+    return Structure(Lattice.cubic(a), species, carts, coords_are_cartesian=True)
+
+
+class TestParallelBridgeFusion:
+    """Opt-in fusion of parallel ditopic bridges (coverage plan stage 1).
+
+    Identification's coordination-sequence walk counts a double bridge
+    once; the mapper counts every dummy on the doubled node. Fusion
+    restores agreement by merging the parallel pair into one composite
+    unit with one connection per end - both molecules kept, so
+    composition stays exact.
+    """
+
+    def test_default_leaves_units_alone(self, mofgen):
+        result = mofgen.deconstruct(_doubly_bridged_pcu())
+        assert result.fused_bridges == 0
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 8
+
+    def test_fusion_restores_the_net_arm_count(self, mofgen):
+        result = mofgen.deconstruct(_doubly_bridged_pcu(), fuse_parallel_bridges=True)
+        assert result.fused_bridges == 1
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 6
+        # the composite carries BOTH bridge molecules on 2 connections,
+        # so the fused fragment is ditopic and composition-complete
+        composite = next(
+            u for u in result.units if u.kind == "linker" and "C4" in u.name
+        )
+        assert composite.n_connections == 2
+        placed = Counter(atom for u in result.units for atom in u.atom_indices)
+        assert len(placed) == len(result.structure)
+        assert max(placed.values()) == 1
+        assert result.net_candidates == ["pcu"]
+
+    def test_fusion_requires_identical_composition(self, mofgen):
+        # hang a hydrogen on one of the parallel bridges: CH vs C no
+        # longer match, so nothing fuses and the request is a clean
+        # no-op (a nitrogen swap would not test this - the metal-oxo
+        # rule absorbs a carbon-free N into the node)
+        structure = _doubly_bridged_pcu()
+        structure.append("H", (2.1, -1.2, 0.9), coords_are_cartesian=True)
+        result = mofgen.deconstruct(structure, fuse_parallel_bridges=True)
+        assert result.fused_bridges == 0
+        node = next(u for u in result.units if u.kind == "node")
+        assert node.n_connections == 8
+
+
+class TestSelfTemplatedRoundTrip:
+    """The structure's own blueprint rebuilds the structure (stage 3).
+
+    topology_from_deconstruction erects one slot per building unit at
+    its real position, with one shared connection point per cut; the
+    rebuild maps each slot to its own unit's representative fragment.
+    No library net is consulted at any point, so this is the round
+    trip with every library wall removed - what remains is the rigid-
+    unit abstraction itself.
+    """
+
+    def _selftemplate(self, mofgen, result):
+        import copy
+
+        from autografs.builder import build_framework
+        from autografs.extract_topology import topology_from_deconstruction
+
+        topology, mapping = topology_from_deconstruction(result)
+        mappings = {
+            index: copy.deepcopy(result.fragments[name])
+            for index, name in mapping.items()
+        }
+        return topology, build_framework(
+            topology, mappings, max_rmsd=0.5, verify_net=True
+        )
+
+    def test_mof5_rebuilds_from_its_own_blueprint(self, mofgen, mof5_deconstruction):
+        result = mof5_deconstruction
+        topology, rebuilt = self._selftemplate(mofgen, result)
+        assert len(topology) == len(result.units)
+        assert (
+            rebuilt.structure.composition.reduced_formula
+            == result.structure.composition.reduced_formula
+        )
+        # the blueprint is the crystal's own embedding, so the
+        # optimized cell must come out at the experimental volume
+        ratio = rebuilt.structure.volume / result.structure.volume
+        assert 0.9 < ratio < 1.1
+
+    def test_doubled_bridge_needs_no_fusion(self, mofgen):
+        """The 8-connected node maps onto its own 8-arm slot natively:
+        the multiplicity wall does not exist for a self-template."""
+        result = mofgen.deconstruct(_doubly_bridged_pcu())
+        topology, rebuilt = self._selftemplate(mofgen, result)
+        node_slot = max(
+            topology.slots, key=lambda s: len(s.atoms.indices_from_symbol("X"))
+        )
+        assert len(node_slot.atoms.indices_from_symbol("X")) == 8
+        assert (
+            rebuilt.structure.composition.reduced_formula
+            == result.structure.composition.reduced_formula
+        )
+
+    def test_rod_structures_record_poe_but_await_run_blueprints(self, mofgen):
+        from autografs.exceptions import TopologyExtractionError
+        from autografs.extract_topology import topology_from_deconstruction
+
+        result = mofgen.deconstruct(_rod_pillar_structure(1))
+        # the recipe now carries the rod's points of extension in the
+        # quotient's own gauge - the run constructor's raw material
+        recipe = result.blueprint
+        assert recipe is not None and recipe.rod_poe
+        (rod_index, entries), *_ = recipe.rod_poe.items()
+        assert recipe.centers[rod_index] is None
+        assert len(entries) == len(result.rod_units[0].poe_indices)
+        # the point-slot constructor still declines: rods need slot runs
+        with pytest.raises(TopologyExtractionError, match="[Rr]od"):
+            topology_from_deconstruction(result)
+
+
+def _catenated_pcu_pair() -> Structure:
+    """Two interpenetrated single-bridged pcu nets, offset body-center.
+
+    Each net is one Zn plus two-carbon bridges along x, y and z; the
+    second net is the first translated by (1/2, 1/2, 1/2). The closest
+    inter-net contact is ~4 A, so bond perception keeps the components
+    separate and the deconstruction reports fold 2.
+    """
+    a = 5.6
+    lo, hi = 2.1, 3.5
+    base = [
+        (0.0, 0.0, 0.0),
+        (lo, 0.0, 0.0),
+        (hi, 0.0, 0.0),
+        (0.0, lo, 0.0),
+        (0.0, hi, 0.0),
+        (0.0, 0.0, lo),
+        (0.0, 0.0, hi),
+    ]
+    shift = a / 2
+    species = (["Zn"] + ["C"] * 6) * 2
+    carts = base + [(x + shift, y + shift, z + shift) for x, y, z in base]
+    return Structure(Lattice.cubic(a), species, carts, coords_are_cartesian=True)
+
+
+class TestCatenatedSelfTemplate:
+    """A 2-fold interpenetrated pair rebuilds from its own blueprint.
+
+    The recipe holds every component's units, so the erected blueprint
+    is a disconnected quotient whose two nets share the one real cell
+    at their true relative offset; the build places both and the exact
+    verification compares like with like. This is what the library arm
+    structurally cannot do - it rebuilds one net of a catenated pair
+    and fails the composition gate.
+    """
+
+    def test_two_fold_pair_closes(self, mofgen):
+        import copy
+
+        from autografs.builder import build_framework
+        from autografs.extract_topology import topology_from_deconstruction
+
+        result = mofgen.deconstruct(_catenated_pcu_pair())
+        assert result.n_periodic_components == 2
+        topology, mapping = topology_from_deconstruction(result)
+        # one Zn node and three two-carbon bridges per net, two nets
+        assert len(topology) == len(result.units) == 8
+        mappings = {
+            index: copy.deepcopy(result.fragments[name])
+            for index, name in mapping.items()
+        }
+        rebuilt = build_framework(topology, mappings, max_rmsd=0.5, verify_net=True)
+        assert (
+            rebuilt.structure.composition.reduced_formula
+            == result.structure.composition.reduced_formula
+        )
+        assert len(rebuilt) == len(result.structure)
+        # the fixture's synthetic Zn-C bonds (2.1 A) sit above the
+        # covalent target the cell objective optimizes toward, so the
+        # rebuilt cell is correctly a few percent smaller; both nets
+        # must still share it at the true relative offset
+        ratio = rebuilt.structure.volume / result.structure.volume
+        assert 0.75 < ratio < 1.1
+
+
+class TestRodSelfTemplate:
+    """A rod framework rebuilds from its own slot-run blueprint.
+
+    The rod's points of extension become node slots on the crystal's
+    own axis, the run is built from the rod's measured repeat rather
+    than detected, and the validated rod builder consumes it unchanged
+    - the last library wall, removed for the single-rod case.
+    """
+
+    def test_pillar_rebuilds_on_its_own_run(self, mofgen):
+        import copy
+
+        from autografs.extract_topology import rod_topology_from_deconstruction
+        from autografs.rod_build import build_rod_framework
+
+        result = mofgen.deconstruct(_rod_pillar_structure(1))
+        topology, run, lateral_mapping, fragment = rod_topology_from_deconstruction(
+            result
+        )
+        assert set(run.slots).isdisjoint(lateral_mapping)
+        laterals = {
+            index: copy.deepcopy(result.fragments[name])
+            for index, name in lateral_mapping.items()
+        }
+        # verify_net stays off: the rod-form verifier re-detects runs
+        # on the blueprint instead of trusting the injected one, and a
+        # distorted self-blueprint fails that detection - a machinery
+        # conservatism recorded in the coverage plan, not a mismatch.
+        # Composition plus exact atom count is the v1 closure gate.
+        rebuilt = build_rod_framework(
+            topology,
+            fragment,
+            laterals,
+            run=run,
+            min_distance=None,
+            bond_tolerance=10.0,
+            verify_net=False,
+            initial_scale=1.0,
+            scale_band=0.25,
+        )
+        built = rebuilt.structure.composition
+        experimental = result.structure.composition
+        assert built.reduced_formula == experimental.reduced_formula
+        # the builder stacks at least two repeats (a continuation bond
+        # must join distinct node pairs), so the rebuild is a whole
+        # supercell of the crystal; per-atom volume is the
+        # supercell-invariant packing check
+        assert len(rebuilt.structure) % len(result.structure) == 0
+        per_atom = (rebuilt.structure.volume / len(rebuilt.structure)) / (
+            result.structure.volume / len(result.structure)
+        )
+        assert 0.75 < per_atom < 1.25

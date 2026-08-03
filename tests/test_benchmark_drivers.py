@@ -88,3 +88,81 @@ class TestThroughput:
         payload = throughput.run(mofgen, ["not_a_net"], repeats=1)
         assert payload["topologies"]["not_a_net"]["error"] == "unknown topology"
         json.dumps(payload, default=str)
+
+
+class TestMappingGap:
+    """The driver that attributes roundtrip's ``no_mapping`` bucket.
+
+    A structure built from a net's own slots must map back onto it, so
+    the round trip here is trivially satisfiable -- which is the point:
+    if this reports a wall, the predicate or the deconstruction changed
+    under us, not the chemistry.
+    """
+
+    def test_selfbuilt_structure_maps(self, mofgen, mof5_cif):
+        gap = _load("mapping_gap")
+        payload = gap.run([mof5_cif], n_jobs=1)
+        record = payload["structures"]["mof5.cif"]
+        assert record["outcome"] in {"mapped", "geometry", "arm_count"}
+        json.dumps(payload, default=str)
+
+    def test_walls_are_attributed_not_pooled(self, mofgen):
+        """A slot with no right-sized unit is arm_count, not geometry."""
+        gap = _load("mapping_gap")
+        topology = mofgen.topologies["pcu"]
+        two_connected = next(
+            key
+            for key in topology.mappings
+            if len(key.atoms.indices_from_symbol("X")) == 2
+        )
+        six_connected = next(
+            key
+            for key in topology.mappings
+            if len(key.atoms.indices_from_symbol("X")) == 6
+        )
+        # only ditopic units available: the 6-connected slot cannot be
+        # filled at any threshold, and that is a connectivity fact
+        verdict = gap._slot_verdict(six_connected, [two_connected], 0.35)
+        assert verdict["wall"] == "arm_count"
+        assert verdict["best_rmsd"] is None
+        # a slot against itself is a fit, at any threshold
+        assert gap._slot_verdict(two_connected, [two_connected], 0.35)["wall"] is None
+
+
+class TestSelfTemplate:
+    """The driver that rebuilds a crystal from its own blueprint.
+
+    A structure this library built must survive its own self-templated
+    round trip: the blueprint is its real embedding and the fragments
+    are its own units, so anything short of closed_self means the
+    stage-3 machinery, not the chemistry, broke.
+    """
+
+    def test_selfbuilt_structure_closes(self, mofgen, mof5_cif):
+        st = _load("selftemplate")
+        payload = st.run([mof5_cif], topofile=FIXTURE_PATH, n_jobs=1)
+        record = payload["structures"]["mof5.cif"]
+        assert record["outcome"] == "closed_self"
+        assert 0.9 < record["volume_ratio"] < 1.1
+        json.dumps(payload, default=str)
+
+
+class TestUnidentifiedProbe:
+    """The driver that attributes roundtrip's ``unidentified`` bucket.
+
+    A structure built from a library net must identify, so the probe on
+    it must land in the ``identified`` outcome with a well-formed
+    quotient: nonzero vertices, a degree profile, and at least one
+    prefilter candidate (itself).
+    """
+
+    def test_selfbuilt_structure_identifies(self, mofgen, mof5_cif):
+        probe = _load("unidentified_probe")
+        payload = probe.run([mof5_cif], topofile=FIXTURE_PATH, n_jobs=1)
+        record = payload["structures"]["mof5.cif"]
+        assert record["outcome"] == "identified"
+        assert record["net"] == ["pcu"]
+        assert record["contracted_vertices"] > 0
+        assert record["n_prefilter_candidates"] >= 1
+        assert not record["sig_empty"]
+        json.dumps(payload, default=str)
