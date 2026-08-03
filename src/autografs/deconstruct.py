@@ -153,17 +153,29 @@ class BlueprintRecipe:
 
     Attributes
     ----------
-    centers : list[tuple[float, float, float]]
+    centers : list[tuple[float, float, float] or None]
         Home-cell fractional centroid per finite unit, indexed like
-        ``Deconstruction.units``.
+        ``Deconstruction.units`` when the structure is rod-free. When
+        rods are present the indexing follows the raw unit partition
+        (rods included), and a rod unit's entry is None - an infinite
+        unit has no centroid; its geometry lives in ``rod_poe``.
     cuts : list[tuple[int, int, tuple, tuple]]
         One entry per cut bond: ``(unit_a, unit_b, midpoint_in_a,
         midpoint_in_b)``, the same physical bond midpoint expressed in
-        each end's home gauge (fractional).
+        each end's home gauge (fractional). For a rod end the gauge is
+        that PoE atom's own home image (the ``_unit_quotient``
+        convention), so voltages still fall out of fractional
+        differences.
+    rod_poe : dict[int, list[tuple[int, tuple]]] or None
+        Per rod unit index: the points of extension as
+        ``(atom index, home-gauge fractional position)`` in axial
+        order - the node-slot chain a self-derived run is built from.
+        None for rod-free structures.
     """
 
-    centers: list[tuple[float, float, float]]
+    centers: list[tuple[float, float, float] | None]
     cuts: list[tuple[int, int, tuple, tuple]]
+    rod_poe: dict[int, list[tuple[int, tuple]]] | None = None
 
 
 @dataclass
@@ -287,9 +299,11 @@ class Deconstruction:
         ditopic bridges were found; see ``_fuse_parallel_bridges``).
     blueprint : BlueprintRecipe or None
         The geometric recipe for the structure's own blueprint
-        (self-templated round trips, coverage plan stage 3). None when
-        the structure contains rod units, whose blueprint form needs
-        slot runs rather than point slots.
+        (self-templated round trips, coverage plan stage 3). Always
+        recorded; rod units contribute their points of extension
+        (``rod_poe``) instead of a centroid. The point-slot
+        constructor (``topology_from_deconstruction``) consumes the
+        rod-free case; the rod case awaits the slot-run constructor.
     """
 
     structure: Structure
@@ -1531,31 +1545,58 @@ def deconstruct(
     )
 
     # the self-templated blueprint recipe (coverage plan stage 3): unit
-    # centroids and cut midpoints in each unit's home gauge, so the
+    # centroids and cut midpoints in each end's home gauge, so the
     # structure's own blueprint can be erected without re-perception.
-    # Rod frameworks need slot runs, not point slots - no recipe yet.
-    blueprint_recipe: BlueprintRecipe | None = None
-    if not rods:
-        recipe_centers = []
-        for k, unit in enumerate(units):
-            centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
-            home = centroid - unit_images[k]
-            recipe_centers.append((float(home[0]), float(home[1]), float(home[2])))
-        recipe_cuts = []
-        for u, v, jimage in cuts:
-            shift = np.asarray(jimage, dtype=float)
-            ka, kb = atom_to_unit[u], atom_to_unit[v]
-            mid_a = (frac[u] + frac[v] + shift) / 2.0 + unwraps[ka][u] - unit_images[ka]
-            mid_b = (frac[u] + frac[v] - shift) / 2.0 + unwraps[kb][v] - unit_images[kb]
-            recipe_cuts.append(
-                (
-                    ka,
-                    kb,
-                    (float(mid_a[0]), float(mid_a[1]), float(mid_a[2])),
-                    (float(mid_b[0]), float(mid_b[1]), float(mid_b[2])),
-                )
+    # Rod units contribute their points of extension instead of a
+    # centroid, in the per-atom PoE gauge the quotient already uses.
+    def _end_image(atom: int) -> np.ndarray:
+        if atom in poe_images:
+            return poe_images[atom]
+        return unit_images[atom_to_unit[atom]]
+
+    recipe_centers: list[tuple[float, float, float] | None] = []
+    for k, unit in enumerate(units):
+        if k in rod_indices:
+            recipe_centers.append(None)
+            continue
+        centroid = np.mean([frac[i] + unwraps[k][i] for i in sorted(unit)], axis=0)
+        home = centroid - unit_images[k]
+        recipe_centers.append((float(home[0]), float(home[1]), float(home[2])))
+    recipe_cuts = []
+    for u, v, jimage in cuts:
+        shift = np.asarray(jimage, dtype=float)
+        ka, kb = atom_to_unit[u], atom_to_unit[v]
+        mid_a = (frac[u] + frac[v] + shift) / 2.0 + unwraps[ka][u] - _end_image(u)
+        mid_b = (frac[u] + frac[v] - shift) / 2.0 + unwraps[kb][v] - _end_image(v)
+        recipe_cuts.append(
+            (
+                ka,
+                kb,
+                (float(mid_a[0]), float(mid_a[1]), float(mid_a[2])),
+                (float(mid_b[0]), float(mid_b[1]), float(mid_b[2])),
             )
-        blueprint_recipe = BlueprintRecipe(centers=recipe_centers, cuts=recipe_cuts)
+        )
+    recipe_rod_poe: dict[int, list[tuple[int, tuple]]] | None = None
+    if rods:
+        recipe_rod_poe = {}
+        for k in sorted(rod_indices):
+            entries = []
+            for atom in rod_poe[k]:
+                home_frac = frac[atom] + unwraps[k][atom] - poe_images[atom]
+                entries.append(
+                    (
+                        atom,
+                        (
+                            float(home_frac[0]),
+                            float(home_frac[1]),
+                            float(home_frac[2]),
+                        ),
+                    )
+                )
+            recipe_rod_poe[k] = entries
+    blueprint_recipe = BlueprintRecipe(
+        centers=recipe_centers, cuts=recipe_cuts, rod_poe=recipe_rod_poe
+    )
 
     subframework_nets: list[NetMatches] = []
     net_candidates: list[str] = []

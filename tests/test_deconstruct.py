@@ -691,13 +691,20 @@ class TestSelfTemplatedRoundTrip:
             == result.structure.composition.reduced_formula
         )
 
-    def test_rod_structures_have_no_recipe(self, mofgen):
+    def test_rod_structures_record_poe_but_await_run_blueprints(self, mofgen):
         from autografs.exceptions import TopologyExtractionError
         from autografs.extract_topology import topology_from_deconstruction
 
         result = mofgen.deconstruct(_rod_pillar_structure(1))
-        assert result.blueprint is None
-        with pytest.raises(TopologyExtractionError, match="rod"):
+        # the recipe now carries the rod's points of extension in the
+        # quotient's own gauge - the run constructor's raw material
+        recipe = result.blueprint
+        assert recipe is not None and recipe.rod_poe
+        (rod_index, entries), *_ = recipe.rod_poe.items()
+        assert recipe.centers[rod_index] is None
+        assert len(entries) == len(result.rod_units[0].poe_indices)
+        # the point-slot constructor still declines: rods need slot runs
+        with pytest.raises(TopologyExtractionError, match="[Rr]od"):
             topology_from_deconstruction(result)
 
 

@@ -246,10 +246,12 @@ def topology_from_deconstruction(
         structures) or a unit exceeds the library's connectivity range.
     """
     recipe = result.blueprint
-    if recipe is None:
+    if recipe is None or result.rod_units:
         raise TopologyExtractionError(
-            "No blueprint recipe: rod-containing deconstructions have "
-            "no point-slot blueprint form (yet)."
+            "Rod-containing deconstructions need a slot-run blueprint "
+            "(the recipe carries the rod's points of extension in "
+            "rod_poe; the run-consuming constructor is the next "
+            "increment of the coverage plan)."
         )
     lattice = result.structure.lattice
     per_unit_cuts: dict[int, list[tuple[int, tuple]]] = {}
