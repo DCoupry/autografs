@@ -199,6 +199,59 @@ def _match_displacements(
     return displacements
 
 
+def _hand_off_atom_types(framework: Framework, graph) -> int:
+    """Give lammps-interface the UFF types we already know.
+
+    A Framework's bond graph is the source of truth for UFF4MOF atom
+    types: ``utils.find_mmtypes`` assigns them from real connectivity,
+    against the table in ``data/uff4mof.py``. Staging goes through a
+    CIF, which cannot carry them, so lammps-interface re-perceives the
+    bonding from geometry and re-types every atom - discarding work we
+    have already done correctly and substituting a guess. On unusual
+    coordination that guess can be a type absent from its own parameter
+    tables (``S_3``, where UFF's sulfur types are ``S_3+2/+4/+6``),
+    which raises KeyError before a single step runs.
+
+    ``ForceFields.detect_ff_terms`` types an atom only when its
+    ``force_field_type`` is still None, so filling it in here is the
+    supported hand-off rather than a monkey-patch.
+
+    The correspondence is positional - ``write_cif`` emits atoms in
+    sorted node order - so it is **verified element by element** and
+    abandoned wholesale on any mismatch, leaving lammps-interface's own
+    typing in place. A wrong type is worse than a guessed one.
+
+    Returns
+    -------
+    int
+        How many atoms were typed from the framework; 0 when the
+        correspondence did not check out.
+    """
+    ours = [
+        framework.graph.nodes[n].get("ufftype") for n in sorted(framework.graph.nodes)
+    ]
+    symbols = [
+        framework.graph.nodes[n].get("symbol") for n in sorted(framework.graph.nodes)
+    ]
+    theirs = list(graph.nodes_iter2(data=True))
+    if len(theirs) != len(ours) or not all(ours):
+        logger.debug(
+            f"Not handing off atom types for {framework.name!r}: "
+            f"{len(ours)} framework atoms against {len(theirs)} staged."
+        )
+        return 0
+    for (_node, data), symbol in zip(theirs, symbols, strict=True):
+        if data.get("element") != symbol:
+            logger.debug(
+                f"Not handing off atom types for {framework.name!r}: staged "
+                f"element {data.get('element')} where the framework has {symbol}."
+            )
+            return 0
+    for (_node, data), uff_type in zip(theirs, ours, strict=True):
+        data["force_field_type"] = uff_type
+    return len(ours)
+
+
 def _write_lammps_inputs(
     framework: Framework,
     force_field: str,
@@ -223,12 +276,17 @@ def _write_lammps_inputs(
     # lammps-interface derives every file name from the cif basename
     safe_name = re.sub(r"[^A-Za-z0-9_-]", "_", framework.name) or "framework"
     cif_path = workdir / f"{safe_name}.cif"
-    framework.write_cif(cif_path)
+    # hand our own bonds over rather than letting lammps-interface
+    # re-perceive them from geometry: they come from the blueprint's
+    # dummy correspondences and are exact, and from_CIF prefers a
+    # _geom_bond_ loop over its own perception when one is present
+    framework.write_cif(cif_path, write_bonds=True)
     options = _make_options(options_cls, str(cif_path), force_field, cutoff)
     try:
         with quiet:
             sim = simulation_cls(options)
             cell, graph = from_cif(str(cif_path))
+            _hand_off_atom_types(framework, graph)
             sim.set_cell(cell)
             sim.set_graph(graph)
             sim.split_graph()
@@ -301,7 +359,13 @@ def relax_framework(
     quiet: contextlib.AbstractContextManager = (
         contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
     )
-    with tempfile.TemporaryDirectory(prefix="autografs_relax_") as tmp:
+    # ignore_cleanup_errors: on Windows a handle on the LAMMPS data file
+    # can outlive lmp.close(), and the resulting PermissionError from the
+    # cleanup would discard a relaxation that had already succeeded. The
+    # staging directory is disposable; the result is not.
+    with tempfile.TemporaryDirectory(
+        prefix="autografs_relax_", ignore_cleanup_errors=True
+    ) as tmp:
         workdir = Path(tmp)
         safe_name, supercell = _write_lammps_inputs(
             framework, force_field, cutoff, workdir, quiet
