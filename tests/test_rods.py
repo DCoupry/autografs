@@ -11,6 +11,7 @@ the same rod dedupe into one family; a metal swap does not).
 """
 
 import math
+from collections import Counter
 
 import numpy as np
 import pytest
@@ -944,6 +945,37 @@ class TestRodFragment:
         fragment = rod_fragment(structure, rod)
         assert fragment.arms == []
         assert fragment.repeat.screw_order == 4
+
+    @pytest.mark.parametrize("n_repeats", [1, 2])
+    def test_atom_repeats_partition_the_rod_evenly(self, mofgen, n_repeats):
+        """The recorded decomposition must be the one the arms came from.
+
+        ``atom_repeats`` says which chemical repeat each source atom
+        fell into, and a caller (the self-template constructor) bins
+        the rod's points of extension by it. That is only sound if it
+        agrees with the reduction the arms went through, so: every
+        repeat holds the same number of atoms, repeat 0 is exactly the
+        template, and the cut-carrying atoms distribute one arm's worth
+        per repeat.
+        """
+        from autografs.rods import rod_fragment
+
+        result = mofgen.deconstruct(_rod_pillar_structure(n_repeats))
+        rod = result.rod_units[0]
+        fragment = rod_fragment(result.structure, rod)
+        assignment = fragment.atom_repeats
+        assert assignment is not None
+        assert set(assignment) == set(rod.atom_indices)
+        order = fragment.repeat.screw_order
+        counts = Counter(index % max(order, 1) for index in assignment.values())
+        assert set(counts) == set(range(max(order, 1)))
+        assert len(set(counts.values())) == 1, counts
+        assert counts[0] == len(fragment.positions)
+        # the cuts follow the atoms: one repeat's worth of arms each
+        per_repeat = Counter(
+            assignment[site] % max(order, 1) for site, _vector in rod.cut_vectors
+        )
+        assert set(per_repeat.values()) == {len(fragment.arms)}
 
     def test_template_bonds_survive_an_unwrap_bridge(self):
         """Every recorded template bond must be a real bond length.

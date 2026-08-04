@@ -389,6 +389,14 @@ class RodFragment:
         it, identity does not.
     name : str
         Library name, set by ``merge_rod``/harvest.
+    atom_repeats : dict[int, int] or None
+        Which chemical repeat each atom of the *source* structure fell
+        into, keyed by site index — the decomposition this fragment was
+        reduced by, kept so a caller can bin the same rod's points of
+        extension exactly as the arms were binned rather than
+        re-deriving it from axial heights and disagreeing at a slab
+        boundary. Structure-specific and therefore not serialized: a
+        fragment loaded from a sidecar has None.
     """
 
     repeat: RodRepeat
@@ -396,6 +404,7 @@ class RodFragment:
     arms: list[tuple[int, np.ndarray]] = field(repr=False)
     bonds: list[tuple[int, int, int]] = field(repr=False, default_factory=list)
     name: str = "rod"
+    atom_repeats: dict[int, int] | None = field(repr=False, default=None)
 
     @property
     def symbols(self) -> list[str]:
@@ -516,32 +525,50 @@ def rod_fragment(
     # chemical) is unambiguous. Works for straight (screw 0) and
     # helical rods alike; identity does not need bonds - forward
     # building does.
+    axis_hat = basis[2]
+    screw_rad = np.radians(screw)
+    template_axial_all = axial % chemical
+    slab_all = np.floor(axial / chemical + 1e-6)
+    kept = np.flatnonzero(keep)
+    kept_axial = template_axial_all[kept]
+    kept_radial = radial[kept]
+    kept_angular = angular[kept]
+
+    def _template_row(full_row: int) -> int:
+        # nearest kept atom after de-screwing this atom's azimuth by
+        # its slab: slab s sits at (rho, theta + s*screw, z + s*chem)
+        slab = slab_all[full_row]
+        da = np.abs(template_axial_all[full_row] - kept_axial)
+        da = np.minimum(da, chemical - da)
+        drho = np.abs(radial[full_row] - kept_radial)
+        dth = np.abs(
+            (angular[full_row] - slab * screw_rad - kept_angular + np.pi)
+            % (2.0 * np.pi)
+            - np.pi
+        )
+        return int(np.argmin(da + drho + radial[full_row] * dth))
+
+    def _repeat_index(full_row: int) -> int:
+        """Which chemical repeat this atom fell into."""
+        return int(
+            round(
+                (axial_unwrapped[full_row] - kept_axial[_template_row(full_row)])
+                / chemical
+            )
+        )
+
+    # the decomposition itself, in the source structure's own site
+    # indices. Recording it is what lets a caller bin the same rod's
+    # points of extension the way the arms were binned; deriving that
+    # from axial heights instead disagrees wherever `keep` fell back to
+    # a nearest-to-expected selection rather than a clean slab cut.
+    atom_repeats = {
+        int(site): _repeat_index(row) for row, site in enumerate(rod.atom_indices)
+    }
+
     bonds_local: list[tuple[int, int, int]] = []
     if rod.internal_bonds:
-        axis_hat = basis[2]
         matrix = structure.lattice.matrix
-        screw_rad = np.radians(screw)
-        template_axial_all = axial % chemical
-        slab_all = np.floor(axial / chemical + 1e-6)
-        kept = np.flatnonzero(keep)
-        kept_axial = template_axial_all[kept]
-        kept_radial = radial[kept]
-        kept_angular = angular[kept]
-
-        def _template_row(full_row: int) -> int:
-            # nearest kept atom after de-screwing this atom's azimuth by
-            # its slab: slab s sits at (rho, theta + s*screw, z + s*chem)
-            slab = slab_all[full_row]
-            da = np.abs(template_axial_all[full_row] - kept_axial)
-            da = np.minimum(da, chemical - da)
-            drho = np.abs(radial[full_row] - kept_radial)
-            dth = np.abs(
-                (angular[full_row] - slab * screw_rad - kept_angular + np.pi)
-                % (2.0 * np.pi)
-                - np.pi
-            )
-            return int(np.argmin(da + drho + radial[full_row] * dth))
-
         seen: set[tuple[int, int, int]] = set()
         for i, j, off in rod.internal_bonds:
             row_i, row_j = row_of[i], row_of[j]
@@ -555,7 +582,7 @@ def rod_fragment(
                 np.asarray(off, dtype=float) + unwrap_shift[row_i] - unwrap_shift[row_j]
             )
             off_axial = float((residual @ matrix) @ axis_hat)
-            n_i = round((axial_unwrapped[row_i] - kept_axial[a]) / chemical)
+            n_i = _repeat_index(row_i)
             n_j = round((axial_unwrapped[row_j] + off_axial - kept_axial[b]) / chemical)
             m = int(n_j - n_i)
             key = (a, b, m) if (a, b, m) <= (b, a, -m) else (b, a, -m)
@@ -587,6 +614,7 @@ def rod_fragment(
         arms=arms,
         bonds=bonds_local,
         name=name,
+        atom_repeats=atom_repeats,
     )
 
 
