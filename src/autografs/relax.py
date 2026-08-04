@@ -305,6 +305,45 @@ def _write_lammps_inputs(
     return safe_name, np.array(sim.supercell, dtype=int)
 
 
+#: input commands worth announcing: these are the long poles, and a
+#: relaxation that reports nothing between them looks like a hung process
+_LOUD_COMMANDS = ("minimize", "run", "fix", "velocity")
+
+
+def _run_lammps_input(lmp, input_path: Path, name: str) -> None:
+    """Feed a lammps-interface input file command by command.
+
+    ``lmp.file()`` runs the whole script in one opaque call, so a
+    framework of any size sits silent for minutes and is indistinguishable
+    from a hung process. Replaying the commands individually costs
+    nothing and lets the expensive ones be logged as they start.
+    Continuation lines (``&``) are rejoined first, since LAMMPS treats
+    them as a single command.
+    """
+    raw = input_path.read_text(encoding="utf-8").splitlines()
+    commands: list[str] = []
+    buffer = ""
+    for line in raw:
+        stripped = line.split("#", 1)[0].strip()
+        if not stripped:
+            continue
+        if stripped.endswith("&"):
+            buffer += stripped[:-1] + " "
+            continue
+        commands.append(buffer + stripped)
+        buffer = ""
+    if buffer:
+        commands.append(buffer)
+    total = sum(1 for c in commands if c.split()[0] in _LOUD_COMMANDS)
+    done = 0
+    for command in commands:
+        head = command.split()[0]
+        if head in _LOUD_COMMANDS:
+            done += 1
+            logger.info(f"Relaxing {name!r}: [{done}/{total}] {command[:60]}")
+        lmp.command(command)
+
+
 def _launch_lammps():
     """Create an in-process LAMMPS session with a helpful error."""
     lammps, *_ = _import_backends()
@@ -375,7 +414,7 @@ def relax_framework(
         lmp = _launch_lammps()
         try:
             with quiet, contextlib.chdir(workdir):
-                lmp.file(f"in.{safe_name}")
+                _run_lammps_input(lmp, Path(f"in.{safe_name}"), framework.name)
             # gather_atoms orders by atom id, matching the data file
             natoms = lmp.get_natoms()
             raw_x = lmp.gather_atoms("x", 1, 3)

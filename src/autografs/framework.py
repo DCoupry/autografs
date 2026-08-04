@@ -672,9 +672,9 @@ class Framework:
         verbose: bool = False,
         *,
         calculator: object | None = None,
-        relax_cell: bool = True,
-        fmax: float = 0.05,
-        steps: int = 500,
+        relax_cell: bool | None = None,
+        fmax: float | None = None,
+        steps: int | None = None,
     ) -> Framework:
         """Relax geometry and cell (LAMMPS/UFF4MOF or any ASE backend).
 
@@ -709,9 +709,15 @@ class Framework:
             ASE path only: relax the cell too (needs stress), by
             default True.
         fmax : float, optional
-            ASE path only: force convergence threshold (eV/A).
+            ASE path only: force convergence threshold (eV/A), by
+            default 0.05.
         steps : int, optional
-            ASE path only: maximum optimizer steps.
+            ASE path only: maximum optimizer steps, by default 500.
+            The LAMMPS backend runs lammps-interface's own minimization
+            protocol and exposes no step or force control, so passing
+            any of these three without a ``calculator`` warns rather
+            than silently doing nothing - a budget that is quietly
+            ignored reads as a converged result.
 
         Returns
         -------
@@ -733,10 +739,26 @@ class Framework:
             return relax_framework_ase(
                 self,
                 calculator,  # type: ignore[arg-type]
-                relax_cell=relax_cell,
-                fmax=fmax,
-                steps=steps,
+                relax_cell=True if relax_cell is None else relax_cell,
+                fmax=0.05 if fmax is None else fmax,
+                steps=500 if steps is None else steps,
                 verbose=verbose,
+            )
+        ignored = [
+            name
+            for name, value in (
+                ("relax_cell", relax_cell),
+                ("fmax", fmax),
+                ("steps", steps),
+            )
+            if value is not None
+        ]
+        if ignored:
+            logger.warning(
+                f"{', '.join(ignored)} only apply to the ASE bridge; the "
+                "LAMMPS backend runs lammps-interface's own minimization "
+                "protocol, which exposes no step or force control. Pass a "
+                "calculator= to control convergence."
             )
         from autografs.relax import relax_framework
 
