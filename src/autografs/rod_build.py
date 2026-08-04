@@ -492,6 +492,7 @@ class _Species:
     arm_units: np.ndarray  # (m, 3) unit arm vectors from the centroid
     anchor_rows: list[int]  # per dummy: the real atom bonded through it
     anchor_radii: np.ndarray  # (m,) covalent radius of each anchor
+    real_radii: np.ndarray  # (len(real_rows),) covalent radius of each atom
     stripped_rows: dict[int, int]  # row -> row once dummies are removed
     # the axis a ditopic linker can be spun about without moving its
     # anchors (the relief pass); None whenever no such axis exists
@@ -541,6 +542,7 @@ def _species_of(linker: Fragment) -> _Species:
         arm_units=arm_units,
         anchor_rows=anchor_rows,
         anchor_radii=np.array([_covalent_radius(symbols[r]) for r in anchor_rows]),
+        real_radii=np.array([_covalent_radius(symbols[r]) for r in real_rows]),
         stripped_rows=stripped,
         relief_axis=relief_axis,
     )
@@ -676,6 +678,12 @@ class _RodBuild:
 
     initial_scale: float | None = None
     frozen_scale: float | None = None
+    #: weight on the covalent-contact bound (``clash_penalty``). Zero
+    #: reproduces the closure-only objective bit for bit, which is what
+    #: every validated library build was tuned against, so it stays the
+    #: default until the bound is corpus-calibrated the way
+    #: DIRECTION_WEIGHT was.
+    clash_weight: float = 0.0
 
     def __init__(
         self,
@@ -1339,10 +1347,14 @@ class _RodBuild:
         scale, theta, z0 = self.unpack(params)
         if scale <= 0.05:
             return 1e6
-        residuals = self.evaluate(scale, theta, z0, shifts=self.lateral_shifts(params))[
-            "residuals"
-        ]
-        return float(np.sqrt((residuals**2).mean()))
+        placed = self.evaluate(scale, theta, z0, shifts=self.lateral_shifts(params))
+        closure = float(np.sqrt((placed["residuals"] ** 2).mean()))
+        if not self.clash_weight:
+            return closure
+        # one-sided, so this only ever acts on a placement that puts
+        # non-bonded atoms inside covalent contact; a comfortable build
+        # scores exactly as it did before the term existed
+        return closure + self.clash_weight * self.clash_penalty(placed)
 
     def initial_guess(self) -> np.ndarray:
         """(scale, then theta/z0 per family) good enough for Nelder-Mead."""
@@ -1456,12 +1468,29 @@ class _RodBuild:
         #179) - and reports ``inf``, the same "nothing within reach"
         convention ``Framework.min_contact`` uses.
         """
+        points, unit, _radii = self._inter_unit_atoms(placed)
+        if len(np.unique(unit)) < 2:
+            return math.inf
         cell = placed["cell"]
-        inv = np.linalg.inv(cell)
+        # minimum-image pairwise distances between different units
+        delta = points[:, None, :] - points[None, :, :]
+        frac = delta @ np.linalg.inv(cell)
+        frac -= np.round(frac)
+        dist = np.linalg.norm(frac @ cell, axis=2)
+        cross_unit = unit[:, None] != unit[None, :]
+        return float(dist[cross_unit].min())
+
+    def _inter_unit_atoms(
+        self, placed: dict
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """(positions, unit label, covalent radius) of every placed atom.
+
+        Each rod is its own unit - a bond inside one is rigid, and in a
+        multi-rod net different rods can still clash - and each linker
+        placement is another.
+        """
         n_atoms = len(self.rod.positions)
         coords = [placed["rod_positions"]]
-        # each rod is its own unit (a bond within a rod is rigid); in a
-        # multi-rod net different rods can clash, so label them apart
         labels = [
             np.concatenate(
                 [
@@ -1470,21 +1499,46 @@ class _RodBuild:
                 ]
             )
         ]
+        rod_radii = np.asarray(self._rod_radius, dtype=float)
+        radii = [np.tile(rod_radii, self.n_rods * self.n_repeats)]
         for p_index, placement in enumerate(placed["placements"]):
-            reals = placement["coords"][self.species[placement["species"]].real_rows]
+            species = self.species[placement["species"]]
+            reals = placement["coords"][species.real_rows]
             coords.append(reals)
             labels.append(np.full(len(reals), p_index))
-        points = np.vstack(coords)
-        unit = np.concatenate(labels)
+            radii.append(species.real_radii)
+        return np.vstack(coords), np.concatenate(labels), np.concatenate(radii)
+
+    def clash_penalty(self, placed: dict) -> float:
+        """How far the placement drives non-bonded atoms inside contact.
+
+        Closure alone does not forbid two units occupying the same
+        space: the objective only ever asked for bonds of the right
+        length, so an optimizer free to re-proportion the cell will
+        happily buy a closed bond with an overlap. That is what leaves
+        most recombined frameworks unusable, and no amount of force
+        field fixes a structure it cannot even parse.
+
+        The bound is physical rather than tuned: two atoms that are not
+        bonded to each other have no business being as close as they
+        would be *if* they were, so the floor for a pair is the sum of
+        their Cordero covalent radii. Only violations count - the term
+        is one-sided, so a comfortably packed build is unaffected and
+        this cannot pull a structure towards some denser optimum.
+        """
+        points, unit, radii = self._inter_unit_atoms(placed)
         if len(np.unique(unit)) < 2:
-            return math.inf
-        # minimum-image pairwise distances between different units
+            return 0.0
+        cell = placed["cell"]
         delta = points[:, None, :] - points[None, :, :]
-        frac = delta @ inv
+        frac = delta @ np.linalg.inv(cell)
         frac -= np.round(frac)
         dist = np.linalg.norm(frac @ cell, axis=2)
-        cross_unit = unit[:, None] != unit[None, :]
-        return float(dist[cross_unit].min())
+        floor = radii[:, None] + radii[None, :]
+        violation = np.where(unit[:, None] != unit[None, :], floor - dist, 0.0)
+        np.maximum(violation, 0.0, out=violation)
+        # halved: the matrix counts each pair twice
+        return float((violation**2).sum() / 2.0)
 
 
 def _typed_repeat_molgraph(build: _RodBuild, result: dict):
