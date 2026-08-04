@@ -946,6 +946,68 @@ class TestRodFragment:
         assert fragment.arms == []
         assert fragment.repeat.screw_order == 4
 
+    def test_clash_penalty_is_one_sided(self, mofgen):
+        """The covalent-contact bound must barely move a clean placement.
+
+        Closure alone never forbids two units sharing space, so the
+        objective gains a term that charges for non-bonded atoms closer
+        than the sum of their Cordero radii. Being one-sided, it should
+        leave a comfortable build where it was.
+
+        Not *exactly* where it was, though, and the pillar shows why:
+        its closest inter-unit approach is a Zn...N pair at 1.917 A
+        against a covalent sum of 1.93, so the term is small but
+        genuinely nonzero even here - a metal contact sits near its
+        covalent sum by nature. The invariant worth asserting is that
+        the placement does not meaningfully move, not that the
+        arithmetic is bit-identical.
+        """
+        import copy
+
+        from autografs.extract_topology import rod_topology_from_deconstruction
+        from autografs.rod_build import _RodBuild, build_rod_framework
+
+        result = mofgen.deconstruct(_rod_pillar_structure(1))
+        topology, run, mapping, fragment = rod_topology_from_deconstruction(result)
+        laterals = {
+            index: copy.deepcopy(result.fragments[name])
+            for index, name in mapping.items()
+        }
+        built = build_rod_framework(
+            topology,
+            fragment,
+            laterals,
+            run=run,
+            min_distance=None,
+            bond_tolerance=10.0,
+            verify_net=False,
+            initial_scale=1.0,
+            scale_band=0.25,
+        )
+        assert built.min_contact() > 1.0  # comfortable to begin with
+        original = _RodBuild.clash_weight
+        _RodBuild.clash_weight = 1.0
+        try:
+            bounded = build_rod_framework(
+                topology,
+                fragment,
+                {i: copy.deepcopy(f) for i, f in laterals.items()},
+                run=run,
+                min_distance=None,
+                bond_tolerance=10.0,
+                verify_net=False,
+                initial_scale=1.0,
+                scale_band=0.25,
+            )
+        finally:
+            _RodBuild.clash_weight = original
+        assert bounded.min_contact() == pytest.approx(built.min_contact(), abs=1e-3)
+        np.testing.assert_allclose(
+            bounded.structure.lattice.abc, built.structure.lattice.abc, rtol=1e-3
+        )
+        # and it never makes a clean build worse
+        assert bounded.min_contact() >= built.min_contact() - 1e-3
+
     @pytest.mark.parametrize("n_repeats", [1, 2])
     def test_atom_repeats_partition_the_rod_evenly(self, mofgen, n_repeats):
         """The recorded decomposition must be the one the arms came from.
