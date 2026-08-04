@@ -48,6 +48,98 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
+#: CIF bond-type codes, the subset every consumer agrees on. Anything
+#: else falls back to a single bond, which is what a reader does anyway.
+_CIF_BOND_TYPES = {1.0: "S", 1.5: "A", 2.0: "D", 3.0: "T", 4.0: "Q"}
+
+
+def _append_cif_bonds(path: Path, framework: Framework) -> None:
+    """Add a ``_geom_bond_*`` loop carrying the framework's own bonds.
+
+    A built framework knows its bonds exactly - they come from the
+    blueprint's dummy correspondences, not from a distance criterion -
+    and a CIF can carry them, so it should. Without the loop every
+    consumer re-perceives bonding from geometry and has to guess, which
+    goes wrong precisely where the chemistry is unusual: multi-metal rod
+    nodes, and any structure whose atoms sit closer than a perception
+    cutoff expects.
+
+    Periodic bonds are what make this non-trivial. The bonded image of
+    the second atom is recorded in ``_geom_bond_site_symmetry_2`` using
+    the standard ``1_555`` encoding (each digit 5 + the lattice
+    translation), with ``.`` for a bond that stays inside the cell -
+    the same convention pymatgen, the CCDC and lammps-interface read.
+    """
+    graph = framework.graph
+    if graph.number_of_edges() == 0:
+        return
+    lines = path.read_text(encoding="utf-8").splitlines()
+    labels = _cif_site_labels(lines)
+    order = sorted(graph.nodes)
+    if len(labels) != len(order):
+        raise ValueError(
+            f"CIF site count ({len(labels)}) does not match the framework's "
+            f"atom count ({len(order)}) in {path}."
+        )
+    label_of = dict(zip(order, labels, strict=True))
+    # wrapped fractional coordinates: the CIF's own frame, so the image
+    # offsets below are the ones a reader will reconstruct
+    structure = framework.structure
+    frac = np.asarray(structure.frac_coords, dtype=float)
+    index_of = {node: i for i, node in enumerate(order)}
+    lattice = structure.lattice
+    rows: list[str] = []
+    for u, v, data in graph.edges(data=True):
+        iu, iv = index_of[u], index_of[v]
+        delta = frac[iu] - frac[iv]
+        image = np.rint(delta).astype(int)
+        distance = float(
+            np.linalg.norm((delta - image) @ np.asarray(lattice.matrix, dtype=float))
+        )
+        if np.any(np.abs(image) > 4):  # unrepresentable in the 1_555 form
+            continue
+        flag = (
+            "." if not np.any(image) else "1_{}{}{}".format(*(5 + image))  # noqa: UP032 - clearer here
+        )
+        code = _CIF_BOND_TYPES.get(round(float(data.get("bond_order", 1.0)), 2), "S")
+        rows.append(f"  {label_of[u]}  {label_of[v]}  {distance:.5f}  {flag}  {code}")
+    if not rows:
+        return
+    lines.extend(
+        [
+            "",
+            "loop_",
+            " _geom_bond_atom_site_label_1",
+            " _geom_bond_atom_site_label_2",
+            " _geom_bond_distance",
+            " _geom_bond_site_symmetry_2",
+            " _ccdc_geom_bond_type",
+            *rows,
+        ]
+    )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _cif_site_labels(lines: list[str]) -> list[str]:
+    """The ``_atom_site_label`` column of a P1 CIF, in file order."""
+    headers = [
+        i for i, line in enumerate(lines) if line.strip().startswith("_atom_site_")
+    ]
+    if not headers:
+        raise ValueError("No _atom_site_ loop found in the CIF.")
+    column = next(
+        i
+        for i, header in enumerate(headers)
+        if lines[header].strip() == "_atom_site_label"
+    )
+    labels = []
+    for i in range(headers[-1] + 1, len(lines)):
+        if not lines[i].strip() or lines[i].strip().startswith(("loop_", "_", "#")):
+            break
+        labels.append(lines[i].split()[column])
+    return labels
+
+
 def _append_cif_charges(path: Path, charges: np.ndarray) -> None:
     """Add an ``_atom_site_charge`` column to a P1 CIF pymatgen wrote.
 
@@ -436,7 +528,12 @@ class Framework:
             site_properties=site_properties,
         )
 
-    def write_cif(self, path: str | Path, symprec: float | None = None) -> Path:
+    def write_cif(
+        self,
+        path: str | Path,
+        symprec: float | None = None,
+        write_bonds: bool = False,
+    ) -> Path:
         """Write the framework to a CIF file.
 
         Parameters
@@ -447,6 +544,13 @@ class Framework:
             If given, pymatgen attempts to detect symmetry with this
             tolerance and writes a symmetrized CIF; None (default)
             writes P1.
+        write_bonds : bool, optional
+            Append a ``_geom_bond_*`` loop carrying the framework's own
+            bonds, with periodic images in the standard ``1_555``
+            encoding. Off by default because it changes what consumers
+            of these files see; on, it spares them re-perceiving a
+            bonding we already know exactly. P1 only - the loop indexes
+            sites, and a symmetrized CIF does not write them all.
 
         Returns
         -------
@@ -457,6 +561,14 @@ class Framework:
 
         path = Path(path)
         CifWriter(self.structure, symprec=symprec).write_file(path)
+        if write_bonds:
+            if symprec is None:
+                _append_cif_bonds(path, self)
+            else:
+                logger.warning(
+                    "Bonds are not written to symmetrized CIFs; use "
+                    "symprec=None to export the _geom_bond_ loop."
+                )
         charges = self.charges
         if charges is not None:
             if symprec is None:

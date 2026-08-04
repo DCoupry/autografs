@@ -85,6 +85,38 @@ class TestFileExports:
             sorted(reread.lattice.abc), sorted(mof5.lattice.abc), rtol=1e-4
         )
 
+    def test_write_cif_bonds_are_exact(self, mof5, tmp_path):
+        """The bond loop must carry every bond at its true length.
+
+        A built framework knows its bonds from the blueprint's dummy
+        correspondences, so a consumer should never have to re-perceive
+        them from distances. The periodic ones are the point: a bond
+        crossing a boundary is recorded as ``1_555`` plus the lattice
+        translation, and getting that convention wrong yields bonds
+        that span the cell instead of an Angstrom or two.
+        """
+        path = mof5.write_cif(tmp_path / "bonded.cif", write_bonds=True)
+        lines = path.read_text(encoding="utf-8").splitlines()
+        start = next(
+            i for i, line in enumerate(lines) if "_ccdc_geom_bond_type" in line
+        )
+        rows = [line.split() for line in lines[start + 1 :] if line.strip()]
+        assert len(rows) == mof5.graph.number_of_edges()
+
+        crossing = 0
+        for label_1, label_2, distance, flag, kind in rows:
+            assert kind in {"S", "A", "D", "T", "Q"}
+            # every recorded length must be a bond, not a cell-crossing
+            # separation - that is what an inverted image convention
+            # would produce
+            assert 0.5 < float(distance) < 3.5, (label_1, label_2, distance)
+            if flag != ".":
+                crossing += 1
+                assert flag.startswith("1_") and len(flag) == 5
+        # a periodic framework has bonds leaving the cell; none would
+        # mean the images were silently folded away
+        assert crossing > 0
+
     def test_to_ase(self, mof5):
         atoms = mof5.to_ase()
         assert len(atoms) == len(mof5)

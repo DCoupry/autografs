@@ -366,7 +366,11 @@ def elastic_properties(
     quiet: contextlib.AbstractContextManager = (
         contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
     )
-    with tempfile.TemporaryDirectory(prefix="autografs_elastic_") as tmp:
+    # ignore_cleanup_errors: see relax_framework - a lingering handle on
+    # the staged LAMMPS files must not discard a completed calculation
+    with tempfile.TemporaryDirectory(
+        prefix="autografs_elastic_", ignore_cleanup_errors=True
+    ) as tmp:
         workdir = Path(tmp)
         safe_name, _ = _write_lammps_inputs(
             framework, force_field, cutoff, workdir, quiet
