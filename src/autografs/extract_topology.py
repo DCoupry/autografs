@@ -485,16 +485,23 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     heights = {
         atom: float(np.dot(poe_carts[atom], axis_hat)) for atom, _pos in poe_entries
     }
-    # slab origin: the rod's OWN lowest atom, which is where
-    # rods.rod_fragment starts counting chemical repeats. Measuring from
-    # the lowest point of extension instead shifts every boundary and
-    # splits a repeat's cuts across two bins, so the blueprint's node
-    # slots stop matching the fragment's arms-per-repeat.
-    z_min = float(np.min(unwrapped @ axis_hat))
+    # bin the points of extension by the rod's OWN decomposition rather
+    # than by axial height. Height binning is only a proxy for it, and
+    # the two part company exactly where rod_fragment's slab cut would
+    # have split an atom cluster and it fell back to a
+    # nearest-to-expected selection: the blueprint then hands a node
+    # slot a different number of cuts than the fragment has arms per
+    # repeat, and the build is refused for a disagreement that is an
+    # artifact of measuring the same decomposition twice.
     chemical = float(rod_unit.repeat_length) / n_bins
+    assignment = fragment.atom_repeats or {}
     bins: list[list[int]] = [[] for _ in range(n_bins)]
     for atom, _pos in poe_entries:
-        index = int(np.floor((heights[atom] - z_min) / chemical + 1e-6))
+        if atom in assignment:
+            index = assignment[atom] % n_bins
+        else:  # a point of extension the fragment did not place
+            z_min = float(np.min(unwrapped @ axis_hat))
+            index = int(np.floor((heights[atom] - z_min) / chemical + 1e-6))
         bins[min(max(index, 0), n_bins - 1)].append(atom)
 
     run_slots: list[int] = []
