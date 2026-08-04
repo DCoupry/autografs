@@ -679,10 +679,27 @@ class _RodBuild:
     initial_scale: float | None = None
     frozen_scale: float | None = None
     #: weight on the covalent-contact bound (``clash_penalty``). Zero
-    #: reproduces the closure-only objective bit for bit, which is what
-    #: every validated library build was tuned against, so it stays the
-    #: default until the bound is corpus-calibrated the way
-    #: DIRECTION_WEIGHT was.
+    #: reproduces the closure-only objective bit for bit.
+    #:
+    #: **Calibrated, and the answer was "stay off by default"**
+    #: (scripts/rods/calibrate_clash_weight.py, 30 structures, two arms).
+    #: On recombinations the bound is transformative - without it those
+    #: builds do not merely clash, they *collapse*: median cell volume
+    #: 247 A^3 at weight 0 against 980 at 0.5, because a smaller cell
+    #: closes bonds more easily and nothing charged for the overlap. It
+    #: repairs closure as well as packing there (worst bond 1.316 ->
+    #: 0.741, contact p10 0.146 -> 1.012), so the unbounded objective
+    #: was simply in a degenerate basin.
+    #:
+    #: But on self-templates - faithful builds, the control - closure
+    #: degrades monotonically with the weight (worst bond 0.299 at 0,
+    #: 0.358 at 0.5, 0.400 at 1.0), and at 0.5 that is enough to break a
+    #: validated library build: `unc` stops realizing its own net
+    #: (identify_net returns nothing). A term that rescues pathological
+    #: builds by breaking correct ones cannot be the default, however
+    #: good the treatment arm looks - so callers who are recombining
+    #: opt in, and everything else keeps the objective it was tuned
+    #: against.
     clash_weight: float = 0.0
 
     def __init__(
