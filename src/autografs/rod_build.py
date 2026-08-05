@@ -701,6 +701,27 @@ class _RodBuild:
     #: opt in, and everything else keeps the objective it was tuned
     #: against.
     clash_weight: float = 0.0
+    #: give each free cell row its own scale instead of one shared
+    #: factor. A substituted unit is rarely wrong by the same factor in
+    #: both transverse directions, and an isotropic scale can only trade
+    #: one against the other.
+    #:
+    #: **What it buys is closure, not packing** (measured on
+    #: recombinations): worst inter-unit bond 2.078 -> 0.429, 0.747 ->
+    #: 0.374, 1.935 -> 0.271 A on three structures, while the closest
+    #: contact is unchanged or slightly worse. It also rescues the
+    #: collapse on its own - one build goes from a 2.1 A cell to a sane
+    #: one with *better* closure than the covalent-contact bound
+    #: achieves - so the two are complementary rather than redundant:
+    #: together they reach both a good contact and a good bond where
+    #: either alone reaches one.
+    #:
+    #: Off by default: it triples the head of the parameter vector, and
+    #: every validated library build was tuned against the isotropic
+    #: objective. A **diagonal** family stays isotropic regardless - it
+    #: stretches along its own direction rather than along a row, so
+    #: per-row factors have nothing to act on and the mean is used.
+    anisotropic: bool = False
 
     def __init__(
         self,
@@ -1040,7 +1061,7 @@ class _RodBuild:
     # parameterized geometry
     # ------------------------------------------------------------------
 
-    def cell(self, scale: float) -> np.ndarray:
+    def cell(self, scale: float | np.ndarray) -> np.ndarray:
         """The cell at this scale, with every rod-bearing direction pinned.
 
         A family's run period is fixed by its rods (``n_repeats`` x the
@@ -1065,7 +1086,13 @@ class _RodBuild:
           rod running down one body diagonal of bcu genuinely picks
           that diagonal out.
         """
-        cell = self.blueprint * scale
+        # a (3,) scale re-proportions the free rows independently: a
+        # swapped or substituted unit is rarely wrong by the same factor
+        # in both transverse directions, and one scalar can only trade
+        # the two against each other. Rows a family pins are overwritten
+        # below either way, so only the free ones see it.
+        factors = np.broadcast_to(np.asarray(scale, dtype=float), (3,))
+        cell = self.blueprint * factors[:, None]
         for family in self.families:
             axis_index = family["axis_index"]
             if axis_index is not None:
@@ -1073,12 +1100,16 @@ class _RodBuild:
                     self.axis_length / family["multiple"]
                 )
                 continue
+            # a diagonal family stretches along its own direction rather
+            # than along a row, so it has no per-row factor to use: the
+            # mean is the only isotropic reading of an anisotropic scale
+            mean_scale = float(factors.mean())
             axis_hat = family["axis_hat"]
             along = self.blueprint @ axis_hat  # each row's share of the pin
-            cell = cell + np.outer(along, axis_hat) * (family["pin_scale"] - scale)
-        return cell
+            cell = cell + np.outer(along, axis_hat) * (family["pin_scale"] - mean_scale)
+        return np.asarray(cell, dtype=float)
 
-    def _cell_one_period(self, scale: float) -> np.ndarray:
+    def _cell_one_period(self, scale: float | np.ndarray) -> np.ndarray:
         """The cell of ONE blueprint period, which holds
         ``nodes_per_period`` of the rod's chemical repeats.
 
@@ -1108,7 +1139,7 @@ class _RodBuild:
 
     def evaluate(
         self,
-        scale: float,
+        scale: float | np.ndarray,
         theta: np.ndarray | float,
         z0: np.ndarray | float,
         phi: np.ndarray | None = None,
@@ -1334,7 +1365,9 @@ class _RodBuild:
             "residuals": residuals,
         }
 
-    def unpack(self, params: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
+    def unpack(
+        self, params: np.ndarray
+    ) -> tuple[float | np.ndarray, np.ndarray, np.ndarray]:
         """(scale, theta per family, z0 per family) from a flat vector.
 
         Reads the head only; any trailing lateral-displacement block
@@ -1344,25 +1377,32 @@ class _RodBuild:
         leave the caller's basin whatever the objective prefers - the
         fallback arm of the scale band (see build_rod_framework).
         """
-        head = np.asarray(params[1 : 1 + 2 * self.n_families], dtype=float)
+        n_scale = self.n_scale
+        head = np.asarray(params[n_scale : n_scale + 2 * self.n_families], dtype=float)
         rest = head.reshape(self.n_families, 2)
-        scale = (
-            float(self.frozen_scale)
-            if self.frozen_scale is not None
-            else float(params[0])
-        )
+        if self.frozen_scale is not None:
+            scale: float | np.ndarray = float(self.frozen_scale)
+        elif n_scale == 1:
+            scale = float(params[0])
+        else:
+            scale = np.asarray(params[:n_scale], dtype=float)
         return scale, rest[:, 0], rest[:, 1]
+
+    @property
+    def n_scale(self) -> int:
+        """Scale parameters at the head of the vector: 1 or 3."""
+        return 3 if self.anisotropic else 1
 
     def lateral_shifts(self, params: np.ndarray) -> np.ndarray | None:
         """Per-slot fractional displacements from the parameter tail."""
         if self.slot_disp is None:
             return None
-        tail = np.asarray(params[1 + 2 * self.n_families :], dtype=float)
+        tail = np.asarray(params[self.n_scale + 2 * self.n_families :], dtype=float)
         return self.slot_disp.expand(tail)
 
     def objective(self, params: np.ndarray) -> float:
         scale, theta, z0 = self.unpack(params)
-        if scale <= 0.05:
+        if np.any(np.asarray(scale) <= 0.05):
             return 1e6
         placed = self.evaluate(scale, theta, z0, shifts=self.lateral_shifts(params))
         closure = float(np.sqrt((placed["residuals"] ** 2).mean()))
@@ -1443,16 +1483,20 @@ class _RodBuild:
             if self._arm_rows
             else 0.0
         )
-        # lateral displacements start at the idealized embedding
+        # lateral displacements start at the idealized embedding; an
+        # anisotropic build starts isotropic, so its first evaluation is
+        # exactly the isotropic one and the extra rows only ever earn
+        # their keep
+        head = [scale0] * self.n_scale
         tail = [0.0] * self.n_slot_free
         if self.helical:
             per_family = [0.0, -z_arms] * self.n_families
-            return np.array([scale0, *per_family, *tail])
+            return np.array([*head, *per_family, *tail])
         cell_p = self._cell_one_period(scale0)
         z_node = float((self.node_center_frac @ cell_p) @ self.axis_hat)
-        return np.array([scale0, 0.0, z_node - z_arms, *tail])
+        return np.array([*head, 0.0, z_node - z_arms, *tail])
 
-    def refresh_assignments(self, scale: float) -> None:
+    def refresh_assignments(self, scale: float | np.ndarray) -> None:
         """Re-solve which SBU arm fills which slot dummy, at this cell.
 
         The reference assignment is made at the blueprint cell, but the
@@ -2035,20 +2079,24 @@ def build_rod_framework(
         phases = np.linspace(
             0.0, float(build.rod.repeat.repeat_length), 8, endpoint=False
         )
+        head = build.n_scale
         for family in range(build.n_families):
-            base_z = float(start[2 + 2 * family])
+            base_z = float(start[head + 1 + 2 * family])
 
             def value_at(
-                candidate: tuple[float, float], family: int = family, z: float = base_z
+                candidate: tuple[float, float],
+                family: int = family,
+                z: float = base_z,
+                head: int = head,
             ) -> float:
                 trial = start.copy()
-                trial[1 + 2 * family] = candidate[0]
-                trial[2 + 2 * family] = z + candidate[1]
+                trial[head + 2 * family] = candidate[0]
+                trial[head + 1 + 2 * family] = z + candidate[1]
                 return build.objective(trial)
 
             angle, phase = min(((a, p) for a in angles for p in phases), key=value_at)
-            start[1 + 2 * family] = angle
-            start[2 + 2 * family] = base_z + phase
+            start[head + 2 * family] = angle
+            start[head + 1 + 2 * family] = base_z + phase
         return minimize(
             build.objective,
             start,
@@ -2061,7 +2109,7 @@ def build_rod_framework(
     if (
         scale_band is not None
         and initial_scale is not None
-        and abs(scale / initial_scale - 1.0) > scale_band
+        and abs(float(np.mean(scale)) / initial_scale - 1.0) > scale_band
     ):
         # The free solve left the caller's trust band. The greedy
         # port-image pairing makes the objective multi-modal over the
