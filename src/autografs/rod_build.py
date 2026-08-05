@@ -706,21 +706,30 @@ class _RodBuild:
     #: both transverse directions, and an isotropic scale can only trade
     #: one against the other.
     #:
-    #: **What it buys is closure, not packing** (measured on
-    #: recombinations): worst inter-unit bond 2.078 -> 0.429, 0.747 ->
-    #: 0.374, 1.935 -> 0.271 A on three structures, while the closest
-    #: contact is unchanged or slightly worse. It also rescues the
-    #: collapse on its own - one build goes from a 2.1 A cell to a sane
-    #: one with *better* closure than the covalent-contact bound
-    #: achieves - so the two are complementary rather than redundant:
-    #: together they reach both a good contact and a good bond where
-    #: either alone reaches one.
+    #: **Corpus-measured, and the honest answer is "it does not pay"**
+    #: (30 structures, two arms, alongside the clash-weight sweep). An
+    #: 8-structure probe suggested it halved the worst inter-unit bond
+    #: (2.078 -> 0.429 and similar) and that claim reached this
+    #: docstring; the population contradicts it. Worst bond is *worse*
+    #: with anisotropy on - control 0.299 -> 0.327 at weight 0 and
+    #: 0.358 -> 0.408 at 0.5 - and combined with the covalent-contact
+    #: bound it is much worse than the bound alone (treatment worst
+    #: bond 0.741 -> 1.381, contact p10 1.012 -> 0.597). Same trap as
+    #: the first DIRECTION_WEIGHT calibration: a few structures showing
+    #: a dramatic effect that the corpus does not reproduce.
     #:
-    #: Off by default: it triples the head of the parameter vector, and
-    #: every validated library build was tuned against the isotropic
-    #: objective. A **diagonal** family stays isotropic regardless - it
-    #: stretches along its own direction rather than along a row, so
-    #: per-row factors have nothing to act on and the mean is used.
+    #: What *does* survive is collapse mitigation on its own: at weight
+    #: 0 the treatment arm's median cell goes 247 -> 599 A^3 and its
+    #: contact 0.330 -> 0.571. So the extra rows help a build that
+    #: would otherwise implode, and hurt one the bound is already
+    #: handling. Keep it off unless building without the bound.
+    #:
+    #: Off by default also because it triples the head of the parameter
+    #: vector and every validated library build was tuned against the
+    #: isotropic objective. A **diagonal** family stays isotropic
+    #: regardless - it stretches along its own direction rather than
+    #: along a row, so per-row factors have nothing to act on and the
+    #: mean is used.
     anisotropic: bool = False
 
     def __init__(
