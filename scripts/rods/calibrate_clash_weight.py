@@ -43,7 +43,7 @@ from autografs import Autografs  # noqa: E402
 from autografs.exceptions import AutografsError  # noqa: E402
 from autografs.rod_build import build_rod_framework  # noqa: E402
 
-WEIGHTS = (0.0, 0.25, 0.5, 1.0, 2.0, 5.0)
+WEIGHTS = (0.0, 0.1, 0.25, 0.5, 1.0, 2.0)
 
 
 def _build(
@@ -90,7 +90,17 @@ def main() -> None:
     parser.add_argument("corpus")
     parser.add_argument("-o", "--output", default="clash-calibration.json")
     parser.add_argument("--limit", type=int, default=26)
+    parser.add_argument(
+        "--anisotropic",
+        action="store_true",
+        help="give each free cell row its own scale while sweeping",
+    )
     args = parser.parse_args()
+    # anisotropy supplies closure headroom the isotropic scale lacks, so
+    # the question this re-run asks is whether a *smaller* weight now
+    # rescues the treatment arm without the control-arm damage that
+    # blocked a default at 0.5
+    rod_build._RodBuild.anisotropic = args.anisotropic
 
     gen = Autografs()
     stock = harvest(gen, _collect(args.corpus)[: args.limit], verbose=False)
