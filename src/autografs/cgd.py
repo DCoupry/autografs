@@ -493,18 +493,23 @@ def main(argv: list[str] | None = None) -> None:
         "--use_epinet",
         action="store_true",
         help=(
-            "fetch the EPINET s-net CGD files (license gate, slow polite "
-            "sweep to a local cache) and convert their maximal-symmetry "
-            "embeddings into topologies under their sqc names. EPINET is "
-            "CC BY-NC-ND: the resulting library file is for YOUR local, "
-            "non-commercial use and must not be redistributed."
+            "fetch the EPINET s-net dataset release (license gate, one "
+            "~13 MB archive from the ANU Open Research repository, "
+            "doi:10.25911/hq20-mj54, cached locally) and convert its "
+            "maximal-symmetry embeddings into topologies under their sqc "
+            "names. The release is CC BY-NC-SA: the resulting library is "
+            "for non-commercial use, and sharing it requires crediting "
+            "EPINET and keeping the same license."
         ),
     )
     parser.add_argument(
         "--epinet-max-id",
         type=int,
         default=None,
-        help="highest sqc id to sweep (default: the full catalogue).",
+        help=(
+            "only convert sqc ids up to this value - a subset filter for "
+            "quick runs (default: the full catalogue)."
+        ),
     )
     parser.add_argument(
         "--accept-licenses",
@@ -551,12 +556,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         topologies.update(topologies_from_tetrahedral_cifs(cifs))
     if args.use_epinet:
-        from autografs.fetch import EPINET_MAX_ID, fetch_epinet_cgds
+        from autografs.fetch import fetch_epinet_cgds
 
         cgds = fetch_epinet_cgds(
             cache_dir=Path(args.cache_dir) if args.cache_dir else None,
             accept_licenses=args.accept_licenses,
-            max_id=args.epinet_max_id or EPINET_MAX_ID,
+            max_id=args.epinet_max_id,
         )
         logger.info(f"Converting {len(cgds)} EPINET s-nets (maximal embeddings).")
         entries = "\n".join(
@@ -567,8 +572,9 @@ def main(argv: list[str] | None = None) -> None:
         topologies.update(read_cgd_data(entries, max_sites=args.max_connectivity))
         logger.warning(
             "The output library now contains EPINET-derived entries "
-            "(CC BY-NC-ND): keep it LOCAL and non-commercial - do not "
-            "redistribute it or bundle it into anything you share."
+            "(CC BY-NC-SA): non-commercial use only, and if you share "
+            "it, credit EPINET (doi:10.25911/hq20-mj54) and keep the "
+            "same license."
         )
 
     if args.output.endswith((".json", ".json.gz")):

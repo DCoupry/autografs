@@ -95,6 +95,29 @@ Nothing IZA-derived ships with AuToGraFS itself: the wheel only bundles the
 downloaded data is governed by the IZA-SC database terms (in particular,
 commercial use and redistribution need the Structure Commission's consent).
 
+### EPINET s-nets
+
+The [EPINET](https://epinet.anu.edu.au) catalogue of 14,645 s-nets — nets
+enumerated from tilings of triply-periodic minimal surfaces, most of them in
+no other database — can likewise be added locally:
+
+```bash
+autografs-topologies --use_epinet -o epinet.json.gz
+autografs-topologies --use_rcsr --use_epinet --accept-licenses -o combined.json.gz
+```
+
+`--use_epinet` downloads the EPINET dataset release from the ANU Open
+Research repository (one ~13 MB archive,
+[doi:10.25911/hq20-mj54](https://doi.org/10.25911/hq20-mj54)) into
+`~/.autografs/cache/epinet` after the same license gate, then converts each
+net's maximal-symmetry embedding into an ordinary library entry under its
+`sqc` name. `--epinet-max-id N` converts only the first part of the catalogue
+for quick experiments.
+
+The release is CC BY-NC-SA 4.0: the converted library is for non-commercial
+use, and sharing it requires crediting EPINET and keeping the same license.
+AuToGraFS bundles nothing derived from EPINET.
+
 Programmatic (de)serialization lives in `autografs.topology_io`:
 
 ```python
