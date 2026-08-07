@@ -128,3 +128,75 @@ class TestMakeCalculator:
         framework = _pair_framework(distance=2.2)
         with pytest.raises(RelaxationError, match="tblite"):
             framework.relax(calculator="gfn1")
+
+
+class TestStresslessCalculators:
+    """A method with no stress must not silently pretend to relax a cell.
+
+    GFN-FF is the real case: xtb's ASE calculator fetches the virial for
+    ANY periodic system and GFN-FF produces none (only GFN0-xTB does),
+    so every periodic call raised before returning the energy it had
+    already computed. The bridge now keeps energy and forces, drops the
+    stress, and refuses cell relaxation explicitly.
+    """
+
+    def test_cell_relaxation_is_refused_without_stress(self):
+        class NoStress:
+            implemented_properties = ["energy", "free_energy", "forces"]
+
+            def get_potential_energy(self, atoms=None):  # pragma: no cover
+                return 0.0
+
+        framework = _pair_framework(distance=2.2)
+        with pytest.raises(RelaxationError, match="no stress"):
+            relax_framework_ase(framework, NoStress(), relax_cell=True)
+
+    def test_fixed_cell_is_allowed_without_stress(self):
+        """Positions can still be relaxed; only the cell cannot."""
+        framework = _pair_framework(distance=2.2)
+        calculator = _lj()
+        # LJ does provide stress, so strip it to model the GFN-FF case
+        calculator.implemented_properties = ["energy", "free_energy", "forces"]
+        relaxed = relax_framework_ase(framework, calculator, relax_cell=False, steps=20)
+        assert np.allclose(relaxed.cell, framework.cell)
+
+    def test_gfnff_wrapper_drops_stress_and_survives_the_virial(self):
+        """The wrapper keeps energy/forces when the virial fetch raises."""
+        from autografs.ase_relax import _periodic_gfnff
+
+        class FakeXTB:
+            implemented_properties = ["energy", "free_energy", "forces", "stress"]
+
+            def __init__(self, **kwargs):
+                self.parameters = kwargs
+                self.results = {}
+
+            def calculate(self, atoms=None, properties=None, system_changes=None):
+                # energy and forces land first, then the virial fails -
+                # exactly xtb's ordering
+                self.results["energy"] = -1.0
+                self.results["forces"] = np.zeros((1, 3))
+                raise RuntimeError("Virial is not available in results")
+
+        wrapped = _periodic_gfnff(FakeXTB)
+        assert "stress" not in wrapped.implemented_properties
+        wrapped.calculate()
+        assert wrapped.results["energy"] == -1.0
+        assert "stress" not in wrapped.results
+
+    def test_gfnff_wrapper_reraises_a_real_failure(self):
+        """A failure before the energy is stored is not the virial."""
+        from autografs.ase_relax import _periodic_gfnff
+
+        class BrokenXTB:
+            implemented_properties = ["energy"]
+
+            def __init__(self, **kwargs):
+                self.results = {}
+
+            def calculate(self, atoms=None, properties=None, system_changes=None):
+                raise RuntimeError("parameters missing for element")
+
+        wrapped = _periodic_gfnff(BrokenXTB)
+        with pytest.raises(RuntimeError, match="parameters missing"):
+            wrapped.calculate()
