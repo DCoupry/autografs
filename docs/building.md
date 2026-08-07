@@ -86,6 +86,137 @@ mof = mofgen.build(
 mappings = {node_type: "sbu_A", edge_type: "linker_1", 7: "linker_2"}
 ```
 
+## Knowing whether the result makes sense
+
+`build` returning a `Framework` is not by itself evidence of a sensible
+structure. The gates above are independent and several are off by default, so
+by default nothing is checked beyond connection counts. Measured over 1895
+builds with stock settings: **1105 do not close and 521 overlap**, and all of
+them come back as successes. Even on blueprints whose every slot is pinned by
+site symmetry, only about a quarter pass all three checks.
+
+Two calls close that gap.
+
+### Before building: `assess`
+
+```python
+report = mofgen.assess(topology, mappings)
+report.confidence      # 'infeasible' | 'low' | 'medium' | 'high'
+report.n_free          # the blueprint's symmetry-allowed slot displacements
+report.worst_slot      # the slot that fits worst, and by how much
+print(report)          # 'pcu: high (every slot fits and the blueprint is fully pinned)'
+```
+
+No alignment and no cell optimization run, so this is cheap enough to screen
+with. Three things decide it: each SBU's directional shape RMSD against its
+slot (so a comfortable fit is distinguishable from one that merely clears the
+sieve), the blueprint's own symmetry freedom, and `report.scale_spread` — how
+badly the blueprint's edges disagree about the cell scale.
+
+That last one is the packing predictor, and it is the dominant failure mode.
+Two slots sharing a connection have their dummies at the same point, so an
+edge's centre separation is `slot_arm_A + slot_arm_B` while the units on it
+demand `sbu_arm_A + sbu_arm_B`. Every edge therefore wants its own scale, the
+cell has one, and the losers either stretch their bonds or drive their units
+into each other — which is exactly what clashing builds do, overlapping
+between *bonded* slots rather than distant ones. Measured over 355 builds:
+
+| edge-scale spread | median closest contact | clash-free |
+|---|---|---|
+| 1.00–1.05 | 0.81 Å | 30% |
+| 1.30–1.60 | 0.41 Å | 4% |
+| above 1.60 | 0.29 Å | 0.6% |
+
+It remains a screen rather than a guarantee: it works from the units and the
+blueprint, while the realized packing also depends on the cell the optimizer
+settles on. Confirm with `validate()`.
+
+### Letting the library choose the units: `suggest_mappings`
+
+A poor spread is usually fixable rather than fatal, because it comes from an
+arbitrary choice nobody meant to make:
+
+```python
+mappings, spread = mofgen.suggest_mappings(topology)
+mof = mofgen.build(topology, mappings, strict=True)
+```
+
+The sieve tells you which SBUs *fit* a slot by matching arm **directions**. It
+never looks at length — and for a 2-connected slot it is vacuous, since any two
+arms seen from their own centroid are antiparallel. A 30-atom linker and a
+6-atom one are equally "compatible" with the same edge, so taking the first
+name off the list is a coin flip.
+
+`suggest_mappings` picks instead. An edge's required scale is a weighted
+average of the two slots' own ratios `sbu_arm / slot_arm`, so choosing units
+whose ratios are *uniform* makes every edge agree at once — a per-slot
+criterion rather than a combinatorial search. A/B over 59 nets against the
+first-compatible-name pick, everything else held fixed:
+
+| | arbitrary | balanced |
+|---|---|---|
+| fully valid (`validate().ok`) | 0 | **11** |
+| clash-free | 0 | **12** |
+| median closest contact | 0.42 Å | **0.86 Å** |
+
+Better on 41 nets, worse on 14: it optimizes the *predicted* spread, so it is
+an improvement in distribution, not a per-net guarantee.
+
+### After building: `validate`
+
+```python
+report = mof.validate()
+report.ok                    # the single verdict
+report.failures              # which checks failed, with their numbers
+report["contact"].value      # 2.037
+report.descriptors           # measured quantities either way
+```
+
+Closure, overlap, free molecules and coincident atoms in one report, each
+carrying its measured value beside the threshold it was judged against — a
+bare boolean would throw away exactly what you need to decide whether a
+relaxation can rescue the structure.
+
+### Having the build refuse: `strict=True`
+
+```python
+mof = mofgen.build(topology, mappings, strict=True)
+```
+
+Turns the gates on together (`bond_tolerance=0.5`, `min_distance=1.5` unless
+you passed your own) and adds the two checks with no gate of their own: free
+(0-periodic) molecules floating in the cell, and coincident atoms. Failures
+raise `AlignmentError`, `OverlapError` or `ValidationError`.
+
+`strict` is **off by default so existing scripts are unaffected**, but it is
+the right setting for anyone who wants confidence rather than output.
+
+### Opening up a clash: `relieve=True`
+
+When two slots of a net want different cell scales, their units are driven
+together and no cell parameter can separate them — the cell has only one scale.
+What *can* separate them is a rotation the structure is already free in: a
+2-connected linker spun about the line through its own two anchors. Both anchors
+stay exactly where they were, so every bond keeps its length and the net is
+unchanged; only the way the linker presents its ring plane to its neighbours
+turns.
+
+```python
+mof = mofgen.build(topology, mappings, relieve=True)
+mof.graph.graph["relief"]     # {"contact_before": ..., "contact_after": ...}
+```
+
+One angle per crystallographic orbit, so the symmetry survives, and the result is
+kept only if it improves — the pass cannot make a structure worse. Measured
+against the same builds without it, over 102 library nets: closest contact better
+on 71 and worse on none, median 0.58 → 0.88 Å, and of the 82 builds already
+clashing under 1.0 Å, 68 improved (median 0.49 → 0.75 Å). Closure changed on
+none of them.
+
+It is off by default so existing builds reproduce, and it will not fix
+everything: a node has no such axis, and where a clash is between two polytopic
+units there is nothing to turn.
+
 ### Empty slots
 
 Many blueprints subdivide their edges with 2-connected slots (RCSR's
@@ -308,6 +439,38 @@ Cells smaller than the non-bonded cutoff (12.5 Å by default) are relaxed as an
 internal supercell and folded back transparently. `"UFF"` and `"Dreiding"` are
 also accepted as `force_field`.
 
+Treat the result as a **clash fixer, not a refinement**. UFF's own equilibrium
+bond lengths are shorter than experiment for metal–ligand pairs, so a relaxation
+contracts the cell by a few percent even on a structure the builder already
+placed at experimental geometry (MOF-5 relaxes from a = 12.90 Å to 12.63 Å).
+Always compare the relaxed cell against the as-built one before reporting it as
+an improvement.
+
+### When the relaxation cannot start: `bond_target_scale`
+
+A strained build can place two atoms close enough that the Lennard-Jones term
+overflows, and the minimizer fails immediately rather than pulling them apart.
+Building the same combination with deliberately over-long bonds gives it a start
+it can descend from:
+
+```python
+relaxed = mofgen.build_relaxed(topology, mappings, retry_scales=(2.0,))
+relaxed.graph.graph.get("relax_retry_scale")   # set only if a retry produced it
+```
+
+The retry lives on `Autografs` rather than on `Framework.relax` because a built
+framework keeps no record of the blueprint and units it came from, so it cannot
+rebuild itself.
+
+Two limits worth knowing. Where the relaxation already converges this changes
+nothing — MOF-5 relaxes to the same a = 12.63 Å at every scale from 1.0 to 2.0 —
+but on a strained build it reaches a **different and systematically larger**
+minimum, so report only the re-relaxed structure, never the inflated build
+itself. And it is not a general cure for clashes: when the overlap comes from
+units whose arm lengths disagree with each other rather than from the cell being
+too small, no single scale helps. `assess` reports that case as a large
+`scale_spread`, and `suggest_mappings` avoids it at selection time.
+
 ### Higher levels: any ASE calculator
 
 Passing `calculator` switches `relax` to a thin ASE bridge — the higher rungs
@@ -392,12 +555,14 @@ All library exceptions derive from `autografs.AutografsError`:
 
 ```python
 from autografs import AlignmentError, OverlapError
-from autografs.exceptions import StackingError, RelaxationError
+from autografs.exceptions import StackingError, RelaxationError, ValidationError
 
 try:
-    mof = mofgen.build(topology, mappings, max_rmsd=0.3, min_distance=1.0)
-except AlignmentError:   # shape mismatch beyond the gate
+    mof = mofgen.build(topology, mappings, strict=True)
+except AlignmentError:   # shape mismatch, or bonds that do not close
     ...
 except OverlapError:     # non-bonded contact below the gate
+    ...
+except ValidationError:  # free molecules, or coincident atoms
     ...
 ```

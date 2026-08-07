@@ -292,3 +292,156 @@ class TestLayerCellParametrization:
         param = self._param(None, angles=(90.0, 90.0, 100.0))
         assert param.system == "layer_oblique"
         assert param.expand([3.0, 4.0, 95.0])[2] == 10.0
+
+
+class TestBondTargetScale:
+    """An opt-in multiplier on the inter-unit covalent bond target.
+
+    It exists for one measured purpose: a strained build can place
+    atoms close enough that a force-field relaxation cannot descend
+    from it, and an inflated start can. Building a *reported* structure
+    with it would be wrong - the bonds are deliberately too long - so
+    the default must stay exactly 1.0 and cost nothing.
+    """
+
+    FIXTURE = "tests/data/topologies_fixture.json"
+
+    def _mof5(self):
+        from autografs import Autografs
+
+        mofgen = Autografs(topofile=self.FIXTURE)
+        topology = mofgen.topologies["pcu"]
+        mappings = {}
+        for slot in topology.mappings:
+            arms = len(slot.atoms.indices_from_symbol("X"))
+            mappings[slot] = {6: "Zn_mof5_octahedral", 2: "Benzene_linear"}[arms]
+        return mofgen, topology, mappings
+
+    def test_the_default_is_exactly_the_unscaled_build(self):
+        mofgen, topology, mappings = self._mof5()
+        plain = mofgen.build(topology, mappings, max_rmsd=0.5)
+        explicit = mofgen.build(topology, mappings, max_rmsd=0.5, bond_target_scale=1.0)
+        np.testing.assert_allclose(
+            np.asarray(plain.graph.graph["cell"], float),
+            np.asarray(explicit.graph.graph["cell"], float),
+            atol=1e-12,
+        )
+
+    def test_a_larger_target_opens_the_cell(self):
+        mofgen, topology, mappings = self._mof5()
+        built = {}
+        for scale in (1.0, 1.5, 2.0):
+            framework = mofgen.build(
+                topology, mappings, max_rmsd=0.5, bond_target_scale=scale
+            )
+            built[scale] = float(
+                np.linalg.norm(np.asarray(framework.graph.graph["cell"], float)[0])
+            )
+        assert built[1.0] < built[1.5] < built[2.0]
+        # MOF-5 is cubic a = 12.9 A; the inflation is on the inter-unit
+        # bond only, so the cell grows by well under the scale factor
+        assert built[1.0] == pytest.approx(12.9, abs=0.2)
+
+    def test_the_scale_reaches_the_objective_not_just_the_signature(self):
+        """A build plan's bond targets must actually carry the factor."""
+        from autografs.alignment import prepare_build
+
+        mofgen, topology, mappings = self._mof5()
+        validated, empty = mofgen._validate_mappings(topology, mappings)
+        one = prepare_build(topology, validated, empty_slots=empty)
+        two = prepare_build(
+            topology, validated, empty_slots=empty, bond_target_scale=2.0
+        )
+        assert one.pairs, "fixture must produce paired anchors"
+        index_a, target_a, index_b, target_b, _ = one.pairs[0]
+        assert two._pair_bond_length(
+            index_a, target_a, index_b, target_b
+        ) == pytest.approx(
+            2.0 * one._pair_bond_length(index_a, target_a, index_b, target_b)
+        )
+
+
+class TestReliefPass:
+    """Spinning 2-connected units about their own anchor line.
+
+    The finite counterpart of the rod pipeline's relief pass. Its whole
+    claim is that it opens packing while leaving closure alone, so both
+    halves are pinned here.
+    """
+
+    FIXTURE = "tests/data/topologies_fixture.json"
+
+    def _worst_bond(self, framework):
+        from autografs.validation import inter_unit_bond_deviations
+
+        deviations = np.asarray(
+            inter_unit_bond_deviations(framework), dtype=float
+        ).ravel()
+        return float(np.nanmax(deviations)) if deviations.size else float("nan")
+
+    def _pair(self, net, **kwargs):
+        from autografs import Autografs
+
+        mofgen = Autografs(topofile=self.FIXTURE)
+        topology = mofgen.topologies[net]
+        mappings = mofgen.suggest_mappings(topology)[0]
+        options = {"max_rmsd": 1.0, "min_distance": 0.0, **kwargs}
+        return (
+            mofgen.build(topology, mappings, **options),
+            mofgen.build(topology, mappings, relieve=True, **options),
+        )
+
+    def test_the_axis_is_the_anchors_not_the_dummies(self):
+        """Real linkers are bent, so the two lines are NOT the same.
+
+        Measured on the shipped library: anchors sit 0.28-0.56 A off
+        the dummy-to-dummy line. Spinning about that line would swing
+        the anchors and change every bond they make.
+        """
+        from autografs.alignment import _relief_axis
+
+        anchors = np.array([[-2.0, 0.4, 0.0], [2.0, 0.4, 0.0]])
+        axis = _relief_axis(anchors)
+        assert axis is not None
+        np.testing.assert_allclose(axis, [1.0, 0.0, 0.0], atol=1e-12)
+        # both anchors are equidistant from the axis line through them
+        for anchor in anchors:
+            along = (anchor - anchors[0]) @ axis
+            offset = anchor - anchors[0] - along * axis
+            assert np.linalg.norm(offset) < 1e-12
+
+    def test_a_polytopic_unit_has_no_relief_axis(self):
+        from autografs.alignment import _relief_axis
+
+        assert _relief_axis(np.eye(3)) is None
+        assert _relief_axis(np.zeros((1, 3))) is None
+
+    def test_closure_is_untouched(self):
+        """The guarantee: the anchors do not move, so no bond changes."""
+        plain, relieved = self._pair("pcu")
+        assert self._worst_bond(relieved) == pytest.approx(
+            self._worst_bond(plain), abs=1e-9
+        )
+
+    def test_packing_improves_where_units_can_turn(self):
+        plain, relieved = self._pair("pcu")
+        assert relieved.min_contact() > plain.min_contact()
+        marker = relieved.graph.graph["relief"]
+        assert marker["contact_after"] > marker["contact_before"]
+
+    def test_the_default_build_is_unchanged(self):
+        from autografs import Autografs
+
+        mofgen = Autografs(topofile=self.FIXTURE)
+        topology = mofgen.topologies["pcu"]
+        mappings = mofgen.suggest_mappings(topology)[0]
+        plain = mofgen.build(topology, mappings, max_rmsd=1.0, min_distance=0.0)
+        assert "relief" not in plain.graph.graph
+
+    def test_the_net_is_preserved(self):
+        """Bonds unchanged means the quotient graph is unchanged."""
+        plain, relieved = self._pair("pcu")
+        assert relieved.graph.number_of_edges() == plain.graph.number_of_edges()
+        assert {frozenset(e) for e in relieved.graph.edges()} == {
+            frozenset(e) for e in plain.graph.edges()
+        }
