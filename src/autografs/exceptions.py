@@ -45,3 +45,11 @@ class DeconstructionError(AutografsError):
 class RelaxationError(AutografsError):
     """Raised when the optional LAMMPS relaxation backend is missing
     or a framework cannot be relaxed."""
+
+
+class ValidationError(AutografsError):
+    """Raised by ``build(..., strict=True)`` when a built framework
+    fails a post-build check that has no more specific exception -
+    free (0-periodic) molecules, or coincident atoms. Closure and
+    overlap keep raising AlignmentError and OverlapError so existing
+    handlers still catch them."""
