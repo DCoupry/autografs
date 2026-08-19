@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 
     from autografs.elastic import ElasticProperties
     from autografs.topology import Topology
+    from autografs.validation import ValidationReport
 
 __all__ = [
     "Framework",
@@ -337,6 +338,60 @@ class Framework:
         if not unbonded.any():
             return math.inf
         return float(distances[unbonded].min())
+
+    def validate(
+        self,
+        bond_tolerance: float | None = 0.5,
+        min_distance: float | None = 1.5,
+        require_connected: bool = True,
+    ) -> ValidationReport:
+        """Every post-build check in one verdict.
+
+        Answers "is this a structure that makes sense?" without the
+        caller having to know which gate lives where. Closure (do the
+        inter-unit bonds reach their covalent targets), overlap (do the
+        atoms clear each other), connectivity (are there free molecules
+        floating in the cell) and coincident atoms are measured
+        together, each reporting its value beside the threshold it was
+        judged against.
+
+        This only reports. To have the build itself refuse, pass
+        ``strict=True`` to ``build``.
+
+        Parameters
+        ----------
+        bond_tolerance : float or None, optional
+            Worst acceptable inter-unit bond deviation in Angstrom, by
+            default 0.5. None skips the closure check.
+        min_distance : float or None, optional
+            Closest acceptable non-bonded contact in Angstrom, by
+            default 1.5. None skips the overlap check.
+        require_connected : bool, optional
+            Fail on free (0-periodic) molecules, by default True.
+
+        Returns
+        -------
+        ValidationReport
+            ``report.ok`` is the single verdict; ``report.failures``
+            names what went wrong, and ``report.descriptors`` carries
+            the measured quantities either way.
+
+        Examples
+        --------
+        >>> report = mof.validate()
+        >>> report.ok
+        True
+        >>> report["contact"].value
+        2.037
+        """
+        from autografs.validation import validate_framework
+
+        return validate_framework(
+            self,
+            bond_tolerance=bond_tolerance,
+            min_distance=min_distance,
+            require_connected=require_connected,
+        )
 
     def verify_net(self, topology: Topology) -> None:
         """Check that this as-built framework realizes its blueprint.

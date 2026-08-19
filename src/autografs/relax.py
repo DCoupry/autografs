@@ -29,12 +29,14 @@ relaxed image, species-constrained and one-to-one.
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 import logging
 import os
 import re
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -42,6 +44,7 @@ import networkx
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from autografs.data.uff4mof import UFF4MOF
 from autografs.exceptions import RelaxationError
 
 if TYPE_CHECKING:
@@ -199,7 +202,101 @@ def _match_displacements(
     return displacements
 
 
-def _hand_off_atom_types(framework: Framework, graph) -> int:
+#: UFF symbols whose spelling differs between our table and
+#: lammps-interface's for the SAME type. Only genuine renamings belong
+#: here - anything else goes through the coordination substitution.
+_TYPE_ALIASES = {
+    # lawrencium: Lr is the current IUPAC symbol, Lw the historical one
+    # the UFF paper used and lammps-interface kept
+    "Lr6+3": "Lw6+3",
+}
+
+
+def _supported_types(force_field: str) -> set[str]:
+    """Atom-type symbols the backend actually has parameters for.
+
+    Our table (``data/uff4mof.py``, 227 symbols) and lammps-interface's
+    (221) are both "UFF4MOF" and do not agree: 15 of ours are absent
+    there, including ``Co6+2`` and ``N_3+4``. Handing one of those over
+    raises KeyError before a single step runs, so the hand-off has to
+    know what the receiver can take.
+    """
+    name = (force_field or "").lower()
+    try:
+        if "4mof" in name:
+            from lammps_interface.uff4mof import UFF4MOF_DATA as table
+        elif name.startswith("uff"):
+            from lammps_interface.uff import UFF_DATA as table
+        else:
+            # Dreiding or anything else: no opinion, let it type
+            return set()
+    except ImportError:  # pragma: no cover - backend absent
+        return set()
+    return set(table)
+
+
+def _element_of(uff_symbol: str) -> str:
+    """Element of a UFF type symbol.
+
+    UFF pads the element into a fixed two-character field ("C_R", "N_3",
+    "Co6+2"), so the element is the first two characters with the
+    padding stripped.
+    """
+    return uff_symbol[:2].rstrip("_")
+
+
+@functools.cache
+def _substitution_map(force_field: str) -> dict[str, str | None]:
+    """Our type -> the closest type the backend supports.
+
+    Same element always; among its supported types the one whose
+    coordination is closest (ties broken by covalent radius), which
+    keeps the connectivity information ``find_mmtypes`` derived even
+    when the exact parameter set is missing downstream. None when the
+    backend knows no type for that element at all - then the atom is
+    left for lammps-interface to type, which is no worse than today.
+    """
+    supported = _supported_types(force_field)
+    if not supported:
+        return {}
+    ours = {entry.symbol: entry for entry in UFF4MOF}
+    by_element: dict[str, list] = {}
+    for symbol in supported:
+        entry = ours.get(symbol)
+        if entry is not None:
+            by_element.setdefault(_element_of(symbol), []).append(entry)
+    mapping: dict[str, str | None] = {}
+    for symbol, entry in ours.items():
+        if symbol in supported:
+            mapping[symbol] = symbol
+            continue
+        alias = _TYPE_ALIASES.get(symbol)
+        if alias and alias in supported:
+            mapping[symbol] = alias
+            continue
+        # UFF pads the element into a two-character field; our table
+        # spells single-letter elements bare where lammps-interface pads
+        # them ("K" vs "K_"), which is the same type, not a near miss
+        padded = symbol[:2].ljust(2, "_") + symbol[2:]
+        if padded != symbol and padded in supported:
+            mapping[symbol] = padded
+            continue
+        candidates = by_element.get(_element_of(symbol))
+        if not candidates:
+            mapping[symbol] = None
+            continue
+        best = min(
+            candidates,
+            key=lambda other: (
+                abs(other.coordination - entry.coordination),
+                abs(other.radius - entry.radius),
+            ),
+        )
+        mapping[symbol] = best.symbol
+    return mapping
+
+
+def _hand_off_atom_types(framework: Framework, graph, force_field: str) -> int:
     """Give lammps-interface the UFF types we already know.
 
     A Framework's bond graph is the source of truth for UFF4MOF atom
@@ -247,9 +344,30 @@ def _hand_off_atom_types(framework: Framework, graph) -> int:
                 f"element {data.get('element')} where the framework has {symbol}."
             )
             return 0
+    # translate into the receiver's vocabulary; an atom we cannot express
+    # there is left untyped rather than handed a symbol it will KeyError on
+    mapping = _substitution_map(force_field)
+    substitutions: Counter[str] = Counter()
+    typed = 0
     for (_node, data), uff_type in zip(theirs, ours, strict=True):
-        data["force_field_type"] = uff_type
-    return len(ours)
+        target = mapping.get(uff_type, uff_type) if mapping else uff_type
+        if target is None:
+            continue
+        if target != uff_type:
+            substitutions[f"{uff_type}->{target}"] += 1
+        data["force_field_type"] = target
+        typed += 1
+    if substitutions:
+        logger.info(
+            f"Atom types unsupported by the {force_field} backend were "
+            f"substituted for {framework.name!r}: {dict(substitutions)}."
+        )
+    if typed < len(ours):
+        logger.info(
+            f"{len(ours) - typed} atom(s) of {framework.name!r} have no "
+            f"{force_field} counterpart and were left for lammps-interface."
+        )
+    return typed
 
 
 def _write_lammps_inputs(
@@ -286,7 +404,7 @@ def _write_lammps_inputs(
         with quiet:
             sim = simulation_cls(options)
             cell, graph = from_cif(str(cif_path))
-            _hand_off_atom_types(framework, graph)
+            _hand_off_atom_types(framework, graph, force_field)
             sim.set_cell(cell)
             sim.set_graph(graph)
             sim.split_graph()
@@ -476,4 +594,272 @@ def relax_framework(
 
     result = FrameworkCls(relaxed, name=framework.name)
     result.energy = energy / float(supercell.prod())
+    return result
+
+
+#: Below this closest contact a UFF start is unusable: LJ goes as
+#: r^-12, so an overlapping pair overflows the force, positions turn
+#: non-finite and LAMMPS reports the symptom as a lost bond
+#: ("Bond atoms N M missing on proc 0"). Measured on the generative
+#: candidates: everything with a pair under 0.69 A failed this way,
+#: everything over 0.86 A relaxed.
+#: Run the push-off when the closest pair is under this, in Angstrom.
+#: 1.3 is corpus-measured, not the "is it overlapping" intuition: 0.85
+#: left 28 structures whose closest pair was 0.85-1.3 A to overflow the
+#: full force field, and raising it rescued 27 of them while a control
+#: of 14 that already relaxed was untouched (all 14 kept, median contact
+#: 1.66 -> 1.68 A). A pair well inside a bond length is already enough
+#: for r^-12 to dominate, so "not quite overlapping" is not safe.
+SOFT_PUSHOFF_CONTACT = 1.3
+#: Soft-potential prefactor, kcal/mol. Measured: 10 separates every
+#: overlapping candidate tried (cds 0.44 -> 1.06, qzd 0.44 -> 1.04, lon
+#: 0.17 -> 1.00) while 100 overshoots into a fresh collapse (cds -> 0.00)
+#: and 1000 fails outright. Stronger is NOT safer here.
+SOFT_PUSHOFF_PREFACTOR = 10.0
+#: Soft cutoff; wide enough to reach a second-neighbour overlap.
+SOFT_PUSHOFF_CUTOFF = 4.0
+#: Below this the pair is close enough to coincident that the soft
+#: force (which vanishes at r = 0) cannot separate it unaided.
+SOFT_PUSHOFF_JITTER_BELOW = 0.3
+#: Fixed seed: the jitter must not make a relaxation irreproducible.
+SOFT_PUSHOFF_SEED = 20260806
+
+
+def _pushoff_jitter(data) -> list[str]:
+    """Break a coincident pair's degeneracy before the soft push.
+
+    The soft force goes as sin(pi r / rc), so it VANISHES at r = 0 and
+    an exactly-coincident pair would never separate. The seed is fixed:
+    a relaxation must stay reproducible.
+    """
+    if data.closest_contact >= SOFT_PUSHOFF_JITTER_BELOW:
+        return []
+    return [f"displace_atoms all random 0.1 0.1 0.1 {SOFT_PUSHOFF_SEED} units box"]
+
+
+def _push_off_overlaps(
+    framework: Framework, force_field: str, verbose: bool = False
+) -> Framework:
+    """Separate overlapping atoms before the real relaxation runs.
+
+    Only the PAIR term is softened; every bonded term stays. Dropping
+    the angles, torsions and inversions to make the push-off
+    "well-conditioned" was tried and is decisively worse - 79 of 210
+    against 124, gaining 4 structures and losing 49. Without the angle
+    terms the push-off deforms the units themselves (a ring folds, a
+    tetrahedral centre flattens), and the full force field then starts
+    from a chemically wrong geometry that is harder to fix than the
+    overlap was. Do not re-try it.
+
+    Returns the framework unchanged when nothing is overlapping.
+    """
+    import tempfile
+
+    from autografs.lammps_data import write_lammps_data
+
+    _import_backends()
+    data = write_lammps_data(framework, force_field=force_field)
+    if data.closest_contact >= SOFT_PUSHOFF_CONTACT:
+        return framework
+
+    sink = io.StringIO()
+    quiet: contextlib.AbstractContextManager = (
+        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="autografs_pushoff_", ignore_cleanup_errors=True
+    ) as tmp:
+        path = (Path(tmp) / "data.pushoff").as_posix()
+        Path(path).write_text(data.text, encoding="utf-8")
+        lmp = _launch_lammps()
+        try:
+            with quiet:
+                for command in (
+                    "units real",
+                    "atom_style full",
+                    "boundary p p p",
+                    f"bond_style {data.styles['bond_style']}",
+                    f"angle_style {data.styles['angle_style']}",
+                    f"dihedral_style {data.styles['dihedral_style']}",
+                    f"improper_style {data.styles['improper_style']}",
+                    f"special_bonds {data.styles['special_bonds']}",
+                    f"comm_modify {data.styles['comm_modify']}",
+                    f"pair_style soft {SOFT_PUSHOFF_CUTOFF}",
+                    f"read_data {path}",
+                    # the prefactor is set OUTRIGHT: the documented
+                    # `fix adapt` + ramp() recipe is written for `run`
+                    # and never applies during `minimize`
+                    f"pair_coeff * * {SOFT_PUSHOFF_PREFACTOR}",
+                    *_pushoff_jitter(data),
+                    "min_style fire",
+                    "min_modify dmax 0.02",
+                    "minimize 1.0e-8 1.0e-8 2000 20000",
+                ):
+                    lmp.command(command)
+                natoms = lmp.get_natoms()
+                positions = np.array(
+                    lmp.gather_atoms("x", 1, 3)[:], dtype=float
+                ).reshape(natoms, 3)
+                (lo, _hi, *_rest) = lmp.extract_box()
+        finally:
+            lmp.close()
+
+    if natoms != len(framework.graph):
+        raise RelaxationError(
+            f"the push-off returned {natoms} atoms for a "
+            f"{len(framework.graph)}-atom framework."
+        )
+    pushed = framework.graph.copy()
+    for row, node in enumerate(sorted(framework.graph)):
+        pushed.nodes[node]["coord"] = positions[row] - np.asarray(lo, dtype=float)
+    from autografs.framework import Framework as FrameworkCls
+
+    result = FrameworkCls(pushed, name=framework.name)
+    logger.info(
+        f"Pushed overlapping atoms in {framework.name!r} apart before "
+        f"relaxing: closest pair {data.closest_contact:.2f} -> "
+        f"{result.min_contact():.2f} A."
+    )
+    return result
+
+
+#: A relaxation that leaves two atoms this close has not converged to
+#: a structure, whatever the minimiser reported. Below any real bond.
+COLLAPSE_DISTANCE = 0.5
+#: Losing this much volume is a collapse, not a contraction. UFF's own
+#: contraction is 2-15% (see the UFF4MOF notes), so 0.2 is far outside.
+COLLAPSE_VOLUME_RATIO = 0.2
+
+
+def _reject_collapse(before: Framework, after: Framework) -> None:
+    """Refuse a "successful" relaxation that returned a collapsed cell.
+
+    Measured need: relaxing a deliberately expanded start reported
+    success while returning atoms 0.00 A apart. A minimiser converging
+    on a degenerate structure is a failure, and it must not be handed
+    back as a result.
+    """
+    coords = after.structure.distance_matrix.copy()
+    np.fill_diagonal(coords, np.inf)
+    closest = float(coords.min())
+    ratio = float(after.structure.volume / before.structure.volume)
+    if closest < COLLAPSE_DISTANCE:
+        raise RelaxationError(
+            f"the relaxation of {before.name!r} converged with two atoms "
+            f"{closest:.2f} A apart (under {COLLAPSE_DISTANCE} A): the cell "
+            "collapsed rather than relaxed."
+        )
+    if ratio < COLLAPSE_VOLUME_RATIO:
+        raise RelaxationError(
+            f"the relaxation of {before.name!r} kept only {ratio:.0%} of the "
+            "built cell volume: the cell collapsed rather than relaxed."
+        )
+
+
+def relax_framework_native(
+    framework: Framework,
+    force_field: str = "UFF4MOF",
+    verbose: bool = False,
+    steps: int = 10000,
+) -> Framework:
+    """Relax through a data file we write ourselves (lammps_data).
+
+    Same engine as ``relax_framework``, different staging: the topology
+    comes from the framework's own bond graph rather than from
+    lammps-interface's re-perception of the geometry. That removes the
+    failure modes measured over 516 candidates (invalid dihedral IDs,
+    C-level aborts, RecursionError, silent collapse) and, because the
+    cutoff is chosen under half the box, the internal supercell and its
+    fold-back with it - atoms come back in the order they were written.
+
+    Validated against lammps-interface on MOF-5 at identical geometry:
+    every bond coefficient equal to six decimals, total energy within
+    0.5% (bonds 0.0%, angles 0.1%, dihedrals 0.7%; the van der Waals
+    term differs by the cutoff).
+    """
+    import tempfile
+
+    from autografs.lammps_data import write_lammps_data
+
+    lammps, _, _, _ = _import_backends()
+    # separate any overlap FIRST, in a separate stage that softens only
+    # the pair term (every bonded term kept), so the full force field
+    # never sees the geometry that overflows its r^-12 term
+    original = framework
+    framework = _push_off_overlaps(framework, force_field, verbose=verbose)
+    data = write_lammps_data(framework, force_field=force_field)
+    sink = io.StringIO()
+    quiet: contextlib.AbstractContextManager = (
+        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
+    )
+    with tempfile.TemporaryDirectory(
+        prefix="autografs_native_", ignore_cleanup_errors=True
+    ) as tmp:
+        path = (Path(tmp) / "data.framework").as_posix()
+        Path(path).write_text(data.text, encoding="utf-8")
+        lmp = _launch_lammps()
+        try:
+            with quiet:
+                for command in (
+                    "units real",
+                    "atom_style full",
+                    "boundary p p p",
+                    f"pair_style {data.styles['pair_style']}",
+                    f"pair_modify {data.styles['pair_modify']}",
+                    f"bond_style {data.styles['bond_style']}",
+                    f"angle_style {data.styles['angle_style']}",
+                    f"dihedral_style {data.styles['dihedral_style']}",
+                    f"improper_style {data.styles['improper_style']}",
+                    f"special_bonds {data.styles['special_bonds']}",
+                    # the ghost shell has to reach the far end of every
+                    # bond, which in a small cell is wider than the pair
+                    # cutoff; without it LAMMPS drops the bond at setup
+                    f"comm_modify {data.styles['comm_modify']}",
+                    f"read_data {path}",
+                    "min_style fire",
+                    "min_modify dmax 0.05",
+                    f"minimize 1.0e-10 1.0e-10 {steps} {steps * 10}",
+                    # box/relax refuses a damped-dynamics minimiser
+                    "min_style cg",
+                    "fix boxrelax all box/relax tri 0.0 vmax 0.001",
+                    f"minimize 1.0e-10 1.0e-10 {steps} {steps * 10}",
+                ):
+                    lmp.command(command)
+                natoms = lmp.get_natoms()
+                positions = np.array(
+                    lmp.gather_atoms("x", 1, 3)[:], dtype=float
+                ).reshape(natoms, 3)
+                (xlo, ylo, zlo), (xhi, yhi, zhi), xy, yz, xz, *_ = lmp.extract_box()
+                energy = float(lmp.get_thermo("pe"))
+        finally:
+            lmp.close()
+
+    if natoms != len(framework.graph):
+        raise RelaxationError(
+            f"LAMMPS returned {natoms} atoms for a {len(framework.graph)}-atom "
+            "framework; the native data file was not read as written."
+        )
+    cell = np.array(
+        [
+            [xhi - xlo, 0.0, 0.0],
+            [xy, yhi - ylo, 0.0],
+            [xz, yz, zhi - zlo],
+        ]
+    )
+    # no supercell, so no fold-back: LAMMPS atom i+1 IS sorted node i
+    relaxed = networkx.Graph(cell=cell)
+    for row, node in enumerate(sorted(framework.graph)):
+        copied = dict(framework.graph.nodes[node])
+        copied["coord"] = positions[row] - np.array([xlo, ylo, zlo])
+        relaxed.add_node(node, **copied)
+    relaxed.add_edges_from(framework.graph.edges(data=True))
+    from autografs.framework import Framework as FrameworkCls
+
+    result = FrameworkCls(relaxed, name=framework.name)
+    result.energy = energy
+    _reject_collapse(original, result)
+    logger.info(
+        f"Relaxed {framework.name!r} natively with {force_field}: "
+        f"{energy:.1f} kcal/mol, {data}."
+    )
     return result

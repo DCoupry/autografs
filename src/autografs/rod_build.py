@@ -67,8 +67,10 @@ What is structurally different from the finite-SBU pipeline:
   scale, optimized together with the rod's own two placement freedoms
   — rotation about the axis and axial phase (pitfall 10) — against
   covalent-length targets for the bonded anchor pairs.
-- **Repeats are placed by the screw operation.** ``n_repeats`` =
-  ``max(2, screw_order)`` copies are laid down the axis; copy *n* is
+- **Repeats are placed by the screw operation.** ``n_repeats`` copies
+  (``_repeat_counts``: ``max(2, screw_order)`` rounded up to whole
+  blueprint periods when a run chains several PoE nodes per period)
+  are laid down the axis; copy *n* is
   rotated ``n x screw_angle`` about the axis (pure translation for a
   straight rod) and the linkers spiral with it, so the built
   framework is a genuine helix. Two is the minimum so a continuation

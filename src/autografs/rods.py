@@ -384,9 +384,10 @@ class RodFragment:
         The rod's internal bond graph as (row a, row b, m): atom a of
         one repeat bonds to atom b of the repeat m steps further along
         the axis (m = 0 within a repeat, m = +-1 the continuation).
-        Recorded for screwless rods (screw_order 1) with source
-        ``internal_bonds``; empty otherwise — forward building needs
-        it, identity does not.
+        Recorded whenever the source ``RodUnit`` carried
+        ``internal_bonds`` — straight and helical rods alike (the slab
+        correspondence de-screws azimuths, #158); forward building
+        needs it, identity does not.
     name : str
         Library name, set by ``merge_rod``/harvest.
     atom_repeats : dict[int, int] or None

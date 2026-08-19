@@ -137,6 +137,69 @@ class TestFetchIzaCifs:
         assert got["-CLO"].name == "CLO.cif"
 
 
+def _epinet_zip_bytes(members: dict[str, bytes]) -> bytes:
+    """A synthetic release archive; content is fake, no EPINET data."""
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        for name, data in members.items():
+            bundle.writestr(name, data)
+    return buffer.getvalue()
+
+
+class TestFetchEpinet:
+    MEMBERS = {
+        "snet-cgd-files/sqc1.cgd": b"CRYSTAL one",
+        "snet-cgd-files/sqc7.cgd": b"CRYSTAL seven",
+        "snet-cgd-files/README.txt": b"not a net",
+    }
+
+    def test_downloads_extracts_and_caches(self, fake_http, tmp_path):
+        fake_http.responses[fetch.EPINET_ARCHIVE_URL] = _FakeResponse(
+            content=_epinet_zip_bytes(self.MEMBERS)
+        )
+        got = fetch.fetch_epinet_cgds(cache_dir=tmp_path, accept_licenses=True)
+        # sqc files extracted flat, non-cgd members ignored
+        assert sorted(got) == ["sqc1", "sqc7"]
+        assert got["sqc1"].read_bytes() == b"CRYSTAL one"
+        assert not (tmp_path / "README.txt").exists()
+        assert fake_http.calls == [fetch.EPINET_ARCHIVE_URL]
+        # second run: archive cached, no network at all
+        fake_http.calls.clear()
+        got = fetch.fetch_epinet_cgds(cache_dir=tmp_path, accept_licenses=True)
+        assert sorted(got) == ["sqc1", "sqc7"]
+        assert fake_http.calls == []
+
+    def test_max_id_filters(self, fake_http, tmp_path):
+        fake_http.responses[fetch.EPINET_ARCHIVE_URL] = _FakeResponse(
+            content=_epinet_zip_bytes(self.MEMBERS)
+        )
+        got = fetch.fetch_epinet_cgds(
+            cache_dir=tmp_path, accept_licenses=True, max_id=1
+        )
+        assert sorted(got) == ["sqc1"]
+
+    def test_sweep_era_partial_cache_is_kept(self, fake_http, tmp_path):
+        # a file left by the pre-release per-page sweep is not rewritten
+        (tmp_path / "sqc1.cgd").write_bytes(b"from the old sweep")
+        fake_http.responses[fetch.EPINET_ARCHIVE_URL] = _FakeResponse(
+            content=_epinet_zip_bytes(self.MEMBERS)
+        )
+        got = fetch.fetch_epinet_cgds(cache_dir=tmp_path, accept_licenses=True)
+        assert sorted(got) == ["sqc1", "sqc7"]
+        assert got["sqc1"].read_bytes() == b"from the old sweep"
+
+    def test_corrupt_archive_removed_and_raised(self, fake_http, tmp_path):
+        archive = tmp_path / fetch.EPINET_ARCHIVE_NAME
+        archive.write_bytes(b"this is not a zip")
+        with pytest.raises(RuntimeError, match="corrupt"):
+            fetch.fetch_epinet_cgds(cache_dir=tmp_path, accept_licenses=True)
+        assert not archive.exists()
+        assert fake_http.calls == []
+
+
 class TestIzaConversion:
     def test_sod_converts(self):
         from pathlib import Path

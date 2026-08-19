@@ -36,6 +36,7 @@ from collections import deque
 from collections.abc import Iterable, Mapping
 from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
+from typing import Any
 
 import dill
 import numpy as np
@@ -51,7 +52,13 @@ import autografs.rod_build
 import autografs.rods
 import autografs.topology_io
 import autografs.utils
-from autografs.exceptions import AlignmentError, OverlapError
+import autografs.validation
+from autografs.exceptions import (
+    AlignmentError,
+    OverlapError,
+    RelaxationError,
+    ValidationError,
+)
 from autografs.fragment import Fragment
 from autografs.framework import Framework
 from autografs.topology import Topology
@@ -196,6 +203,9 @@ def build_framework(
     relax_embedding: bool = False,
     empty_slots: Iterable[int] = (),
     bond_tolerance: float | None = None,
+    strict: bool = False,
+    bond_target_scale: float = 1.0,
+    relieve: bool = False,
 ) -> Framework:
     """Build one framework from validated slot-index mappings.
 
@@ -230,7 +240,9 @@ def build_framework(
         2-connected slots deliberately left empty (#179); see
         Autografs.build.
     bond_tolerance : float or None, optional
-        Closure gate; see Autografs.build. Off by default.
+        Closure gate; see Autografs.build.
+    strict : bool, optional
+        Refuse structures that are not usable; see Autografs.build. Off by default.
 
     Returns
     -------
@@ -238,12 +250,21 @@ def build_framework(
         The built framework.
     """
     t0 = time.time()
+    if strict:
+        # strict turns the existing gates on together rather than
+        # introducing new ones, and never overrides a threshold the
+        # caller stated: an explicit bond_tolerance=1.0 means 1.0.
+        if bond_tolerance is None:
+            bond_tolerance = autografs.validation.STRICT_BOND_TOLERANCE
+        if min_distance is None:
+            min_distance = autografs.validation.STRICT_MIN_DISTANCE
     empty_slots = sorted(set(empty_slots))
     plan = autografs.alignment.prepare_build(
         topology,
         mappings,
         relax_embedding=relax_embedding,
         empty_slots=empty_slots,
+        bond_target_scale=bond_target_scale,
     )
     x0 = plan.initial_parameters()
     relaxation_report: dict | None = None
@@ -251,8 +272,9 @@ def build_framework(
         # Nelder-Mead on the bond-length pair residual over the
         # crystal system's free parameters only (a cubic net
         # optimizes a single length) plus, under embedding
-        # relaxation, the slot displacements; the objective is pure
-        # numpy, no object copies per evaluation
+        # relaxation, the slot displacements; the objective works on
+        # plain arrays — no Molecule/Fragment copies per evaluation
+        # (one Lattice is constructed per cell evaluation)
         best_parameters = _refine(plan, x0, seed_displacements=SEED_MAIN_SOLVE)
         if plan.n_slot_free:
             # freeing the slots must not COST closure (#197). The
@@ -322,6 +344,24 @@ def build_framework(
             logger.info("\t[x] No cell refinement performed.")
         best_parameters = x0
     best_alignment, lattice, slot_rmsds = plan.finalize(best_parameters)
+    relief_report: dict | None = None
+    if relieve:
+        # spin the 2-connected units about their own anchor line: every
+        # bond is preserved exactly, so this runs AFTER closure is
+        # settled and cannot disturb it
+        best_alignment, before_contact, after_contact = (
+            autografs.alignment.relieve_clashes(plan, lattice, best_alignment)
+        )
+        if math.isfinite(before_contact):
+            relief_report = {
+                "contact_before": before_contact,
+                "contact_after": after_contact,
+            }
+            if verbose:
+                logger.info(
+                    f"	Relief pass: closest inter-unit contact "
+                    f"{before_contact:.2f} -> {after_contact:.2f} A."
+                )
     if max_rmsd is not None:
         bad_slots = {i: r for i, r in slot_rmsds.items() if r > max_rmsd}
         if bad_slots:
@@ -364,6 +404,8 @@ def build_framework(
         # verify_net contracts these on the blueprint side, and
         # framework_io / replicated_graph keep the marker alive
         graph.graph["empty_slots"] = list(empty_slots)
+    if relief_report is not None:
+        graph.graph["relief"] = relief_report
     if relax_embedding:
         # diagnostic, not a schema commitment: which candidate the
         # closure guard kept and at what worst-bond score, plus the
@@ -385,6 +427,19 @@ def build_framework(
                 f"Closest non-bonded contact is {contact:.2f} A, below "
                 f"min_distance={min_distance:.2f} A, on topology "
                 f"{topology.name}: overlapping or interpenetrating output."
+            )
+    if strict:
+        # the checks with no gate of their own. Closure and overlap
+        # already raised above through bond_tolerance/min_distance, so
+        # what is left is the pair of defects nothing could catch:
+        # free-floating molecules (measured on 10 builds this way) and
+        # coincident atoms.
+        report = framework.validate(
+            bond_tolerance=None, min_distance=None, require_connected=True
+        )
+        if not report.ok:
+            raise ValidationError(
+                f"Build on {topology.name} is not a usable structure: {report}"
             )
     if verify_net:
         framework.verify_net(topology)
@@ -864,6 +919,9 @@ class Autografs:
         verify_net: bool = False,
         relax_embedding: bool = False,
         bond_tolerance: float | None = None,
+        strict: bool = False,
+        bond_target_scale: float = 1.0,
+        relieve: bool = False,
     ) -> Framework:
         """
         Generates a framework from a mapping of SBU to topology slots.
@@ -941,6 +999,53 @@ class Autografs:
             using relax_embedding); the realized value is reported
             under ``verbose`` either way.
 
+        relieve : bool
+            Spin every 2-connected unit about the line through its own
+            two anchors, one shared angle per crystallographic orbit,
+            to open up the closest inter-unit contact. Every bond is
+            preserved exactly - the anchors sit ON the rotation axis,
+            which is why only units whose anchors are collinear with
+            their dummies qualify - so this cannot disturb closure or
+            the net. It is the finite counterpart of the relief pass
+            `rod_build` has run since #168, and it targets the clash a
+            cell scale cannot fix: two slots wanting different scales
+            drive their units together, and no cell parameter separates
+            coplanar rings. Off by default so existing builds
+            reproduce; the result records a `relief` graph marker.
+        bond_target_scale : float
+            Multiplier on every inter-unit covalent bond target. 1.0
+            (the default) is the chemistry; a larger value builds a
+            deliberately open framework whose bonds are too long. Its
+            one measured use is as a RETRY for a force-field relaxation
+            that fails from the correct build: a strained embedding can
+            place atoms close enough that the Lennard-Jones term is
+            unrecoverable, and an open start descends where the correct
+            one cannot. Where the relaxation already converges the
+            result is unchanged (MOF-5: a = 12.63 A at every scale from
+            1.0 to 2.0), but on strained builds it reaches a different
+            and systematically larger minimum - so never build a
+            reported structure with it, only a re-relaxed one.
+        strict : bool, optional
+            Refuse to return a structure that is not usable. Turns on
+            the gates above **together** - ``bond_tolerance=0.5`` and
+            ``min_distance=1.5`` unless you passed your own - and adds
+            the two checks that have no gate of their own: free
+            (0-periodic) molecules floating in the cell, and coincident
+            atoms.
+
+            **Off by default, so existing behaviour is unchanged**, but
+            it is the right setting for anyone who wants confidence
+            rather than output. Measured over 1895 builds: with the
+            stock defaults 1105 of them do not close and 521 overlap,
+            and both are returned as successes. Even on blueprints
+            whose every slot is pinned by site symmetry only about a
+            quarter of builds pass all three checks, so a returned
+            Framework is not by itself evidence of a sensible
+            structure. Use ``Framework.validate()`` to see the same
+            checks as a report instead of an exception, and
+            ``Autografs.assess()`` to judge a combination *before*
+            spending the build.
+
         Returns
         -------
         Framework
@@ -957,11 +1062,20 @@ class Autografs:
         OverlapError
             If min_distance is set and any non-bonded contact in the
             output is closer than it.
+        ValidationError
+            If strict is set and the output carries free molecules or
+            coincident atoms.
         NetMismatchError
             If verify_net is set and the output does not realize the
             blueprint's net.
         ValueError
             If the mappings leave topology slots unfilled.
+
+        Examples
+        --------
+        >>> mof = mofgen.build(topology, mappings, strict=True)
+        >>> mof.validate().ok
+        True
         """
         validated, empty_slots = self._validate_mappings(
             topology=topology, mappings=mappings
@@ -987,7 +1101,209 @@ class Autografs:
             relax_embedding=relax_embedding,
             empty_slots=empty_slots,
             bond_tolerance=bond_tolerance,
+            strict=strict,
+            bond_target_scale=bond_target_scale,
+            relieve=relieve,
         )
+
+    def build_relaxed(
+        self,
+        topology: Topology,
+        mappings: Mapping[Fragment | int, Fragment | str | None],
+        *,
+        retry_scales: Iterable[float] = (2.0,),
+        relax_options: Mapping[str, Any] | None = None,
+        **build_options: Any,
+    ) -> Framework:
+        """Build and relax, retrying from an open build if that fails.
+
+        A strained embedding can place two atoms close enough that the
+        force field's r^-12 term overflows before the minimizer takes a
+        useful step. Rebuilding the same combination with deliberately
+        over-long bonds (``bond_target_scale``) gives it a start it can
+        descend from. This is the retry, and it has to live here rather
+        than on ``Framework.relax``: a built framework carries no record
+        of the blueprint and units it came from, so it cannot rebuild
+        itself, and the one substitute a framework CAN do - dilating
+        its own cell - was measured to be actively worse (it stretches
+        every bond without re-optimizing, and the relaxation then lands
+        in collapsed minima: two structures came back with atoms 0.00
+        and 0.09 A apart, reported as successes).
+
+        The retry is only ever a way to reach a structure that relaxes.
+        Where the relaxation already converges the scale changes
+        nothing (MOF-5 relaxes to a = 12.63 A from every scale between
+        1.0 and 2.0), but on a strained build it reaches a different
+        and systematically larger minimum - so what comes back is the
+        re-relaxed structure, never the inflated build itself.
+
+        Parameters
+        ----------
+        topology, mappings
+            As for ``build``.
+        retry_scales : Iterable[float], optional
+            ``bond_target_scale`` values to retry with, in order.
+            Empty disables the retry.
+        relax_options : Mapping, optional
+            Forwarded to ``Framework.relax`` (force_field, calculator,
+            cutoff, steps, ...).
+        **build_options
+            Forwarded to ``build``.
+
+        Returns
+        -------
+        Framework
+            The relaxed framework. When a retry produced it, its graph
+            records ``relax_retry_scale`` - the build was not the
+            faithful one, and anything reading the result should know.
+
+        Raises
+        ------
+        RelaxationError
+            If the first build and every retry fail to relax.
+        """
+        options = dict(relax_options or {})
+        framework = self.build(topology, mappings, **build_options)
+        try:
+            return framework.relax(**options)
+        except RelaxationError as first_failure:
+            failure: RelaxationError = first_failure
+
+        for scale in retry_scales:
+            logger.info(
+                f"Relaxation of {framework.name!r} failed; retrying from a "
+                f"build opened up to bond_target_scale={scale}."
+            )
+            try:
+                opened = self.build(
+                    topology, mappings, bond_target_scale=scale, **build_options
+                )
+                relaxed = opened.relax(**options)
+            except (RelaxationError, AlignmentError, OverlapError) as exc:
+                failure = exc if isinstance(exc, RelaxationError) else failure
+                continue
+            relaxed.graph.graph["relax_retry_scale"] = float(scale)
+            return relaxed
+        raise failure
+
+    def assess(
+        self,
+        topology: Topology,
+        mappings: Mapping[Fragment | int, Fragment | str | None],
+        max_rmsd: float | None = None,
+    ) -> autografs.validation.BuildAssessment:
+        """Judge a (net, SBU) combination *before* building it.
+
+        Answers "is this combination going to give me something
+        sensible?" from the blueprint and the units alone - no
+        alignment, no cell optimization - so a screening loop can skip
+        what was never going to work, and a user gets a reason rather
+        than a surprise.
+
+        Three things decide it, all cheap. Every slot's SBU is scored by
+        the directional shape RMSD behind the sieve, so a comfortable
+        fit is distinguishable from one that merely clears the
+        threshold. The blueprint's own symmetry freedom
+        (``symmetry.orbit_displacements``) says whether its proportions
+        are fixed at all. And ``scale_spread`` measures whether the
+        units are proportioned consistently enough for one cell scale to
+        suit every edge - the packing predictor, and the dominant
+        failure mode in practice: clashing builds overlap between
+        *bonded* slots, because the cell that closes a bond is too small
+        for the units on it.
+
+        A poor spread is usually fixable rather than fatal - see
+        ``suggest_mappings``, which chooses units that agree.
+
+        It remains a screen, not a guarantee: it works from the units
+        and the blueprint, while the realized packing also depends on
+        the cell the optimizer settles on. Confirm with
+        ``Framework.validate()`` or ``build(..., strict=True)``.
+
+        Parameters
+        ----------
+        topology : Topology
+            The blueprint to build on.
+        mappings : dict[Fragment | int, Fragment | str | None]
+            Same form ``build`` takes; emptied slots are skipped.
+        max_rmsd : float or None, optional
+            Shape threshold to judge against; defaults to the sieve's
+            own COMPATIBILITY_MAX_RMSD.
+
+        Returns
+        -------
+        BuildAssessment
+            ``confidence`` is one of "infeasible", "low", "medium",
+            "high"; ``reasons`` says why, and ``slots`` carries the
+            per-slot fit so a single bad slot can be swapped out.
+
+        Examples
+        --------
+        >>> report = mofgen.assess(mofgen.topologies["pcu"], mappings)
+        >>> report.confidence
+        'high'
+        >>> print(report)
+        pcu: high (every slot fits and the blueprint is fully pinned)
+        """
+        validated, _ = self._validate_mappings(topology=topology, mappings=mappings)
+        return autografs.validation.assess_build(topology, validated, max_rmsd=max_rmsd)
+
+    def suggest_mappings(
+        self,
+        topology: Topology,
+        subset: list[str] | None = None,
+    ) -> tuple[dict, float | None]:
+        """Propose SBUs whose proportions actually suit this net.
+
+        The sieve says which SBUs *fit* a slot, judging arm directions
+        only - it never looks at length, and for a 2-connected slot it
+        is vacuous, because any two arms seen from their own centroid
+        are antiparallel. So a 30-atom linker and a 6-atom one are
+        equally "compatible" with the same edge, and picking the first
+        name off the list is a coin flip that usually loses.
+
+        This picks instead: each blueprint edge needs its own cell
+        scale ``(sbu arms) / (slot arms)``, the cell has only one, and
+        that requirement is a weighted average of the two slots' own
+        ratios - so choosing SBUs whose ratios are *uniform* makes every
+        edge agree at once.
+
+        Measured over 355 builds, the resulting spread predicts the
+        packing: below 1.05 30% of builds come out clash-free, above
+        1.6 only 1 in 160 does.
+
+        Parameters
+        ----------
+        topology : Topology
+            The blueprint to fill.
+        subset : list[str] or None, optional
+            Restrict the candidate SBUs by name; defaults to the whole
+            library.
+
+        Returns
+        -------
+        tuple[dict, float | None]
+            A {slot type: Fragment} mapping ready for ``build``, and its
+            predicted edge-scale spread (1.0 is perfect agreement; None
+            when the blueprint has too few paired edges to compare).
+            The mapping is empty when some slot type has no compatible
+            SBU at all.
+
+        Examples
+        --------
+        >>> mappings, spread = mofgen.suggest_mappings(topology)
+        >>> mofgen.assess(topology, mappings).confidence
+        'high'
+        >>> mof = mofgen.build(topology, mappings, strict=True)
+        """
+        available = self.list_building_units(sieve=topology.name, subset=subset)
+        if len(available) != len(topology.mappings) or not all(available.values()):
+            return {}, None
+        candidates = {
+            slot_type: [self.sbu[name] for name in names]
+            for slot_type, names in available.items()
+        }
+        return autografs.validation.balance_mappings(topology, candidates)
 
     def _validate_mappings(
         self,

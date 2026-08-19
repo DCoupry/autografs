@@ -193,6 +193,28 @@ The README is the overview; the depth lives in `docs/`:
 
 ## FAQ
 
+**How do I know a build actually makes sense?** Ask, in either direction.
+`mofgen.assess(topology, mappings)` judges a combination *before* building —
+no alignment, no cell optimization — and tells you whether the units fit and
+whether the blueprint's proportions are even determined. `mof.validate()`
+checks the result: closure, overlap, free molecules and coincident atoms in
+one report, each with its measured value. `mofgen.build(..., strict=True)`
+makes the build refuse rather than return something unusable.
+
+This matters more than it sounds: the individual gates are off by default, so
+a plain `build()` checks only connection counts. Over 1895 builds with stock
+settings, 1105 did not close and 521 overlapped — every one returned as a
+success. `strict=True` is off by default too (existing scripts must not move),
+but it is the right setting if you want confidence rather than output.
+
+**Which units should I use?** `mofgen.suggest_mappings(topology)`. The sieve
+matches arm *directions* and never looks at length — for a 2-connected slot it
+is vacuous — so a 30-atom linker and a 6-atom one are equally "compatible" with
+the same edge, and picking the first name off the list is a coin flip. Choosing
+units whose proportions agree with the net turned 0 of 59 nets into 11 fully
+valid builds, with nothing else changed. See
+[Building frameworks](docs/building.md#knowing-whether-the-result-makes-sense).
+
 **Does it build COFs?** Yes — 2D layer nets are first-class. Build a flat layer
 on a layer net (hcb, sql, ...), then `Framework.stack()` turns it into a bulk
 crystal. See [2D COFs and stacking](docs/cofs-and-stacking.md).
@@ -268,9 +290,12 @@ and COFs), rod-MOF support in both directions (helical, cross-linked multi-rod
 `etb`/MOF-74, woven multi-axis and lattice-diagonal channels), IZA zeolite
 import (`autografs-topologies --use_iza`), partial charges, ASE-driven
 relaxation, elastic constants, commensurate twisted bilayers, and embedding
-relaxation for low-symmetry nets have all landed. Remaining directions —
-EPINET import and curated high-connectivity SBU packs for the last uncovered
-nets — are tracked in the [issue tracker](https://github.com/DCoupry/autografs/issues).
+relaxation for low-symmetry nets have all landed. EPINET import is available
+as an opt-in fetch (`autografs-topologies --use_epinet`, one archive from the
+ANU dataset release, doi:10.25911/hq20-mj54, CC BY-NC-SA — converted locally,
+never bundled). Remaining directions — the EPINET coverage measurement and
+curated high-connectivity SBU packs for the last uncovered nets — are tracked
+in the [issue tracker](https://github.com/DCoupry/autografs/issues).
 
 ## Citing
 

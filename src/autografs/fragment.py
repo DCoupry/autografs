@@ -333,6 +333,43 @@ class Fragment:
             <= max_rmsd
         )
 
+    def match_rmsd(self, other: Fragment) -> float | None:
+        """How far another fragment's arms are from occupying this slot.
+
+        The number behind ``has_compatible_symmetry``, which only
+        reports whether it clears a threshold. Exposed because "does it
+        fit" and "how comfortably" are different questions: a slot
+        matched at 0.05 will build cleanly, one matched at 0.34 clears
+        the same sieve and is already strained.
+
+        Parameters
+        ----------
+        other : Fragment
+            The candidate fragment.
+
+        Returns
+        -------
+        float or None
+            Directional RMSD (dimensionless, 0 = identical shapes).
+            None when the arm counts differ, which no threshold can
+            fix. Fragments with one or two arms return 0.0: two arms
+            seen from their own centroid are always antiparallel, so
+            there is nothing to mismatch.
+        """
+        this_units = self.arm_units
+        that_units = other.arm_units
+        if len(this_units) != len(that_units):
+            return None
+        if len(this_units) <= 2:
+            return 0.0
+        return float(
+            _match_rmsd_cached(
+                np.round(this_units, 6).tobytes(),
+                np.round(that_units, 6).tobytes(),
+                len(this_units),
+            )
+        )
+
     def _clear_geometry_caches(self) -> None:
         """Clear cached geometry after coordinates change."""
         for name in ("max_dummy_distance", "arm_units", "_shape_signature"):

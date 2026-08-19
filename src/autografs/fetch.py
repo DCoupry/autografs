@@ -2,7 +2,7 @@
 Polite local fetching of external topology sources.
 
 AuToGraFS does not bundle data whose licenses restrict redistribution
-(the IZA zeolite structure database; EPINET, when it lands). Instead
+(the IZA zeolite structure database; the EPINET dataset release). Instead
 ``autografs-topologies`` fetches such sources *to the user's machine*
 after showing the source's terms and getting an explicit acceptance —
 interactively, or via ``--accept-licenses`` in scripts.
@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -78,33 +80,31 @@ EPINET_SOURCE = Source(
     title="EPINET: Euclidean Patterns in Non-Euclidean Tilings",
     homepage="https://epinet.anu.edu.au",
     notice=(
-        "The s-net geometry files about to be downloaded come from the\n"
-        "EPINET database (S. Ramsden, V. Robins, S. Hyde and\n"
-        "collaborators, hosted at the Australian National University).\n"
+        "The s-net geometry files about to be downloaded are the EPINET\n"
+        "project's dataset release on the ANU Open Research repository\n"
+        "(V. Robins, S. Ramsden, S. Hyde, O. Delgado-Friedrichs:\n"
+        "'Periodic net records from the EPINET database: sqc1 to\n"
+        "sqc14645', doi:10.25911/hq20-mj54).\n"
         "\n"
-        "EPINET's content is licensed under Creative Commons\n"
-        "Attribution-NonCommercial-NoDerivatives 4.0 (CC BY-NC-ND).\n"
-        "That license does NOT permit redistribution of derived\n"
-        "copies: the files are fetched to YOUR machine for YOUR own\n"
-        "non-commercial use, and any topology library you convert them\n"
-        "into must stay local - AuToGraFS ships nothing derived from\n"
-        "EPINET, and neither should you. Published work should cite\n"
-        "EPINET; see https://epinet.anu.edu.au for the terms and the\n"
-        "preferred citation."
+        "The release is licensed under Creative Commons\n"
+        "Attribution-NonCommercial-ShareAlike 4.0 (CC BY-NC-SA). Your\n"
+        "use of it - including any topology library this tool converts\n"
+        "it into - must stay non-commercial and credit EPINET, and a\n"
+        "shared derived copy must carry the same license. AuToGraFS\n"
+        "itself ships nothing derived from EPINET. Published work\n"
+        "should cite EPINET; see https://epinet.anu.edu.au and the DOI\n"
+        "above for the terms and the preferred citation."
     ),
 )
 
-EPINET_CGD_URL = "https://epinet.anu.edu.au/snet_cgd_files/{name}.cgd"
-
-# the catalogue holds ~14,532 s-nets with identifiers observed up to
-# sqc14645 (numbering is sparse); the default sweep ceiling leaves a
-# margin, and absent ids are negatively cached so re-runs skip them
-EPINET_MAX_ID = 14700
-
-# EPINET appears dormant (no visible maintenance since ~2019), so the
-# full-catalogue fetch is extra polite: one file per second, a single
-# connection, resumable
-EPINET_REQUEST_DELAY = 1.0
+# the dataset release: one zip of 14,645 per-net .cgd files (sparse sqc
+# numbering), replacing the old per-page sweep of epinet.anu.edu.au
+EPINET_DATASET_DOI = "10.25911/hq20-mj54"
+EPINET_ARCHIVE_NAME = "snet-cgd-files.zip"
+EPINET_ARCHIVE_URL = (
+    "https://datacommons.anu.edu.au/DataCommons/rest/records/anudc:6420/data/"
+    + EPINET_ARCHIVE_NAME
+)
 
 
 def require_acceptance(source: Source, accept: bool = False) -> None:
@@ -208,25 +208,64 @@ def fetch_files(
     return available
 
 
+def _extract_epinet_archive(archive: Path, cache: Path) -> dict[str, Path]:
+    """Extract the release zip's ``sqc*.cgd`` members into the cache.
+
+    Members are matched on their basename and written flat (which is
+    also what makes the extraction zip-slip safe); files already
+    present and non-empty are kept, so a cache partially populated by
+    the pre-release per-page sweep is completed, not re-written. A
+    corrupt archive (a truncated download) is deleted so the next run
+    re-fetches it.
+    """
+    available: dict[str, Path] = {}
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            for member in tqdm(bundle.namelist(), unit="net"):
+                filename = member.rsplit("/", 1)[-1]
+                if not re.fullmatch(r"sqc\d+\.cgd", filename):
+                    continue
+                target = cache / filename
+                if not (target.is_file() and target.stat().st_size > 0):
+                    tmp = target.with_suffix(target.suffix + ".tmp")
+                    tmp.write_bytes(bundle.read(member))
+                    os.replace(tmp, target)
+                available[filename.removesuffix(".cgd")] = target
+    except zipfile.BadZipFile:
+        archive.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"The cached EPINET archive {archive} is corrupt (likely a "
+            "truncated download); it has been removed - re-run to fetch "
+            "it again."
+        ) from None
+    return available
+
+
 def fetch_epinet_cgds(
     cache_dir: Path | None = None,
     accept_licenses: bool = False,
-    max_id: int = EPINET_MAX_ID,
-    delay: float = EPINET_REQUEST_DELAY,
+    max_id: int | None = None,
 ) -> dict[str, Path]:
     """The EPINET s-net CGD files, fetched to the local cache.
 
-    EPINET exposes no bulk endpoint - one ``.cgd`` per net page - so
-    this sweeps ``sqc1..sqc<max_id>`` politely (one request per
-    ``delay`` seconds, single connection, resumable). The numbering is
-    sparse: an id that answers 404 is recorded in ``absent.txt`` in the
-    cache directory and never re-requested, while transient failures
-    (timeouts, 5xx) stay retryable on the next run. A full first fetch
-    takes hours by design; interrupt and re-run freely.
+    Downloads the EPINET dataset release from the ANU Open Research
+    repository (``EPINET_ARCHIVE_URL``, doi:10.25911/hq20-mj54) - one
+    ~13 MB zip holding the full catalogue of per-net ``.cgd`` files -
+    and extracts it into the cache. A cached archive is never
+    re-downloaded, and files already extracted are kept, so re-runs
+    cost nothing. This replaces the pre-release polite per-page sweep
+    of epinet.anu.edu.au, which took hours.
 
-    The cache is for LOCAL use only: EPINET's CC BY-NC-ND terms do not
-    permit redistributing the files or anything converted from them
-    (see ``EPINET_SOURCE`` and the acceptance gate).
+    The release is CC BY-NC-SA: local use and anything derived from it
+    must stay non-commercial and credit EPINET, and a shared derived
+    copy must carry the same license (see ``EPINET_SOURCE`` and the
+    acceptance gate). AuToGraFS bundles nothing derived from it.
+
+    Parameters
+    ----------
+    max_id : int, optional
+        Only return nets with sqc id up to this value - a subset
+        filter for quick experiments (default: the full catalogue).
 
     Returns
     -------
@@ -236,58 +275,27 @@ def fetch_epinet_cgds(
     require_acceptance(EPINET_SOURCE, accept=accept_licenses)
     cache = Path(cache_dir) if cache_dir else default_cache_dir("epinet")
     cache.mkdir(parents=True, exist_ok=True)
-    absent_file = cache / "absent.txt"
-    absent: set[str] = set()
-    if absent_file.is_file():
-        absent = set(absent_file.read_text(encoding="utf-8").split())
-
-    available: dict[str, Path] = {}
-    todo: list[str] = []
-    for index in range(1, max_id + 1):
-        name = f"sqc{index}"
-        target = cache / f"{name}.cgd"
-        if target.is_file() and target.stat().st_size > 0:
-            available[name] = target
-        elif name not in absent:
-            todo.append(name)
-    if not todo:
+    archive = cache / EPINET_ARCHIVE_NAME
+    if not (archive.is_file() and archive.stat().st_size > 0):
         logger.info(
-            f"All {len(available)} EPINET files already cached in {cache} "
-            f"({len(absent)} ids known absent)."
+            f"Downloading the EPINET dataset release "
+            f"(doi:{EPINET_DATASET_DOI}) into {cache}."
         )
-        return available
-    logger.info(
-        f"Fetching up to {len(todo)} EPINET files ({len(available)} cached, "
-        f"{len(absent)} known absent) into {cache}; this is deliberately "
-        f"slow ({delay:.1f} s/request) and resumable."
-    )
-    with requests.Session() as session:
-        session.headers["User-Agent"] = USER_AGENT
-        for name in tqdm(todo, unit="net"):
-            target = cache / f"{name}.cgd"
-            try:
-                response = session.get(EPINET_CGD_URL.format(name=name), timeout=60)
-            except requests.RequestException as exc:
-                logger.warning(f"Failed to fetch {name}: {exc}")
-                time.sleep(delay)
-                continue
-            if response.status_code == 404:
-                absent.add(name)
-                # persist immediately: absence knowledge is what makes
-                # the sparse sweep resumable at all
-                absent_file.write_text(
-                    "\n".join(sorted(absent)) + "\n", encoding="utf-8"
-                )
-            elif response.ok and response.content.strip():
-                tmp = target.with_suffix(target.suffix + ".tmp")
-                tmp.write_bytes(response.content)
-                os.replace(tmp, target)
-                available[name] = target
-            else:
-                logger.warning(
-                    f"Unexpected response for {name}: HTTP {response.status_code}"
-                )
-            time.sleep(delay)
+        with requests.Session() as session:
+            session.headers["User-Agent"] = USER_AGENT
+            response = session.get(EPINET_ARCHIVE_URL, timeout=600)
+            response.raise_for_status()
+        tmp = archive.with_suffix(archive.suffix + ".tmp")
+        tmp.write_bytes(response.content)
+        os.replace(tmp, archive)
+    available = _extract_epinet_archive(archive, cache)
+    logger.info(f"{len(available)} EPINET s-nets available in {cache}.")
+    if max_id is not None:
+        available = {
+            name: path
+            for name, path in available.items()
+            if int(name.removeprefix("sqc")) <= max_id
+        }
     return available
 
 

@@ -34,6 +34,7 @@ from __future__ import annotations
 import functools
 import itertools
 import logging
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -41,7 +42,7 @@ import numpy as np
 from pymatgen.analysis.local_env import CovalentRadius
 from pymatgen.core.lattice import Lattice
 from pymatgen.core.structure import Molecule
-from scipy.optimize import linear_sum_assignment
+from scipy.optimize import linear_sum_assignment, minimize
 
 from autografs import plane_groups
 from autografs.exceptions import AlignmentError
@@ -79,7 +80,9 @@ _CUBE_ROTATIONS: np.ndarray = np.array(
 )
 
 
-def _axis_angle(axis: tuple[float, float, float], angle: float) -> np.ndarray:
+def _axis_angle(
+    axis: tuple[float, float, float] | np.ndarray, angle: float
+) -> np.ndarray:
     """Rotation matrix about an (unnormalized) axis by angle radians."""
     x, y, z = np.asarray(axis, dtype=float) / np.linalg.norm(axis)
     c, s = np.cos(angle), np.sin(angle)
@@ -467,6 +470,15 @@ class SlotPlacement:
     bond_units: np.ndarray  # (n, 3)
     # arm assignment (perm) computed at the reference cell
     arm_for_target: np.ndarray
+    #: crystallographic orbit of the slot, so every slot of an orbit
+    #: shares one relief angle and the built symmetry is preserved
+    orbit: int = 0
+    #: unit vector, SBU frame: the axis a 2-connected unit can be spun
+    #: about without moving either of its anchors, hence without
+    #: changing a single bond length. None when no such axis exists -
+    #: a polytopic unit has none, and neither does a bent ditopic one
+    #: whose anchors sit off the dummy-to-dummy line.
+    relief_axis: np.ndarray | None = None
 
     def rotation_for(self, matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Rotation and target directions in the given cell matrix."""
@@ -504,7 +516,9 @@ class BuildPlan:
     """All geometry needed to optimize and realize one framework build.
 
     Created once per build by prepare_build(); the cell optimization
-    objective then runs on plain arrays with no object construction.
+    objective then runs on plain arrays — no Molecule/Fragment
+    construction per evaluation (matrix_for does still build one
+    pymatgen Lattice per cell evaluation).
     The cell is parametrized by the crystal system's free parameters
     only, so the optimizer cannot break the net's declared symmetry.
     """
@@ -520,6 +534,16 @@ class BuildPlan:
     # appended to the parameter vector after the cell block. None keeps
     # the legacy fixed-slot behavior and objective bit-for-bit.
     slot_disp: OrbitDisplacements | None = None
+    #: Multiplier on every inter-unit covalent bond target. 1.0 is the
+    #: chemistry and the default. Larger values build a deliberately
+    #: OPEN framework, for the one purpose measured to need it: giving a
+    #: subsequent force-field relaxation a start it can descend from.
+    #: Measured on MOF-5, where UFF converges cleanly, the relaxed
+    #: result is identical (a = 12.63 A, Zn-O = 1.807 A) for every scale
+    #: from 1.0 to 2.0 - inflation costs nothing there. On strained
+    #: builds it changes which minimum is reached, and those minima are
+    #: systematically LARGER, so this is a retry lever and not a default.
+    bond_target_scale: float = 1.0
 
     @property
     def has_pairs(self) -> bool:
@@ -607,8 +631,11 @@ class BuildPlan:
         pa = self.placements[index_a]
         pb = self.placements[index_b]
         return float(
-            pa.anchor_radii[pa.arm_for_target[target_a]]
-            + pb.anchor_radii[pb.arm_for_target[target_b]]
+            (
+                pa.anchor_radii[pa.arm_for_target[target_a]]
+                + pb.anchor_radii[pb.arm_for_target[target_b]]
+            )
+            * self.bond_target_scale
         )
 
     def residual(self, params: np.ndarray) -> float:
@@ -794,6 +821,203 @@ class BuildPlan:
         return fragments, lattice, slot_rmsds
 
 
+#: Angles tried per orbit on the coarse sweep. A ring has pi symmetry,
+#: so the search spans [0, pi).
+RELIEF_GRID = 16
+#: Coordinate-ascent rounds when several orbits can be relieved.
+RELIEF_ROUNDS = 3
+#: Row-block size for the pairwise contact scan, in array elements.
+#: The full n x n x 3 difference array is gigabytes on a large
+#: framework and ran sweep workers out of memory.
+RELIEF_CHUNK_ELEMENTS = 4_000_000
+
+
+def relieve_clashes(
+    plan: BuildPlan, lattice: Lattice, fragments: list[Fragment]
+) -> tuple[list[Fragment], float, float]:
+    """Spin 2-connected units about their own axis to open up clashes.
+
+    The finite pipeline's cell has ONE scale, so when two slots demand
+    different ones the units are driven together and no cell parameter
+    can separate them (``validation.edge_scales``). What CAN separate
+    them is a rotation that the structure is free in: a straight
+    ditopic linker spun about the line through its own anchors keeps
+    every bond exactly as it was and only changes how its ring plane
+    presents to its neighbours. That is the coplanar-ring clash, and
+    the rod pipeline has relieved it since #168; this is the same pass
+    for finite builds.
+
+    One angle per crystallographic ORBIT, so the built symmetry
+    survives. Coarse grid, then coordinate ascent across orbits, then a
+    Nelder-Mead refinement - and the result is kept only if it actually
+    improves, so the pass can never make a structure worse.
+
+    Returns
+    -------
+    tuple[list[Fragment], float, float]
+        The relieved fragments, and the minimum inter-unit contact
+        before and after (``inf`` when there is nothing to relieve).
+    """
+    matrix = np.asarray(lattice.matrix, dtype=float)
+    inverse = np.linalg.inv(matrix)
+
+    # only REAL atoms clash; a dummy is a placeholder, and two paired
+    # dummies sit at the same point by construction
+    real: list[np.ndarray] = []
+    labels: list[np.ndarray] = []
+    for index, fragment in enumerate(fragments):
+        keep = [i for i, site in enumerate(fragment.atoms) if site.specie.symbol != "X"]
+        real.append(np.asarray(fragment.atoms.cart_coords)[keep])
+        labels.append(np.full(len(keep), index))
+    unit = np.concatenate(labels) if labels else np.zeros(0, dtype=int)
+    counts = [len(block) for block in real]
+    offsets = np.cumsum([0, *counts])
+
+    def contact(points: np.ndarray) -> float:
+        if len(np.unique(unit)) < 2 or len(points) < 2:
+            return math.inf
+        # chunked over rows: the full n x n x 3 difference array is
+        # gigabytes on a large framework, and building it outright ran
+        # workers out of memory on the sweep
+        rows = max(1, RELIEF_CHUNK_ELEMENTS // max(len(points), 1))
+        fractional = points @ inverse
+        closest = math.inf
+        for start in range(0, len(points), rows):
+            stop = min(start + rows, len(points))
+            cross = unit[start:stop, None] != unit[None, :]
+            if not cross.any():
+                continue
+            delta = fractional[start:stop, None, :] - fractional[None, :, :]
+            delta -= np.round(delta)
+            distance = np.linalg.norm(delta @ matrix, axis=2)
+            closest = min(closest, float(distance[cross].min()))
+        return closest
+
+    base = np.concatenate(real) if real else np.zeros((0, 3))
+    before = contact(base)
+    if not np.isfinite(before):
+        return fragments, before, before
+
+    # each movable unit spins about the line through its own anchors;
+    # the axis and a point on it come straight from the placed dummies,
+    # which the rotation leaves exactly where they are
+    spin: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+    for index, placement in enumerate(plan.placements):
+        if placement.relief_axis is None:
+            continue
+        fragment = fragments[index]
+        coords = np.asarray(fragment.atoms.cart_coords)
+        dummies = [
+            i for i, site in enumerate(fragment.atoms) if site.specie.symbol == "X"
+        ]
+        others = [
+            i for i, site in enumerate(fragment.atoms) if site.specie.symbol != "X"
+        ]
+        if len(dummies) != 2 or not others:
+            continue
+        # the anchor of an arm is its dummy's nearest real atom, the
+        # same rule _find_anchors uses; both are held fixed
+        anchors = [
+            others[int(np.argmin(np.linalg.norm(coords[others] - coords[d], axis=1)))]
+            for d in dummies
+        ]
+        axis = coords[anchors[1]] - coords[anchors[0]]
+        norm = float(np.linalg.norm(axis))
+        if norm < 1e-9:
+            continue
+        spin[index] = (axis / norm, coords[anchors[0]])
+
+    orbits = sorted({plan.placements[i].orbit for i in spin})
+    if not orbits:
+        return fragments, before, before
+    position = {orbit: k for k, orbit in enumerate(orbits)}
+
+    def place(angles: np.ndarray) -> np.ndarray:
+        points = base.copy()
+        for index, (axis, origin) in spin.items():
+            angle = float(angles[position[plan.placements[index].orbit]])
+            block = real[index] - origin
+            points[offsets[index] : offsets[index + 1]] = (
+                block @ _axis_angle(axis, angle).T + origin
+            )
+        return points
+
+    def score(angles: np.ndarray) -> float:
+        return -contact(place(angles))
+
+    best = np.zeros(len(orbits))
+    grid = np.linspace(0.0, np.pi, RELIEF_GRID, endpoint=False)
+    rounds = 1 if len(orbits) == 1 else RELIEF_ROUNDS
+    for _ in range(rounds):
+        for k in range(len(orbits)):
+
+            def one(angle: float, k: int = k) -> float:
+                trial = best.copy()
+                trial[k] = angle
+                return score(trial)
+
+            best[k] = min(grid, key=one)
+    refined = minimize(
+        score,
+        best,
+        method="Nelder-Mead",
+        options={"xatol": 1e-3, "fatol": 1e-4, "maxiter": 400},
+    )
+    if float(refined.fun) < score(best):
+        best = np.asarray(refined.x, dtype=float)
+
+    after = -score(best)
+    # never hand back something worse than what came in
+    if after <= before + 1e-9:
+        return fragments, before, before
+
+    relieved = list(fragments)
+    for index, (axis, origin) in spin.items():
+        angle = float(best[position[plan.placements[index].orbit]])
+        fragment = fragments[index]
+        coords = np.asarray(fragment.atoms.cart_coords)
+        turned = (coords - origin) @ _axis_angle(axis, angle).T + origin
+        relieved[index] = Fragment(
+            atoms=Molecule(
+                fragment.atoms.species,
+                turned,
+                site_properties={
+                    "tags": [int(site.properties["tags"]) for site in fragment.atoms]
+                },
+            ),
+            name=fragment.name,
+            pointgroup=fragment.pointgroup,
+        )
+    return relieved, before, after
+
+
+def _relief_axis(anchor_vecs: np.ndarray) -> np.ndarray | None:
+    """The axis this unit can be spun about with its bonds intact.
+
+    The line through its two ANCHORS - the atoms that actually bond to
+    the neighbouring units. Holding both of them fixed holds both bond
+    vectors fixed, so closure is untouched no matter what angle is
+    chosen, and what turns is the rest of the unit about them. That is
+    a real torsional degree of freedom, not an artefact: it is the same
+    freedom a para-phenylene has to spin in its channel.
+
+    The dummy-to-dummy line is NOT the axis, though it looks like it
+    should be. Real linkers are bent - measured on the shipped library,
+    their anchors sit 0.28-0.56 A off it - and spinning about it swings
+    the anchors and changes every bond it makes.
+
+    Only a 2-connected unit has such an axis; a polytopic node's three
+    or more anchors do not share a line.
+    """
+    if len(anchor_vecs) != 2:
+        return None
+    axis = anchor_vecs[1] - anchor_vecs[0]
+    norm = float(np.linalg.norm(axis))
+    if norm < 1e-9:
+        return None
+    return np.asarray(axis / norm, dtype=float)
+
+
 def _find_anchors(
     sbu: Fragment, dummy_indices: list[int], center: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -828,6 +1052,7 @@ def prepare_build(
     mappings: dict[int, Fragment],
     relax_embedding: bool = False,
     empty_slots: Iterable[int] = (),
+    bond_target_scale: float = 1.0,
 ) -> BuildPlan:
     """Precompute all geometry for building one framework.
 
@@ -917,6 +1142,12 @@ def prepare_build(
             anchor_radii=anchor_radii,
             bond_units=bond_units,
             arm_for_target=perm,
+            orbit=(
+                slot.equivalence_class
+                if slot.equivalence_class is not None
+                else slot_index
+            ),
+            relief_axis=_relief_axis(anchor_vecs),
         )
         index = len(placements)
         placements.append(placement)
@@ -1033,4 +1264,5 @@ def prepare_build(
         angles=angles,
         cell_param=cell_param,
         slot_disp=slot_disp,
+        bond_target_scale=bond_target_scale,
     )

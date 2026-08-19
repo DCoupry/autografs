@@ -50,6 +50,44 @@ EV_TO_KCAL_PER_MOL = 23.060548
 _KNOWN_CALCULATORS = ("gfn-ff", "gfn1", "gfn2", "dftb")
 
 
+def _periodic_gfnff(xtb_cls: type, **kwargs: Any) -> Calculator:
+    """GFN-FF that survives a periodic call, at the cost of the stress.
+
+    xtb's ASE calculator fetches the virial for *any* periodic system,
+    and GFN-FF does not produce one (only GFN0-xTB does), so every
+    periodic call raises ``XTBException: Virial is not available``
+    before returning the energy it had already computed. Energy and
+    forces ARE available, so this keeps them and drops the stress -
+    which makes fixed-cell relaxation work and leaves cell relaxation
+    correctly impossible (``relax_framework_ase`` refuses it rather
+    than silently pretending).
+
+    Caveat worth knowing before choosing this backend: xtb's GFN-FF
+    also crashes the interpreter outright on larger periodic cells
+    (measured on this corpus: hard exits with ACCESS_VIOLATION at 76
+    atoms and STACK_OVERFLOW from ~348 atoms up, which no Python-level
+    handling can catch). GFN1-xTB via tblite has none of these
+    problems and does provide stress.
+    """
+    from ase.calculators.calculator import all_changes
+
+    class PeriodicGFNFF(xtb_cls):  # type: ignore[valid-type, misc]
+        # no "stress": the cell cannot be relaxed with this method
+        implemented_properties = ["energy", "free_energy", "forces"]
+
+        def calculate(self, atoms=None, properties=None, system_changes=all_changes):
+            try:
+                super().calculate(atoms, properties or ["energy"], system_changes)
+            except Exception:
+                # the virial fetch is the last thing xtb's calculator
+                # does; anything earlier failing is a real error
+                if "energy" not in self.results or "forces" not in self.results:
+                    raise
+            self.results.pop("stress", None)
+
+    return PeriodicGFNFF(method="GFNFF", **kwargs)  # type: ignore[no-any-return]
+
+
 def make_calculator(name: str, **kwargs: Any) -> Calculator:
     """Construct a named ASE calculator for periodic frameworks.
 
@@ -84,7 +122,7 @@ def make_calculator(name: str, **kwargs: Any) -> Calculator:
                 "GFN-FF needs the xtb python bindings: "
                 "conda install -c conda-forge xtb-python"
             ) from exc
-        return XTB(method="GFNFF", **kwargs)  # type: ignore[no-any-return]
+        return _periodic_gfnff(XTB, **kwargs)
     if key in ("gfn1", "gfn1-xtb"):
         try:
             from tblite.ase import TBLite
@@ -169,6 +207,18 @@ def relax_framework_ase(
     initial_cell = np.array(atoms.cell)
     initial_frac = atoms.get_scaled_positions(wrap=False)
 
+    if relax_cell and "stress" not in getattr(
+        calculator, "implemented_properties", ("stress",)
+    ):
+        # FrechetCellFilter would ask for a stress the method cannot
+        # give and fail deep inside the optimizer; say so up front
+        raise RelaxationError(
+            f"{type(calculator).__name__} provides no stress, so the cell "
+            "cannot be relaxed with it (GFN-FF has no periodic virial - "
+            "only GFN0-xTB does). Pass relax_cell=False to relax the "
+            "positions at fixed cell, or use 'gfn1' (tblite), which does "
+            "provide stress."
+        )
     target = FrechetCellFilter(atoms) if relax_cell else atoms
     sink = io.StringIO()
     quiet: contextlib.AbstractContextManager = (
