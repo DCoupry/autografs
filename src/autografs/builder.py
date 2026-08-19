@@ -272,8 +272,9 @@ def build_framework(
         # Nelder-Mead on the bond-length pair residual over the
         # crystal system's free parameters only (a cubic net
         # optimizes a single length) plus, under embedding
-        # relaxation, the slot displacements; the objective is pure
-        # numpy, no object copies per evaluation
+        # relaxation, the slot displacements; the objective works on
+        # plain arrays — no Molecule/Fragment copies per evaluation
+        # (one Lattice is constructed per cell evaluation)
         best_parameters = _refine(plan, x0, seed_displacements=SEED_MAIN_SOLVE)
         if plan.n_slot_free:
             # freeing the slots must not COST closure (#197). The

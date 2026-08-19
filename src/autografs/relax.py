@@ -782,8 +782,9 @@ def relax_framework_native(
     from autografs.lammps_data import write_lammps_data
 
     lammps, _, _, _ = _import_backends()
-    # separate any overlap FIRST, through a bonds-only file, so the full
-    # force field never sees the geometry that overflows its r^-12 term
+    # separate any overlap FIRST, in a separate stage that softens only
+    # the pair term (every bonded term kept), so the full force field
+    # never sees the geometry that overflows its r^-12 term
     original = framework
     framework = _push_off_overlaps(framework, force_field, verbose=verbose)
     data = write_lammps_data(framework, force_field=force_field)

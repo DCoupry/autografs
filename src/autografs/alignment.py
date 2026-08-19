@@ -516,7 +516,9 @@ class BuildPlan:
     """All geometry needed to optimize and realize one framework build.
 
     Created once per build by prepare_build(); the cell optimization
-    objective then runs on plain arrays with no object construction.
+    objective then runs on plain arrays — no Molecule/Fragment
+    construction per evaluation (matrix_for does still build one
+    pymatgen Lattice per cell evaluation).
     The cell is parametrized by the crystal system's free parameters
     only, so the optimizer cannot break the net's declared symmetry.
     """
