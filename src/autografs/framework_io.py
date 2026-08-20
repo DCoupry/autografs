@@ -32,6 +32,7 @@ import networkx
 import numpy as np
 
 from autografs.framework import Framework
+from autografs.utils import copy_graph_markers
 
 __all__ = [
     "framework_to_dict",
@@ -99,16 +100,10 @@ def framework_to_dict(framework: Framework) -> dict:
         data["charges"] = [float(graph.nodes[n]["charge"]) for n in nodes]
         if "charge_method" in graph.graph:
             data["charge_method"] = graph.graph["charge_method"]
-    # rod-build marker: keeps the editing guards (editing._reject_rod)
-    # working across a save/load round trip
-    if graph.graph.get("rod_build"):
-        data["rod_build"] = True
-        if graph.graph.get("rod_empty_slots"):
-            data["rod_empty_slots"] = list(graph.graph["rod_empty_slots"])
-    # finite empty-slot marker (#179): verify_net contracts these on
-    # the blueprint side, so it must survive a save/load round trip
-    if graph.graph.get("empty_slots"):
-        data["empty_slots"] = list(graph.graph["empty_slots"])
+    # build-provenance markers (rod_build, rod_empty_slots,
+    # empty_slots): guards and net-verification conventions must
+    # survive a save/load round trip
+    copy_graph_markers(graph.graph, data)
     return data
 
 
@@ -132,12 +127,7 @@ def framework_from_dict(data: dict) -> Framework:
     charges = data.get("charges")
     if "charge_method" in data:
         graph.graph["charge_method"] = data["charge_method"]
-    if data.get("rod_build"):
-        graph.graph["rod_build"] = True
-        if data.get("rod_empty_slots"):
-            graph.graph["rod_empty_slots"] = list(data["rod_empty_slots"])
-    if data.get("empty_slots"):
-        graph.graph["empty_slots"] = list(data["empty_slots"])
+    copy_graph_markers(data, graph.graph)
     columns = zip(
         data["symbols"], data["coords"], data["tags"], data["ufftypes"], strict=True
     )
