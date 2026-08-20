@@ -109,7 +109,14 @@ from pymatgen.core.structure import Molecule
 from scipy.optimize import minimize
 from scipy.spatial.transform import Rotation
 
-from autografs.alignment import kabsch, match_directions
+from autografs.alignment import (
+    RELIEF_CHUNK_ELEMENTS,
+    kabsch,
+    match_directions,
+)
+from autografs.alignment import (
+    _unit as _unit_rows,
+)
 from autografs.exceptions import AlignmentError, OverlapError
 from autografs.fragment import Fragment
 from autografs.framework import Framework
@@ -139,11 +146,19 @@ def _covalent_radius(symbol: str, fallback: float = 0.75) -> float:
     return float(CovalentRadius.radius.get(symbol, fallback))
 
 
-def _unit_rows(vectors: np.ndarray) -> np.ndarray:
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    if np.any(norms < 1e-9):
-        raise AlignmentError("Degenerate (zero-length) arm vector.")
-    return np.asarray(vectors / norms)
+def _screw_matrices(
+    screw_rad: float, axis_hat: np.ndarray, count: int
+) -> np.ndarray | None:
+    """(count, 3, 3) rotation matrices of the 0..count-1 screw images.
+
+    None for a screwless rod. The screw angle and axis are constants of
+    a build, so these are computed once instead of one Rotation per
+    repeat per objective evaluation.
+    """
+    if not screw_rad:
+        return None
+    steps = np.arange(count)[:, None] * (screw_rad * axis_hat)
+    return np.asarray(Rotation.from_rotvec(steps).as_matrix())
 
 
 def _run_direction(run: SlotRun | HelicalRun, cell: np.ndarray) -> np.ndarray:
@@ -550,12 +565,35 @@ def _species_of(linker: Fragment) -> _Species:
     )
 
 
+def _port_candidates(
+    port_slot: np.ndarray, budget: dict[tuple[int, int], int]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Candidate port pairs the blueprint's budget allows, as index arrays.
+
+    Depends only on the port-to-slot layout and the budget, both fixed
+    across a whole optimization, so ``_RodBuild.evaluate`` computes it
+    once and passes it back into ``_pair_ports`` on every call instead
+    of rebuilding the O(ports^2) membership mask per objective
+    evaluation.
+    """
+    rows, cols = np.triu_indices(len(port_slot), k=1)
+    slot_a = np.minimum(port_slot[rows], port_slot[cols])
+    slot_b = np.maximum(port_slot[rows], port_slot[cols])
+    allowed = np.fromiter(
+        ((int(a), int(b)) in budget for a, b in zip(slot_a, slot_b, strict=True)),
+        dtype=bool,
+        count=len(rows),
+    )
+    return rows[allowed], cols[allowed]
+
+
 def _pair_ports(
     tips: np.ndarray,
     port_slot: np.ndarray,
     budget: dict[tuple[int, int], int],
     cell: np.ndarray,
     inv: np.ndarray,
+    candidates: tuple[np.ndarray, np.ndarray] | None = None,
 ) -> np.ndarray:
     """Pair every connection point with its nearest legitimate partner.
 
@@ -589,6 +627,9 @@ def _pair_ports(
         (slot_a, slot_b) with slot_a <= slot_b -> number of bonds.
     cell, inv : np.ndarray
         The (3, 3) cell matrix and its inverse.
+    candidates : tuple of np.ndarray, optional
+        Precomputed ``_port_candidates(port_slot, budget)``, for callers
+        evaluating the same port layout repeatedly.
 
     Returns
     -------
@@ -615,13 +656,9 @@ def _pair_ports(
             f"but the rod and the linkers bring {n_ports} connection points "
             f"({n_ports // 2} bonds); they do not cover its connectivity."
         )
-    rows, cols = np.triu_indices(n_ports, k=1)
-    slot_a = np.minimum(port_slot[rows], port_slot[cols])
-    slot_b = np.maximum(port_slot[rows], port_slot[cols])
-    allowed = np.array(
-        [(int(a), int(b)) in budget for a, b in zip(slot_a, slot_b, strict=True)]
+    rows, cols = (
+        candidates if candidates is not None else _port_candidates(port_slot, budget)
     )
-    rows, cols = rows[allowed], cols[allowed]
     delta = tips[rows] - tips[cols]
     frac = delta @ inv
     frac -= np.round(frac)
@@ -1035,6 +1072,19 @@ class _RodBuild:
             )
             self.repeat_slot.append(nodes * (self.n_repeats // len(nodes)))
         self.port_budget = self._port_budget(topology)
+        # the port layout is fixed for the whole optimization; evaluate
+        # fills this on its first call and reuses it every one after
+        self._port_candidates_cache: tuple[np.ndarray, np.ndarray] | None = None
+        # so is each rod's screw: precompute the per-repeat rotations
+        for spec in self.rod_specs:
+            spec["screw_mats"] = _screw_matrices(
+                spec["screw_rad"],
+                self.families[spec["family"]]["axis_hat"],
+                self.n_repeats,
+            )
+        self._screw_mats = _screw_matrices(
+            self.screw_rad, self.axis_hat, self.n_repeats
+        )
 
     def _port_budget(self, topology: Topology) -> dict[tuple[int, int], int]:
         """How many bonds the blueprint expects between each slot pair.
@@ -1148,6 +1198,26 @@ class _RodBuild:
             + np.outer(local[..., 2], family["axis_hat"])
         )
 
+    def _screw_about(
+        self,
+        points: np.ndarray,
+        axis_point: np.ndarray,
+        axis_hat: np.ndarray,
+        mats: np.ndarray | None,
+        n: int,
+    ) -> np.ndarray:
+        """The nth screw image about a given axis line: rotate the
+        perpendicular part of (points - axis_point) by the nth
+        precomputed screw rotation (``_screw_matrices``; None for a
+        screwless rod), keep the axial part, then translate n*period
+        along the axis."""
+        rel = points - axis_point
+        axial = (rel @ axis_hat)[:, None] * axis_hat
+        perp = rel - axial
+        if mats is not None:
+            perp = perp @ mats[n].T
+        return np.asarray(axis_point + axial + perp + n * self.period * axis_hat)
+
     def evaluate(
         self,
         scale: float | np.ndarray,
@@ -1175,23 +1245,6 @@ class _RodBuild:
         cell_p = self._cell_one_period(scale)
         cell_full = self.cell(scale)
 
-        def screw_about(
-            points: np.ndarray,
-            axis_point: np.ndarray,
-            axis_hat: np.ndarray,
-            screw_rad: float,
-            n: int,
-        ) -> np.ndarray:
-            """The nth screw image about a given axis line: rotate the
-            perpendicular part of (points - axis_point) by n*screw, keep
-            the axial part, then translate n*period along the axis."""
-            rel = points - axis_point
-            axial = (rel @ axis_hat)[:, None] * axis_hat
-            perp = rel - axial
-            if screw_rad:
-                perp = Rotation.from_rotvec(n * screw_rad * axis_hat).apply(perp)
-            return np.asarray(axis_point + axial + perp + n * self.period * axis_hat)
-
         arms: list[tuple[int, np.ndarray]] = []
         if self.helical:
             # one rod per helical run: place its repeat 0 at that run's
@@ -1218,7 +1271,7 @@ class _RodBuild:
                 arm_local = (
                     self._arm_local_reflected if spec["reflect"] else self._arm_local
                 )
-                screw_rad = spec["screw_rad"]
+                screw_mats = spec["screw_mats"]
                 rod0 = self._embed(template, phi0 + theta_f, family) + (
                     axis_point + (z_node + z0_f) * axis_hat
                 )
@@ -1230,12 +1283,12 @@ class _RodBuild:
                 base = ri * self.n_repeats * n_atoms
                 for n in range(self.n_repeats):
                     start = base + n * n_atoms
-                    rod_positions[start : start + n_atoms] = screw_about(
-                        rod0, axis_point, axis_hat, screw_rad, n
+                    rod_positions[start : start + n_atoms] = self._screw_about(
+                        rod0, axis_point, axis_hat, screw_mats, n
                     )
                     arm_vec_n = (
-                        Rotation.from_rotvec(n * screw_rad * axis_hat).apply(arm_vec0)
-                        if screw_rad and len(arm_vec0)
+                        arm_vec0 @ screw_mats[n].T
+                        if screw_mats is not None and len(arm_vec0)
                         else arm_vec0
                     )
                     for k, row in enumerate(self._arm_rows):
@@ -1253,15 +1306,8 @@ class _RodBuild:
             def screw(points: np.ndarray, n: int) -> np.ndarray:
                 """The nth screw image about the rod axis line (pure
                 translation for a straight rod, screw 0)."""
-                rel = points - line_perp
-                axial = (rel @ self.axis_hat)[:, None] * self.axis_hat
-                perp = rel - axial
-                if self.screw_rad:
-                    perp = Rotation.from_rotvec(
-                        n * self.screw_rad * self.axis_hat
-                    ).apply(perp)
-                return np.asarray(
-                    line_perp + axial + perp + n * self.period * self.axis_hat
+                return self._screw_about(
+                    points, line_perp, self.axis_hat, self._screw_mats, n
                 )
 
             rod0 = self._embed(
@@ -1277,10 +1323,8 @@ class _RodBuild:
                 start = n * n_atoms
                 rod_positions[start : start + n_atoms] = screw(rod0, n)
                 arm_vec_n = (
-                    Rotation.from_rotvec(n * self.screw_rad * self.axis_hat).apply(
-                        arm_vec0
-                    )
-                    if self.screw_rad and len(arm_vec0)
+                    arm_vec0 @ self._screw_mats[n].T
+                    if self._screw_mats is not None and len(arm_vec0)
                     else arm_vec0
                 )
                 for k, row in enumerate(self._arm_rows):
@@ -1357,8 +1401,16 @@ class _RodBuild:
         if not arms:
             raise AlignmentError("Rod build has no connectable arms.")
 
+        port_slot = np.asarray(slots)
+        if self._port_candidates_cache is None:
+            self._port_candidates_cache = _port_candidates(port_slot, self.port_budget)
         pairs = _pair_ports(
-            np.asarray(tips), np.asarray(slots), self.port_budget, cell, inv
+            np.asarray(tips),
+            port_slot,
+            self.port_budget,
+            cell,
+            inv,
+            candidates=self._port_candidates_cache,
         )
         left, right = pairs[:, 0], pairs[:, 1]
         anchor_array = np.asarray(anchors)
@@ -1540,17 +1592,37 @@ class _RodBuild:
         #179) - and reports ``inf``, the same "nothing within reach"
         convention ``Framework.min_contact`` uses.
         """
-        points, unit, _radii = self._inter_unit_atoms(placed)
-        if len(np.unique(unit)) < 2:
-            return math.inf
+        closest = math.inf
+        for dist, cross, _floor in self._cross_unit_chunks(placed):
+            closest = min(closest, float(dist[cross].min()))
+        return closest
+
+    def _cross_unit_chunks(self, placed: dict):
+        """Chunked min-image scan of the cross-unit pair distances.
+
+        Yields ``(distances, cross-unit mask, covalent floor)`` blocks
+        over row chunks of the pairwise matrix; blocks with no
+        cross-unit pair are skipped, and a single-unit build yields
+        nothing. Chunked because the full n x n x 3 difference array is
+        gigabytes on a large framework - the finite pipeline's relief
+        pass hit exactly that (``alignment.RELIEF_CHUNK_ELEMENTS``).
+        """
+        points, unit, radii = self._inter_unit_atoms(placed)
+        if len(np.unique(unit)) < 2 or len(points) < 2:
+            return
         cell = placed["cell"]
-        # minimum-image pairwise distances between different units
-        delta = points[:, None, :] - points[None, :, :]
-        frac = delta @ np.linalg.inv(cell)
-        frac -= np.round(frac)
-        dist = np.linalg.norm(frac @ cell, axis=2)
-        cross_unit = unit[:, None] != unit[None, :]
-        return float(dist[cross_unit].min())
+        inverse = np.linalg.inv(cell)
+        fractional = points @ inverse
+        rows = max(1, RELIEF_CHUNK_ELEMENTS // len(points))
+        for start in range(0, len(points), rows):
+            stop = min(start + rows, len(points))
+            cross = unit[start:stop, None] != unit[None, :]
+            if not cross.any():
+                continue
+            delta = fractional[start:stop, None, :] - fractional[None, :, :]
+            delta -= np.round(delta)
+            dist = np.linalg.norm(delta @ cell, axis=2)
+            yield dist, cross, radii[start:stop, None] + radii[None, :]
 
     def _inter_unit_atoms(
         self, placed: dict
@@ -1598,19 +1670,13 @@ class _RodBuild:
         is one-sided, so a comfortably packed build is unaffected and
         this cannot pull a structure towards some denser optimum.
         """
-        points, unit, radii = self._inter_unit_atoms(placed)
-        if len(np.unique(unit)) < 2:
-            return 0.0
-        cell = placed["cell"]
-        delta = points[:, None, :] - points[None, :, :]
-        frac = delta @ np.linalg.inv(cell)
-        frac -= np.round(frac)
-        dist = np.linalg.norm(frac @ cell, axis=2)
-        floor = radii[:, None] + radii[None, :]
-        violation = np.where(unit[:, None] != unit[None, :], floor - dist, 0.0)
-        np.maximum(violation, 0.0, out=violation)
-        # halved: the matrix counts each pair twice
-        return float((violation**2).sum() / 2.0)
+        total = 0.0
+        for dist, cross, floor in self._cross_unit_chunks(placed):
+            violation = np.where(cross, floor - dist, 0.0)
+            np.maximum(violation, 0.0, out=violation)
+            total += float((violation**2).sum())
+        # halved: the full matrix counts each pair twice
+        return total / 2.0
 
 
 def _typed_repeat_molgraph(build: _RodBuild, result: dict):

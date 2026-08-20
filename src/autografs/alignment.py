@@ -596,18 +596,20 @@ class BuildPlan:
         blueprint = self._blueprint_matrix
         required = 0.0
         current = 0.0
-        for index_a, target_a, index_b, target_b, offset in self.pairs:
-            pa = self.placements[index_a]
-            pb = self.placements[index_b]
-            span_a = np.linalg.norm(pa.anchor_vecs[pa.arm_for_target[target_a]])
-            span_b = np.linalg.norm(pb.anchor_vecs[pb.arm_for_target[target_b]])
-            required += (
-                float(span_a)
-                + float(span_b)
-                + self._pair_bond_length(index_a, target_a, index_b, target_b)
+        if self.pairs:
+            place_a, flat_a, place_b, flat_b, offsets = self._pair_index
+            spans = np.concatenate(
+                [
+                    np.linalg.norm(p.anchor_vecs[p.arm_for_target], axis=1)
+                    for p in self.placements
+                ]
             )
-            separation = (pa.frac_center - pb.frac_center - offset) @ blueprint
-            current += float(np.linalg.norm(separation))
+            required = float(
+                (spans[flat_a] + spans[flat_b] + self._pair_targets()).sum()
+            )
+            centers = np.array([p.frac_center for p in self.placements])
+            separation = (centers[place_a] - centers[place_b] - offsets) @ blueprint
+            current = float(np.linalg.norm(separation, axis=1).sum())
         if not self.pairs or current < 1e-9:
             # no shared dummies: fall back to matching mean arm lengths
             arms = np.concatenate([p.arm_lengths for p in self.placements]).mean()
@@ -637,6 +639,60 @@ class BuildPlan:
             )
             * self.bond_target_scale
         )
+
+    @functools.cached_property
+    def _pair_index(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Static per-pair index arrays for the vectorized objective.
+
+        ``(place_a, flat_a, place_b, flat_b, offsets)``: each end's
+        placement index, each end's row in the per-build anchor stack
+        (placements concatenated in order, one row per arm in target
+        order), and the (m, 3) image offsets. The pair list never
+        changes after prepare_build, so this is computed once.
+        """
+        counts = np.array([len(p.tags) for p in self.placements], dtype=int)
+        starts = np.zeros(len(counts), dtype=int)
+        np.cumsum(counts[:-1], out=starts[1:])
+        m = len(self.pairs)
+        place_a = np.fromiter((p[0] for p in self.pairs), dtype=int, count=m)
+        target_a = np.fromiter((p[1] for p in self.pairs), dtype=int, count=m)
+        place_b = np.fromiter((p[2] for p in self.pairs), dtype=int, count=m)
+        target_b = np.fromiter((p[3] for p in self.pairs), dtype=int, count=m)
+        offsets = np.array([p[4] for p in self.pairs], dtype=float).reshape(m, 3)
+        return (
+            place_a,
+            starts[place_a] + target_a,
+            place_b,
+            starts[place_b] + target_b,
+            offsets,
+        )
+
+    def _pair_targets(self) -> np.ndarray:
+        """Covalent bond target per pair, Angstrom (the vectorized
+        ``_pair_bond_length``). Reads ``arm_for_target``, which
+        ``finalize`` re-solves at the final cell, so the radii are
+        gathered fresh per call rather than cached.
+        """
+        radii = np.concatenate(
+            [p.anchor_radii[p.arm_for_target] for p in self.placements]
+        )
+        _, flat_a, _, flat_b, _ = self._pair_index
+        return np.asarray((radii[flat_a] + radii[flat_b]) * self.bond_target_scale)
+
+    def _pair_gaps(self, positions: list[np.ndarray], matrix: np.ndarray) -> np.ndarray:
+        """Signed (bond length - covalent target) per pair, Angstrom.
+
+        ``positions`` are the per-placement anchor positions in target
+        order. One definition serves the objective and the closure
+        report, so the guard measures exactly what the optimizer
+        minimized.
+        """
+        _, flat_a, _, flat_b, offsets = self._pair_index
+        stacked = np.concatenate(positions)
+        delta = stacked[flat_a] - stacked[flat_b] - offsets @ matrix
+        return np.asarray(np.linalg.norm(delta, axis=1) - self._pair_targets())
 
     def residual(self, params: np.ndarray) -> float:
         """RMS objective at these parameters, in Angstrom.
@@ -675,40 +731,29 @@ class BuildPlan:
         shifts = self._shifts(slot_free)
         if shifts is None:
             positions = [p.anchor_positions(matrix) for p in self.placements]
-            total = 0.0
-            for index_a, target_a, index_b, target_b, offset in self.pairs:
-                delta = (
-                    positions[index_a][target_a]
-                    - positions[index_b][target_b]
-                    - offset @ matrix
-                )
-                gap = float(np.sqrt(delta @ delta)) - self._pair_bond_length(
-                    index_a, target_a, index_b, target_b
-                )
-                total += gap * gap
-            return float(np.sqrt(total / len(self.pairs)))
+            gaps = self._pair_gaps(positions, matrix)
+            return float(np.sqrt((gaps**2).sum() / len(self.pairs)))
         geometries = [
             p.placed_geometry(matrix, shifts[p.slot_index]) for p in self.placements
         ]
-        total = 0.0
-        for index_a, target_a, index_b, target_b, offset in self.pairs:
-            anchors_a, directions_a = geometries[index_a]
-            anchors_b, directions_b = geometries[index_b]
-            # bond vector from anchor a to anchor b's paired image
-            bond = anchors_b[target_b] + offset @ matrix - anchors_a[target_a]
-            length = float(np.sqrt(bond @ bond))
-            target = self._pair_bond_length(index_a, target_a, index_b, target_b)
-            gap = length - target
-            # the unit bond direction against each end's own: the
-            # deviation of two unit vectors, zero when the bond leaves
-            # that anchor dead-on and 2 when it leaves backwards -
-            # scale-free, so a long bond is not penalized for being long
-            unit = bond / max(length, 1e-9)
-            miss_a = unit - directions_a[target_a]
-            miss_b = -unit - directions_b[target_b]
-            total += gap * gap + DIRECTION_WEIGHT**2 * (
-                float(miss_a @ miss_a) + float(miss_b @ miss_b)
-            )
+        anchors = np.concatenate([g[0] for g in geometries])
+        placed_dirs = np.concatenate([g[1] for g in geometries])
+        _, flat_a, _, flat_b, offsets = self._pair_index
+        # bond vector from anchor a to anchor b's paired image
+        bond = anchors[flat_b] + offsets @ matrix - anchors[flat_a]
+        lengths = np.linalg.norm(bond, axis=1)
+        gaps = lengths - self._pair_targets()
+        # the unit bond direction against each end's own: the
+        # deviation of two unit vectors, zero when the bond leaves
+        # that anchor dead-on and 2 when it leaves backwards -
+        # scale-free, so a long bond is not penalized for being long
+        unit = bond / np.maximum(lengths, 1e-9)[:, None]
+        miss_a = unit - placed_dirs[flat_a]
+        miss_b = -unit - placed_dirs[flat_b]
+        total = float(
+            (gaps**2).sum()
+            + DIRECTION_WEIGHT**2 * ((miss_a**2).sum() + (miss_b**2).sum())
+        )
         # normalized per *pair*, like the fixed-slot branch, so the two
         # objectives are the same number whenever the direction terms
         # vanish (a collinear SBU) and comparable when they do not
@@ -752,20 +797,9 @@ class BuildPlan:
                 p.placed_geometry(matrix, shifts[p.slot_index])[0]
                 for p in self.placements
             ]
-        deviations = [
-            abs(
-                float(
-                    np.linalg.norm(
-                        positions[index_a][target_a]
-                        - positions[index_b][target_b]
-                        - offset @ matrix
-                    )
-                )
-                - self._pair_bond_length(index_a, target_a, index_b, target_b)
-            )
-            for index_a, target_a, index_b, target_b, offset in self.pairs
-        ]
-        return np.asarray(deviations)
+        if not self.pairs:
+            return np.zeros(0)
+        return np.asarray(np.abs(self._pair_gaps(positions, matrix)))
 
     def finalize(
         self, params: np.ndarray
