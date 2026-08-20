@@ -45,6 +45,15 @@ BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
 BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
 
 
+def molgraph_of(mol: Molecule) -> MoleculeGraph:
+    """Bond perception for a molecule: EconNN with the library's
+    conventions (fictive radii, BOND_TOLERANCE, BOND_CUTOFF). The one
+    place those parameters live - the builder's fragment typing and
+    post-build functionalization must perceive bonds identically."""
+    strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
+    return MoleculeGraph.from_local_env_strategy(mol, strategy=strategy)
+
+
 def copy_graph_markers(source, target) -> None:
     """Copy the build-provenance graph markers between attribute dicts.
 
@@ -378,8 +387,7 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     dummies_idx = fragment.atoms.indices_from_symbol("X")
     mol.replace_species({"X": "H"})
     uff_lib, uff_symbs = load_uff_lib(mol)
-    strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
-    mg = MoleculeGraph.from_local_env_strategy(mol, strategy=strategy)
+    mg = molgraph_of(mol)
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)
     for i, mmtype in enumerate(mmtypes):
         mg.molecule[i].properties["ufftype"] = mmtype

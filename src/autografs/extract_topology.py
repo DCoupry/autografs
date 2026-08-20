@@ -272,20 +272,15 @@ def topology_from_deconstruction(
                 f"Unit {k} ({unit.name}) carries no cut bond; a "
                 "disconnected unit has no slot."
             )
-        if len(connections) > 118:
-            raise TopologyExtractionError(
-                f"Unit {k} carries {len(connections)} connections; no "
-                "element encodes that connectivity."
-            )
-        center = np.asarray(recipe.centers[k], dtype=float)
-        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
-        frac_coords = [center] + [
-            np.asarray(mid, dtype=float) for _index, mid in connections
+        center = lattice.get_cartesian_coords(
+            np.asarray(recipe.centers[k], dtype=float)
+        )
+        carts = [
+            lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
+            for _index, mid in connections
         ]
-        carts = [lattice.get_cartesian_coords(fc) for fc in frac_coords]
-        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
-        molecule = Molecule(species, carts, site_properties={"tags": tags})
-        slots.append(Fragment(atoms=molecule, name=f"slot_{k}"))
+        tags = [cut_index + 1 for cut_index, _mid in connections]
+        slots.append(_slot_fragment(center, carts, tags, f"slot_{k}"))
         mapping[k] = unit.name
 
     # orbits on the erected net, so symmetric self-templates group
@@ -323,6 +318,32 @@ def topology_from_deconstruction(
         ),
         mapping,
     )
+
+
+def _slot_fragment(
+    center_cart: np.ndarray,
+    cut_carts: list[np.ndarray],
+    tags: list[int],
+    name: str,
+) -> Fragment:
+    """One blueprint slot: a Z-encoded center plus an X dummy per cut.
+
+    The CGD conventions in one place (Z = connectivity for the center
+    species, tags pair the dummies across slots): the finite units,
+    the rod laterals, and the rod repeats all build their slots
+    through this.
+    """
+    if len(cut_carts) > 118:
+        raise TopologyExtractionError(
+            f"Slot {name!r} carries {len(cut_carts)} connections; no "
+            "element encodes that connectivity."
+        )
+    molecule = Molecule(
+        [get_el_sp(len(cut_carts))] + ["X"] * len(cut_carts),
+        [center_cart, *cut_carts],
+        site_properties={"tags": [0, *tags]},
+    )
+    return Fragment(atoms=molecule, name=name)
 
 
 def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-rod"):
@@ -415,19 +436,15 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
             raise TopologyExtractionError(
                 f"Lateral unit {k} ({building_unit.name}) carries no cut bond."
             )
-        center = np.asarray(recipe.centers[k], dtype=float)
-        species = [get_el_sp(len(connections))] + ["X"] * len(connections)
-        frac_coords = [center] + [
-            np.asarray(mid, dtype=float) for _index, mid in connections
-        ]
-        carts = [lattice.get_cartesian_coords(fc) for fc in frac_coords]
-        tags = [0] + [cut_index + 1 for cut_index, _mid in connections]
-        slots.append(
-            Fragment(
-                atoms=Molecule(species, carts, site_properties={"tags": tags}),
-                name=f"slot_{k}",
-            )
+        center = lattice.get_cartesian_coords(
+            np.asarray(recipe.centers[k], dtype=float)
         )
+        carts = [
+            lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
+            for _index, mid in connections
+        ]
+        tags = [cut_index + 1 for cut_index, _mid in connections]
+        slots.append(_slot_fragment(center, carts, tags, f"slot_{k}"))
         lateral_mapping[len(slots) - 1] = building_unit.name
 
     # one node slot per CHEMICAL repeat, not per PoE atom. The builder's
@@ -530,19 +547,13 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
         center = (
             axis_origin + float(np.mean([heights[atom] for atom in members])) * axis_hat
         )
-        species = [get_el_sp(min(len(node_cuts), 118))] + ["X"] * len(node_cuts)
-        carts = [center] + [
+        carts = [
             lattice.get_cartesian_coords(np.asarray(mid, dtype=float))
             + poe_shift[atom] @ lattice_matrix
             for _index, mid, atom in node_cuts
         ]
-        tags = [0] + [cut_index + 1 for cut_index, _mid, _atom in node_cuts]
-        slots.append(
-            Fragment(
-                atoms=Molecule(species, carts, site_properties={"tags": tags}),
-                name=f"repeat_{bin_index}",
-            )
-        )
+        tags = [cut_index + 1 for cut_index, _mid, _atom in node_cuts]
+        slots.append(_slot_fragment(center, carts, tags, f"repeat_{bin_index}"))
         run_slots.append(len(slots) - 1)
 
     topology = Topology(

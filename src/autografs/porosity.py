@@ -29,11 +29,13 @@ from __future__ import annotations
 
 import logging
 import math
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
 from pymatgen.analysis.local_env import CovalentRadius
 from pymatgen.core.periodic_table import Element
+from scipy import ndimage
 from scipy.spatial import cKDTree
 
 if TYPE_CHECKING:
@@ -43,6 +45,8 @@ __all__ = [
     "void_fraction",
     "largest_cavity_diameter",
     "pore_limiting_diameter",
+    "porosity_report",
+    "PorosityReport",
 ]
 
 logger = logging.getLogger(__name__)
@@ -122,7 +126,7 @@ def void_fraction(
         Accessible-volume fraction, in [0, 1].
     """
     distances, _ = _distance_grid(framework, spacing)
-    return float(np.count_nonzero(distances >= probe_radius) / len(distances))
+    return _void_fraction_from(distances, probe_radius)
 
 
 def largest_cavity_diameter(
@@ -137,8 +141,7 @@ def largest_cavity_diameter(
         vdW surfaces (a dense structure).
     """
     distances, _ = _distance_grid(framework, spacing)
-    best = float(distances.max())
-    return max(0.0, 2.0 * best)
+    return _lcd_from(distances)
 
 
 def pore_limiting_diameter(
@@ -159,6 +162,20 @@ def pore_limiting_diameter(
         percolates (a closed-pore or dense structure).
     """
     distances, dims = _distance_grid(framework, spacing)
+    return _pld_from(distances, dims, spacing)
+
+
+def _void_fraction_from(distances: np.ndarray, probe_radius: float) -> float:
+    return float(np.count_nonzero(distances >= probe_radius) / len(distances))
+
+
+def _lcd_from(distances: np.ndarray) -> float:
+    return max(0.0, 2.0 * float(distances.max()))
+
+
+def _pld_from(
+    distances: np.ndarray, dims: tuple[int, int, int], spacing: float
+) -> float:
     hi = float(distances.max())
     if hi <= 0.0 or not _percolates(distances >= 0.0, dims):
         return 0.0
@@ -173,22 +190,59 @@ def pore_limiting_diameter(
     return 2.0 * lo
 
 
+@dataclass(frozen=True)
+class PorosityReport:
+    """The three geometric descriptors, from one shared distance grid."""
+
+    void_fraction: float
+    largest_cavity_diameter: float
+    pore_limiting_diameter: float
+
+
+def porosity_report(
+    framework: Framework,
+    probe_radius: float = 0.0,
+    spacing: float = DEFAULT_SPACING,
+) -> PorosityReport:
+    """All three porosity descriptors of a framework, computed together.
+
+    Building the periodic distance grid dominates the cost of every
+    descriptor, and the individual functions each rebuild it - so the
+    common "characterize this framework" call pattern pays for it three
+    times. This computes the grid once. Values are identical to the
+    individual functions at the same ``spacing``.
+    """
+    distances, dims = _distance_grid(framework, spacing)
+    return PorosityReport(
+        void_fraction=_void_fraction_from(distances, probe_radius),
+        largest_cavity_diameter=_lcd_from(distances),
+        pore_limiting_diameter=_pld_from(distances, dims, spacing),
+    )
+
+
 def _percolates(open_mask: np.ndarray, dims: tuple[int, int, int]) -> bool:
     """Whether the open grid cells contain a periodically wrapping path.
 
-    Union-find over the open cells, tracking each node's wrap count to
-    its root (one integer per lattice axis). Joining two cells that
-    already share a root through an edge whose wrap disagrees with the
-    recorded counts means the component connects to its own periodic
-    image - a percolating channel. Plain Python ints throughout: this
-    runs ~10^5 times per bisection step and numpy scalars would
-    dominate the cost.
+    Two-stage quotient construction. ``scipy.ndimage.label`` first
+    finds the NON-periodic connected components of the open cells (C
+    speed, 6-connectivity - the same neighbor convention the previous
+    per-cell Python union-find walked in ~10^5 iterations per call).
+    Any two cells of one component are connected with zero net wrap, so
+    each component contracts to a single vertex, and only the
+    boundary-face edges (last slice -> first slice per axis, wrap +1 on
+    that axis) remain. The wrap-tracking union-find then runs over
+    those component-level edges - typically tens of vertices instead of
+    the full grid. Joining two components that already share a root
+    through an edge whose wrap disagrees with the recorded counts means
+    a component connects to its own periodic image - a percolating
+    channel, in any direction.
     """
-    n1, n2, n3 = dims
-    open_grid = open_mask.reshape(n1, n2, n3)
-    size = open_grid.size
-    parent = list(range(size))
-    wraps: list[tuple[int, int, int]] = [(0, 0, 0)] * size
+    open_grid = open_mask.reshape(dims)
+    labels, n_labels = ndimage.label(open_grid)
+    if not n_labels:
+        return False
+    parent = list(range(n_labels + 1))
+    wraps: list[tuple[int, int, int]] = [(0, 0, 0)] * (n_labels + 1)
 
     def find(node: int) -> tuple[int, tuple[int, int, int]]:
         # accumulate the wrap count along the chain to the root
@@ -210,22 +264,14 @@ def _percolates(open_mask: np.ndarray, dims: tuple[int, int, int]) -> bool:
             current = following
         return root, (w0, w1, w2)
 
-    index = np.arange(size).reshape(n1, n2, n3)
     unit_steps = ((1, 0, 0), (0, 1, 0), (0, 0, 1))
     for axis in range(3):
-        neighbor = np.roll(index, -1, axis=axis)
-        crossing = np.zeros_like(open_grid, dtype=bool)
-        crossing[(slice(None),) * axis + (-1,)] = True
-        both_open = open_grid & open_grid.reshape(-1)[neighbor]
-        edges = zip(
-            index[both_open].tolist(),
-            neighbor[both_open].tolist(),
-            crossing[both_open].tolist(),
-            strict=True,
-        )
-        step_if_crossing = unit_steps[axis]
-        for a, b, crosses in edges:
-            step = step_if_crossing if crosses else (0, 0, 0)
+        last = labels[(slice(None),) * axis + (-1,)].ravel()
+        first = labels[(slice(None),) * axis + (0,)].ravel()
+        both_open = (last > 0) & (first > 0)
+        pairs = np.unique(np.stack([last[both_open], first[both_open]], axis=1), axis=0)
+        step = unit_steps[axis]
+        for a, b in pairs.tolist():
             root_a, (a0, a1, a2) = find(a)
             root_b, (b0, b1, b2) = find(b)
             delta = (a0 + step[0] - b0, a1 + step[1] - b1, a2 + step[2] - b2)

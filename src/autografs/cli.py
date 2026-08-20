@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import math
 import re
 from collections import Counter
 from dataclasses import dataclass, field
@@ -37,7 +38,7 @@ from rich.table import Table
 # inside functions: Session.gen defers the expensive library setup
 # until a menu actually needs it
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from autografs.builder import Autografs
     from autografs.fragment import Fragment
@@ -173,36 +174,40 @@ def topology_summary_table(topology: Topology) -> Table:
 # ----------------------------------------------------------------------
 
 
-def _validate_float(text: str) -> bool | str:
-    try:
-        float(text)
-    except ValueError:
-        return "Enter a number"
-    return True
+def _number_validator(
+    cast: Callable[[str], float],
+    parse_message: str,
+    accept: Callable[[float], bool] | None = None,
+    accept_message: str = "",
+) -> Callable[[str], bool | str]:
+    """A questionary validator: parse with ``cast``, then check
+    ``accept`` (returns True, or the message to show)."""
+
+    def validate(text: str) -> bool | str:
+        try:
+            value = cast(text)
+        except ValueError:
+            return parse_message
+        if accept is None:
+            return True
+        return accept(value) or accept_message
+
+    return validate
 
 
-def _validate_positive_float(text: str) -> bool | str:
-    try:
-        value = float(text)
-    except ValueError:
-        return "Enter a number"
-    return value > 0 or "Enter a positive number"
-
-
-def _validate_positive_int(text: str) -> bool | str:
-    try:
-        value = int(text)
-    except ValueError:
-        return "Enter an integer"
-    return value > 0 or "Enter a positive integer"
-
-
-def _validate_combination_cap(text: str) -> bool | str:
-    try:
-        value = int(text)
-    except ValueError:
-        return "Enter an integer"
-    return value > 0 or value == -1 or "Enter a positive integer, or -1 for no cap"
+_validate_float = _number_validator(float, "Enter a number")
+_validate_positive_float = _number_validator(
+    float, "Enter a number", lambda v: v > 0, "Enter a positive number"
+)
+_validate_positive_int = _number_validator(
+    int, "Enter an integer", lambda v: v > 0, "Enter a positive integer"
+)
+_validate_combination_cap = _number_validator(
+    int,
+    "Enter an integer",
+    lambda v: v > 0 or v == -1,
+    "Enter a positive integer, or -1 for no cap",
+)
 
 
 def _pick_name(message: str, names: list[str]) -> str | None:
@@ -222,16 +227,18 @@ def _pick_max_rmsd() -> float | None | _Cancelled:
     pick = questionary.select(
         "Alignment quality gate (max RMSD)?",
         choices=[
-            "No limit - always build (default)",
-            f"{STRICT_MAX_RMSD} - strict, rejects distorted fits",
-            "Custom...",
+            questionary.Choice("No limit - always build (default)", value="none"),
+            questionary.Choice(
+                f"{STRICT_MAX_RMSD} - strict, rejects distorted fits", value="strict"
+            ),
+            questionary.Choice("Custom...", value="custom"),
         ],
     ).ask()
     if pick is None:
         return CANCELLED
-    if pick.startswith("No limit"):
+    if pick == "none":
         return None
-    if pick.startswith(str(STRICT_MAX_RMSD)):
+    if pick == "strict":
         return STRICT_MAX_RMSD
     text = questionary.text(
         "max RMSD (0 = perfect shape match, 2 = opposite):",
@@ -295,32 +302,38 @@ def filter_topology_names(session: Session) -> list[str] | None:
     dim = questionary.select(
         "Which nets?",
         choices=[
-            f"All ({len(infos)})",
-            f"3D only ({len(infos) - n_2d})",
-            f"2D layers only ({n_2d}) - stackable into COFs",
+            questionary.Choice(f"All ({len(infos)})", value="all"),
+            questionary.Choice(f"3D only ({len(infos) - n_2d})", value="3d"),
+            questionary.Choice(
+                f"2D layers only ({n_2d}) - stackable into COFs", value="2d"
+            ),
         ],
     ).ask()
     if dim is None:
         return None
-    if dim.startswith("3D"):
+    if dim == "3d":
         infos = [info for info in infos if not info.is_2d]
-    elif dim.startswith("2D"):
+    elif dim == "2d":
         infos = [info for info in infos if info.is_2d]
     all_conns = sorted({c for info in infos for c in info.connectivities})
     pick = questionary.select(
         "Filter by slot connectivity?",
-        choices=["Any connectivity"] + [f"has a {c}-connected slot" for c in all_conns],
+        choices=[questionary.Choice("Any connectivity", value="any")]
+        + [questionary.Choice(f"has a {c}-connected slot", value=c) for c in all_conns],
     ).ask()
     if pick is None:
         return None
-    if pick != "Any connectivity":
-        wanted = int(pick.removeprefix("has a ").split("-")[0])
-        infos = [info for info in infos if wanted in info.connectivities]
+    if pick != "any":
+        infos = [info for info in infos if pick in info.connectivities]
     return [info.name for info in infos]
 
 
-def choose_topology(session: Session) -> Topology | None:
-    """Filter, search, inspect, confirm; None on cancel."""
+def _select_topology(session: Session) -> Topology | None:
+    """Filter, search, and summarize one topology; None on cancel.
+
+    The shared head of choose_topology and browse_topologies, so the
+    two prompts cannot drift apart.
+    """
     while True:
         names = filter_topology_names(session)
         if names is None:
@@ -333,6 +346,15 @@ def choose_topology(session: Session) -> Topology | None:
             return None
         topology = session.gen.topologies[name]
         console.print(topology_summary_table(topology))
+        return topology
+
+
+def choose_topology(session: Session) -> Topology | None:
+    """Filter, search, inspect, confirm; None on cancel."""
+    while True:
+        topology = _select_topology(session)
+        if topology is None:
+            return None
         use = questionary.confirm("Use this topology?", default=True).ask()
         if use is None:
             return None
@@ -446,15 +468,14 @@ def maybe_stack(framework: Framework, topology: Topology) -> Framework:
     mode = questionary.select(
         "Stacking mode:",
         choices=[
-            "AA - eclipsed (most common)",
-            "AB - offset by (1/3, 2/3)",
-            "serrated - offset by (1/2, 0)",
-            "staggered - offset by (1/2, 1/2)",
+            questionary.Choice("AA - eclipsed (most common)", value="AA"),
+            questionary.Choice("AB - offset by (1/3, 2/3)", value="AB"),
+            questionary.Choice("serrated - offset by (1/2, 0)", value="serrated"),
+            questionary.Choice("staggered - offset by (1/2, 1/2)", value="staggered"),
         ],
     ).ask()
     if mode is None:
         return framework
-    mode = mode.split()[0]
     text = questionary.text(
         "Interlayer spacing in Angstrom (typical COFs: 3.3-3.6):",
         default=str(DEFAULT_INTERLAYER),
@@ -501,10 +522,11 @@ def parse_indices(text: str) -> list[int]:
 
 def rotatable_slots(framework: Framework) -> list[int]:
     """Placed SBUs with exactly two connection points (rotatable linkers)."""
-    anchors: dict[int, int] = {}
-    for _, data in framework.graph.nodes(data=True):
-        if data.get("tag", 0) > 0 and "slot" in data:
-            anchors[data["slot"]] = anchors.get(data["slot"], 0) + 1
+    anchors = Counter(
+        data["slot"]
+        for _, data in framework.graph.nodes(data=True)
+        if data.get("tag", 0) > 0 and "slot" in data
+    )
     return sorted(slot for slot, count in anchors.items() if count == 2)
 
 
@@ -602,8 +624,6 @@ def _edit_rotate(framework: Framework) -> Framework | None:
     if angle_text is None:
         return None
     try:
-        import math
-
         return framework.rotate(labels[pick], math.radians(float(angle_text)))
     except ValueError as exc:
         console.print(f"[red]Rotation failed:[/red] {exc}")
@@ -721,18 +741,10 @@ def build_wizard(session: Session) -> None:
 def browse_topologies(session: Session) -> None:
     """Inspect topologies: summary plus compatible SBUs per slot type."""
     while True:
-        names = filter_topology_names(session)
-        if names is None:
+        topology = _select_topology(session)
+        if topology is None:
             return
-        if not names:
-            console.print("[yellow]No topology matches those filters.[/yellow]")
-            continue
-        name = _pick_name("Topology name (type to search):", names)
-        if name is None:
-            return
-        topology = session.gen.topologies[name]
-        console.print(topology_summary_table(topology))
-        options = session.gen.list_building_units(sieve=name)
+        options = session.gen.list_building_units(sieve=topology.name)
         labels = slot_labels(topology)
         table = Table(title="Compatible building units")
         table.add_column("slot type")

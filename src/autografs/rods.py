@@ -38,7 +38,7 @@ import gzip
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -118,16 +118,8 @@ class RodRepeat:
     def _flipped(self) -> RodRepeat:
         """The rod after a proper 180-degree flip about a transverse
         axis: (theta, z) -> (-theta, -z). Preserves helicity."""
-        length = self.repeat_length
-        return RodRepeat(
-            symbols=self.symbols,
-            axial=(-self.axial) % length,
-            radial=self.radial,
-            angular=-self.angular,
-            repeat_length=length,
-            screw_order=self.screw_order,
-            screw_angle=self.screw_angle,
-            n_connections=self.n_connections,
+        return replace(
+            self, axial=(-self.axial) % self.repeat_length, angular=-self.angular
         )
 
     def _pair_distances(
@@ -334,8 +326,7 @@ def _chemical_reduction(
         screw_angle=0.0,
         n_connections=0,
     )
-    counts = Counter(symbols)
-    anchor = min(sorted(counts), key=lambda s: counts[s])
+    anchor = probe._anchor_element()
     anchors = [i for i, s in enumerate(symbols) if s == anchor]
     a0 = anchors[0]
     candidates: list[tuple[float, float]] = []

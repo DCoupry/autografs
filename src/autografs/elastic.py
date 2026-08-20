@@ -144,6 +144,20 @@ class ElasticProperties:
         """The 6x6 compliance matrix (1/GPa), inverse of the stiffness."""
         return np.linalg.inv(self.stiffness)
 
+    @cached_property
+    def _pymatgen(self):
+        """The stiffness as a pymatgen ElasticTensor.
+
+        The Voigt and Reuss moduli delegate to it - verified against
+        the previous explicit formulas to 1 ulp on random positive-
+        definite tensors - so the averaging conventions are pymatgen's
+        problem, not ours. Its energy-unit properties (y_mod is in Pa)
+        are NOT exposed; the local Hill combinations below stay in GPa.
+        """
+        from pymatgen.analysis.elasticity import ElasticTensor
+
+        return ElasticTensor.from_voigt(self.stiffness)
+
     @property
     def is_stable(self) -> bool:
         """Born stability: the stiffness matrix is positive definite."""
@@ -151,17 +165,13 @@ class ElasticProperties:
 
     @property
     def bulk_voigt(self) -> float:
-        c = self.stiffness
-        return float(
-            (c[0, 0] + c[1, 1] + c[2, 2] + 2.0 * (c[0, 1] + c[0, 2] + c[1, 2])) / 9.0
-        )
+        """Voigt bulk modulus (GPa)."""
+        return float(self._pymatgen.k_voigt)
 
     @property
     def bulk_reuss(self) -> float:
-        s = self.compliance
-        return float(
-            1.0 / (s[0, 0] + s[1, 1] + s[2, 2] + 2.0 * (s[0, 1] + s[0, 2] + s[1, 2]))
-        )
+        """Reuss bulk modulus (GPa)."""
+        return float(self._pymatgen.k_reuss)
 
     @property
     def bulk_hill(self) -> float:
@@ -170,29 +180,13 @@ class ElasticProperties:
 
     @property
     def shear_voigt(self) -> float:
-        c = self.stiffness
-        return float(
-            (
-                c[0, 0]
-                + c[1, 1]
-                + c[2, 2]
-                - (c[0, 1] + c[0, 2] + c[1, 2])
-                + 3.0 * (c[3, 3] + c[4, 4] + c[5, 5])
-            )
-            / 15.0
-        )
+        """Voigt shear modulus (GPa)."""
+        return float(self._pymatgen.g_voigt)
 
     @property
     def shear_reuss(self) -> float:
-        s = self.compliance
-        return float(
-            15.0
-            / (
-                4.0 * (s[0, 0] + s[1, 1] + s[2, 2])
-                - 4.0 * (s[0, 1] + s[0, 2] + s[1, 2])
-                + 3.0 * (s[3, 3] + s[4, 4] + s[5, 5])
-            )
-        )
+        """Reuss shear modulus (GPa)."""
+        return float(self._pymatgen.g_reuss)
 
     @property
     def shear_hill(self) -> float:

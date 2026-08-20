@@ -44,6 +44,27 @@ REQUEST_DELAY = 0.5
 IZA_CIF_URL = "https://www.iza-structure.org/IZA-SC/cif/{filename}"
 
 
+def _is_cached(target: Path) -> bool:
+    """A non-empty file counts as cached; a zero-byte one is a failed
+    or interrupted write and is fetched again."""
+    return target.is_file() and target.stat().st_size > 0
+
+
+def _atomic_write(target: Path, data: bytes) -> None:
+    """Write via a sibling .tmp then os.replace, so an interrupted run
+    never leaves a half-written file that _is_cached would trust."""
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, target)
+
+
+def _session() -> requests.Session:
+    """A requests session carrying the identifying User-Agent."""
+    session = requests.Session()
+    session.headers["User-Agent"] = USER_AGENT
+    return session
+
+
 @dataclass(frozen=True)
 class Source:
     """One external data source and the notice its use requires."""
@@ -179,7 +200,7 @@ def fetch_files(
     missing = {}
     for filename, url in sorted(urls.items()):
         target = cache_dir / filename
-        if target.is_file() and target.stat().st_size > 0:
+        if _is_cached(target):
             available[filename] = target
         else:
             missing[filename] = url
@@ -190,8 +211,7 @@ def fetch_files(
         f"Fetching {len(missing)} files ({len(available)} already cached) "
         f"into {cache_dir}."
     )
-    with requests.Session() as session:
-        session.headers["User-Agent"] = USER_AGENT
+    with _session() as session:
         for filename, url in tqdm(sorted(missing.items()), unit="file"):
             target = cache_dir / filename
             try:
@@ -200,9 +220,7 @@ def fetch_files(
             except requests.RequestException as exc:
                 logger.warning(f"Failed to fetch {url}: {exc}")
                 continue
-            tmp = target.with_suffix(target.suffix + ".tmp")
-            tmp.write_bytes(response.content)
-            os.replace(tmp, target)
+            _atomic_write(target, response.content)
             available[filename] = target
             time.sleep(delay)
     return available
@@ -226,10 +244,8 @@ def _extract_epinet_archive(archive: Path, cache: Path) -> dict[str, Path]:
                 if not re.fullmatch(r"sqc\d+\.cgd", filename):
                     continue
                 target = cache / filename
-                if not (target.is_file() and target.stat().st_size > 0):
-                    tmp = target.with_suffix(target.suffix + ".tmp")
-                    tmp.write_bytes(bundle.read(member))
-                    os.replace(tmp, target)
+                if not _is_cached(target):
+                    _atomic_write(target, bundle.read(member))
                 available[filename.removesuffix(".cgd")] = target
     except zipfile.BadZipFile:
         archive.unlink(missing_ok=True)
@@ -276,18 +292,15 @@ def fetch_epinet_cgds(
     cache = Path(cache_dir) if cache_dir else default_cache_dir("epinet")
     cache.mkdir(parents=True, exist_ok=True)
     archive = cache / EPINET_ARCHIVE_NAME
-    if not (archive.is_file() and archive.stat().st_size > 0):
+    if not _is_cached(archive):
         logger.info(
             f"Downloading the EPINET dataset release "
             f"(doi:{EPINET_DATASET_DOI}) into {cache}."
         )
-        with requests.Session() as session:
-            session.headers["User-Agent"] = USER_AGENT
+        with _session() as session:
             response = session.get(EPINET_ARCHIVE_URL, timeout=600)
             response.raise_for_status()
-        tmp = archive.with_suffix(archive.suffix + ".tmp")
-        tmp.write_bytes(response.content)
-        os.replace(tmp, archive)
+        _atomic_write(archive, response.content)
     available = _extract_epinet_archive(archive, cache)
     logger.info(f"{len(available)} EPINET s-nets available in {cache}.")
     if max_id is not None:

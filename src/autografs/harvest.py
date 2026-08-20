@@ -30,6 +30,7 @@ from __future__ import annotations
 import glob
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -168,9 +169,9 @@ class HarvestResult:
     def report(self) -> str:
         """One-line human-readable summary of the harvest."""
         n_sources = self.n_processed + len(self.failures)
+        kind_totals = Counter(self.kinds.values())
         kind_counts = ", ".join(
-            f"{sum(k == kind for k in self.kinds.values())} {kind}(s)"
-            for kind in ("node", "linker", "cap")
+            f"{kind_totals[kind]} {kind}(s)" for kind in ("node", "linker", "cap")
         )
         return (
             f"harvested {len(self.fragments)} fragments ({kind_counts}) "
@@ -185,6 +186,13 @@ class HarvestResult:
 
     def __repr__(self) -> str:
         return f"HarvestResult({self.report()})"
+
+
+def _record_provenance(provenance: dict[str, list[str]], name: str, label: str) -> None:
+    """Record one source label per merged entry, without duplicates."""
+    labels = provenance.setdefault(name, [])
+    if label not in labels:
+        labels.append(label)
 
 
 def _iter_sources(sources: Source | Iterable[Source]) -> list[tuple[str, Source]]:
@@ -266,9 +274,7 @@ def harvest(
             base_name = _SUFFIX.sub(r"\1", name)
             merged_name = merge_fragment(result.fragments, fragment, base_name)
             result.kinds[merged_name] = name.split("_", 1)[0]
-            result.provenance.setdefault(merged_name, [])
-            if label not in result.provenance[merged_name]:
-                result.provenance[merged_name].append(label)
+            _record_provenance(result.provenance, merged_name, label)
         # rods have no finite fragment; they dedupe through their
         # canonical chemical repeat into their own family library
         for rod in decon.rod_units:
@@ -276,9 +282,7 @@ def harvest(
             rod_name = merge_rod(
                 result.rods, fragment_rod, f"rod_{fragment_rod.repeat.formula}"
             )
-            result.rod_provenance.setdefault(rod_name, [])
-            if label not in result.rod_provenance[rod_name]:
-                result.rod_provenance[rod_name].append(label)
+            _record_provenance(result.rod_provenance, rod_name, label)
     for sources_list in result.provenance.values():
         sources_list.sort()
     for sources_list in result.rod_provenance.values():

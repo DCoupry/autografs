@@ -159,18 +159,15 @@ class Topology:
         dict[Fragment, list[int]]
             A dictionary of available slot indices
         """
-        available_slots: dict[Fragment, list[int]] = {}
-        for slot in self.mappings:
-            available_slots[slot] = []
-            if slot.has_compatible_symmetry(candidate):
-                available_slots[slot] += self.mappings[slot]
-        return available_slots
+        return {
+            slot: list(indices) if slot.has_compatible_symmetry(candidate) else []
+            for slot, indices in self.mappings.items()
+        }
 
     def scale_slots(self, scales: tuple[float, float, float] = (1.0, 1.0, 1.0)) -> None:
         """
         Applies in-place a scaling along cell vectors of the slots contained in
         the topology.
-        TODO: rename scales to three a, b, c parameters for clarity
 
         Parameters
         ----------
