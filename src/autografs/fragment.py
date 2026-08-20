@@ -24,15 +24,11 @@ from __future__ import annotations
 import copy
 import functools
 import logging
-from typing import TYPE_CHECKING
 
 import numpy as np
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from pymatgen.symmetry.analyzer import PointGroupAnalyzer
 from scipy.spatial.distance import pdist
-
-if TYPE_CHECKING:
-    pass
 
 __all__ = [
     "Fragment",
@@ -306,11 +302,10 @@ class Fragment:
         bool
             True if other is considered compatible with self
         """
-        this_units = self.arm_units
-        that_units = other.arm_units
-        if len(this_units) != len(that_units):
+        n_arms = len(self.arm_units)
+        if n_arms != len(other.arm_units):
             return False
-        if len(this_units) <= 2:
+        if n_arms <= 2:
             return True
         # cheap rotation/permutation-invariant prefilter: grossly
         # different pairwise-angle multisets cannot match. The margin
@@ -320,18 +315,11 @@ class Fragment:
         # residuals it involves, so 2*r*sqrt(n) bounds the gap a true
         # match can produce. The previous flat 4*r bound was only safe
         # for n <= 4 and could over-reject high-connectivity stars.
-        n_arms = len(this_units)
         gap = float(np.abs(self._shape_signature - other._shape_signature).max())
         if gap > 2.0 * max_rmsd * float(np.sqrt(n_arms)):
             return False
-        return (
-            _match_rmsd_cached(
-                np.round(this_units, 6).tobytes(),
-                np.round(that_units, 6).tobytes(),
-                len(this_units),
-            )
-            <= max_rmsd
-        )
+        rmsd = self.match_rmsd(other)
+        return rmsd is not None and rmsd <= max_rmsd
 
     def match_rmsd(self, other: Fragment) -> float | None:
         """How far another fragment's arms are from occupying this slot.

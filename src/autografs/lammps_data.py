@@ -47,7 +47,9 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
+from scipy.spatial import cKDTree
 
+from autografs.data.uff4mof import element_of
 from autografs.exceptions import RelaxationError
 
 if TYPE_CHECKING:
@@ -475,21 +477,14 @@ def write_lammps_data(
     # through the wrong image by LAMMPS's minimum-image convention
     inverse = np.linalg.inv(cell)
     longest_bond = 0.0
-    widest_wrapped = 0.0
     for a, b, _order in topology["bonds"]:
         delta = coords[a] - coords[b]
         delta -= np.round(delta @ inverse) @ cell
-        longest_bond = max(longest_bond, float(np.linalg.norm(delta)))
-        # the separation LAMMPS actually sees: once wrapped, a bond that
-        # crosses a boundary has its two atoms at opposite ends of the
-        # box, and the ghost shell must reach that far or the bond is
-        # dropped at setup ("Bond atoms N M missing on proc 0")
-        widest_wrapped = max(
-            widest_wrapped, float(np.linalg.norm(coords[a] - coords[b]))
-        )
-        if np.linalg.norm(delta) > 0.5 * lengths.min():
+        span = float(np.linalg.norm(delta))
+        longest_bond = max(longest_bond, span)
+        if span > 0.5 * lengths.min():
             raise RelaxationError(
-                f"Bond {a}-{b} spans {np.linalg.norm(delta):.2f} A, over half "
+                f"Bond {a}-{b} spans {span:.2f} A, over half "
                 f"the shortest box length ({lengths.min():.2f} A); LAMMPS "
                 "would bond it through the wrong image. Use a supercell."
             )
@@ -498,10 +493,16 @@ def write_lammps_data(
     atom_types = sorted(set(types))
     atom_type_id = {t: i + 1 for i, t in enumerate(atom_types)}
 
+    # one UFF bond order per bonded pair, shared by the bond-type and
+    # angle-type keys below
+    orders = {
+        tuple(sorted((a, b))): uff_bond_order(types[a], types[b], o)
+        for a, b, o in topology["bonds"]
+    }
     bond_types: dict[tuple, int] = {}
     bond_rows: list[tuple[int, int, int]] = []
-    for a, b, perceived in topology["bonds"]:
-        order = uff_bond_order(types[a], types[b], perceived)
+    for a, b, _perceived in topology["bonds"]:
+        order = orders[tuple(sorted((a, b)))]
         key = (*sorted((types[a], types[b])), round(order, 3))
         bond_types.setdefault(key, len(bond_types) + 1)
         bond_rows.append((bond_types[key], a, b))
@@ -509,10 +510,6 @@ def write_lammps_data(
     angle_styles: set[str] = {"fourier"}
     angle_types: dict[tuple, int] = {}
     angle_rows: list[tuple[int, int, int, int]] = []
-    orders = {
-        tuple(sorted((a, b))): uff_bond_order(types[a], types[b], o)
-        for a, b, o in topology["bonds"]
-    }
     for i, j, k in topology["angles"]:
         oij = orders.get(tuple(sorted((i, j))), 1.0)
         ojk = orders.get(tuple(sorted((j, k))), 1.0)
@@ -579,7 +576,7 @@ def write_lammps_data(
     from ase.data import atomic_masses, atomic_numbers
 
     for uff_type in atom_types:
-        element = uff_type[:2].rstrip("_0123456789+f")
+        element = element_of(uff_type)
         mass = atomic_masses[atomic_numbers.get(element, 1)]
         lines.append(f"{atom_type_id[uff_type]} {mass:.6f} # {uff_type}")
 
@@ -668,12 +665,11 @@ def write_lammps_data(
     # lammps-interface path, and a truncated tail is the smaller error
     cutoff = min(12.5, 0.49 * float(lengths.min()))
     # LAMMPS drops a bond whose partner is outside the ghost shell
-    # ("Bond atoms N M missing on proc 0"); the shell must reach the
-    # longest bond, which in a small cell exceeds the pair cutoff
-    # sized from the minimum-image bond, which is what LAMMPS actually
-    # measures; the raw wrapped separation of a boundary-crossing bond
-    # can exceed the box, and asking for a ghost shell wider than the
-    # box is meaningless
+    # ("Bond atoms N M missing on proc 0"), so the shell must reach the
+    # longest minimum-image bond span - the separation LAMMPS actually
+    # measures once coordinates are wrapped - which in a small cell can
+    # exceed the pair cutoff. Capped just under the box, since a ghost
+    # shell wider than the box is meaningless.
     comm_cutoff = min(
         max(2.0 * longest_bond + 2.0, cutoff + 2.0), 0.99 * float(lengths.min())
     )
@@ -687,16 +683,17 @@ def write_lammps_data(
         "special_bonds": "lj 0.0 0.0 1.0",
         "comm_modify": f"cutoff {comm_cutoff:.3f}",
     }
+    pair_values = {t: pair_coefficients(table[t]) for t in atom_types}
     pair_commands = tuple(
         f"pair_coeff {atom_type_id[t]} {atom_type_id[t]} "
-        f"{pair_coefficients(table[t])[0]:.6f} {pair_coefficients(table[t])[1]:.6f}"
+        f"{pair_values[t][0]:.6f} {pair_values[t][1]:.6f}"
         for t in atom_types
     )
     closest = float("inf")
     if len(coords) > 1:
-        separation = np.linalg.norm(coords[:, None, :] - coords[None, :, :], axis=-1)
-        np.fill_diagonal(separation, np.inf)
-        closest = float(separation.min())
+        # KD-tree instead of the dense n x n matrix (200 MB transient
+        # on a 5000-atom framework); same non-periodic semantics
+        closest = float(cKDTree(coords).query(coords, k=2)[0][:, 1].min())
     return LammpsData(
         text=text,
         n_atoms=len(nodes),

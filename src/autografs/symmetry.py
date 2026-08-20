@@ -56,6 +56,11 @@ _SITE_TOL = 1e-4
 # metric-tensor agreement, relative to the largest entry
 _METRIC_TOL = 1e-4
 
+# sites matched per broadcast block in _match_sites: small enough that
+# a candidate failing on its first sites exits early, large enough to
+# amortize the numpy call overhead
+_MATCH_BLOCK = 16
+
 
 @dataclass(frozen=True)
 class SymmetryOperation:
@@ -91,19 +96,20 @@ def _lattice_point_group(matrix: np.ndarray) -> list[np.ndarray]:
     """
     metric = matrix @ matrix.T
     scale = float(np.abs(metric).max())
-    candidates = []
     # a column of W is never all-zero (W is invertible), so the search
     # is over 26^3 = ~17.5k matrices rather than the full 3^9; the
-    # determinant test rejects most of them before the metric check
-    columns = [np.array(c) for c in product((-1, 0, 1), repeat=3) if any(c)]
-    for w in product(columns, repeat=3):
-        candidate = np.array(w, dtype=int).T
-        if abs(round(float(np.linalg.det(candidate)))) != 1:
-            continue
-        transformed = candidate.T @ metric @ candidate
-        if np.allclose(transformed, metric, atol=_METRIC_TOL * scale):
-            candidates.append(candidate)
-    return candidates
+    # whole sweep runs as one batched numpy pass (the per-candidate
+    # Python loop dominated the documented 0.2-0.4 s/net derivation)
+    columns = np.array([c for c in product((-1, 0, 1), repeat=3) if any(c)], dtype=int)
+    triples = np.indices((len(columns),) * 3).reshape(3, -1).T
+    candidates = columns[triples].transpose(0, 2, 1)
+    determinants = np.linalg.det(candidates)
+    candidates = candidates[np.abs(np.rint(determinants)) == 1]
+    transformed = np.einsum("nji,jk,nkl->nil", candidates, metric, candidates)
+    # elementwise |t - m| <= atol + rtol * |m|, matching np.allclose
+    tolerance = _METRIC_TOL * scale + 1e-5 * np.abs(metric)
+    keep = (np.abs(transformed - metric) <= tolerance).all(axis=(1, 2))
+    return list(candidates[keep])
 
 
 def _slot_centers(topology: Topology) -> tuple[np.ndarray, list[int]]:
@@ -125,22 +131,27 @@ def _match_sites(
     """Match mapped centres onto the centre set, modulo lattice
     translations and preserving orbit labels; None when any site has no
     partner or two sites claim the same one."""
-    image: list[int] = []
-    used: set[int] = set()
-    for index, site in enumerate(mapped):
-        delta = centers - site
+    # vectorized over site blocks: one broadcast replaces the per-site
+    # Python loop, while the block granularity keeps the early exit
+    # that most candidate operations hit on their first sites
+    n_sites = len(mapped)
+    partners = np.empty(n_sites, dtype=int)
+    orbit_labels = np.asarray(orbits)
+    for start in range(0, n_sites, _MATCH_BLOCK):
+        stop = min(start + _MATCH_BLOCK, n_sites)
+        delta = centers[None, :, :] - mapped[start:stop, None, :]
         delta -= np.round(delta)
-        distances = np.abs(delta).max(axis=1)
-        partner = int(np.argmin(distances))
-        if (
-            distances[partner] > _SITE_TOL
-            or partner in used
-            or orbits[partner] != orbits[index]
-        ):
+        distances = np.abs(delta).max(axis=2)
+        block = distances.argmin(axis=1)
+        rows = np.arange(stop - start)
+        if (distances[rows, block] > _SITE_TOL).any() or (
+            orbit_labels[block] != orbit_labels[start:stop]
+        ).any():
             return None
-        used.add(partner)
-        image.append(partner)
-    return image
+        partners[start:stop] = block
+    if len(np.unique(partners)) != n_sites:
+        return None
+    return [int(p) for p in partners]
 
 
 # Derivation costs 0.2-0.4 s per net (more for a 152-slot blueprint

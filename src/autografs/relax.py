@@ -45,6 +45,7 @@ import numpy as np
 from scipy.optimize import linear_sum_assignment
 
 from autografs.data.uff4mof import UFF4MOF
+from autografs.data.uff4mof import element_of as _element_of
 from autografs.exceptions import RelaxationError
 
 if TYPE_CHECKING:
@@ -54,6 +55,44 @@ logger = logging.getLogger(__name__)
 
 # leading element symbol of a UFF4MOF type: C_R -> C, Zn4+2 -> Zn
 _ELEMENT_OF_TYPE = re.compile(r"^([A-Z][a-z]?)")
+
+
+def _quiet(verbose: bool) -> contextlib.AbstractContextManager:
+    """Suppress stdout unless verbose (LAMMPS and lammps-interface both
+    narrate their setup to stdout)."""
+    return (
+        contextlib.nullcontext()
+        if verbose
+        else contextlib.redirect_stdout(io.StringIO())
+    )
+
+
+def _with_new_geometry(
+    framework: Framework,
+    new_coords: np.ndarray,
+    cell: np.ndarray,
+    energy: float | None = None,
+) -> Framework:
+    """The same framework graph with relaxed coordinates (and cell).
+
+    Nodes first, in sorted order, then edges: the rebuilt graph gets
+    the same insertion order as every builder graph, so edge iteration
+    (and tuple orientation) matches the input exactly - adding edges
+    first would order nodes by edge encounter and flip some reported
+    orientations (networkx-internals-dependent, #145). ``new_coords``
+    follows sorted node order.
+    """
+    rebuilt = networkx.Graph(cell=cell)
+    for row, node in enumerate(sorted(framework.graph)):
+        copied = dict(framework.graph.nodes[node])
+        copied["coord"] = new_coords[row]
+        rebuilt.add_node(node, **copied)
+    rebuilt.add_edges_from(framework.graph.edges(data=True))
+    from autografs.framework import Framework as FrameworkCls
+
+    result = FrameworkCls(rebuilt, name=framework.name)
+    result.energy = energy
+    return result
 
 
 @contextlib.contextmanager
@@ -185,9 +224,10 @@ def _match_displacements(
         (n, 3) fractional displacements, minimum-image.
     """
     displacements = np.zeros_like(orig_frac)
+    orig_species_arr = np.array(orig_species)
     relaxed_species_arr = np.array(relaxed_species)
     for symbol in sorted(set(orig_species)):
-        rows = np.flatnonzero(np.array(orig_species) == symbol)
+        rows = np.flatnonzero(orig_species_arr == symbol)
         cols = np.flatnonzero(relaxed_species_arr == symbol)
         if len(cols) < len(rows):
             raise RelaxationError(
@@ -233,16 +273,6 @@ def _supported_types(force_field: str) -> set[str]:
     except ImportError:  # pragma: no cover - backend absent
         return set()
     return set(table)
-
-
-def _element_of(uff_symbol: str) -> str:
-    """Element of a UFF type symbol.
-
-    UFF pads the element into a fixed two-character field ("C_R", "N_3",
-    "Co6+2"), so the element is the first two characters with the
-    padding stripped.
-    """
-    return uff_symbol[:2].rstrip("_")
 
 
 @functools.cache
@@ -512,10 +542,7 @@ def relax_framework(
         free molecules lammps-interface cannot handle unattended, or
         the relaxed atoms cannot be mapped back onto the graph.
     """
-    sink = io.StringIO()
-    quiet: contextlib.AbstractContextManager = (
-        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
-    )
+    quiet = _quiet(verbose)
     # ignore_cleanup_errors: on Windows a handle on the LAMMPS data file
     # can outlive lmp.close(), and the resulting PermissionError from the
     # cleanup would discard a relaxation that had already succeeded. The
@@ -578,23 +605,9 @@ def relax_framework(
     new_frac = orig_frac + displacements
     new_coords = new_frac @ prim_matrix
 
-    # nodes first, in sorted order, then edges: the relaxed graph gets
-    # the same insertion order as every builder graph, so edge
-    # iteration (and tuple orientation) matches the input exactly -
-    # adding edges first would order nodes by edge encounter and flip
-    # some reported orientations (networkx-internals-dependent, #145)
-    relaxed = networkx.Graph(cell=prim_matrix)
-    # cart_coords (and therefore new_coords) follow sorted node order
-    for row, node in enumerate(sorted(framework.graph)):
-        copied = dict(framework.graph.nodes[node])
-        copied["coord"] = new_coords[row]
-        relaxed.add_node(node, **copied)
-    relaxed.add_edges_from(framework.graph.edges(data=True))
-    from autografs.framework import Framework as FrameworkCls
-
-    result = FrameworkCls(relaxed, name=framework.name)
-    result.energy = energy / float(supercell.prod())
-    return result
+    return _with_new_geometry(
+        framework, new_coords, prim_matrix, energy=energy / float(supercell.prod())
+    )
 
 
 #: Below this closest contact a UFF start is unusable: LJ goes as
@@ -653,8 +666,6 @@ def _push_off_overlaps(
 
     Returns the framework unchanged when nothing is overlapping.
     """
-    import tempfile
-
     from autografs.lammps_data import write_lammps_data
 
     _import_backends()
@@ -662,10 +673,7 @@ def _push_off_overlaps(
     if data.closest_contact >= SOFT_PUSHOFF_CONTACT:
         return framework
 
-    sink = io.StringIO()
-    quiet: contextlib.AbstractContextManager = (
-        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
-    )
+    quiet = _quiet(verbose)
     with tempfile.TemporaryDirectory(
         prefix="autografs_pushoff_", ignore_cleanup_errors=True
     ) as tmp:
@@ -777,8 +785,6 @@ def relax_framework_native(
     0.5% (bonds 0.0%, angles 0.1%, dihedrals 0.7%; the van der Waals
     term differs by the cutoff).
     """
-    import tempfile
-
     from autografs.lammps_data import write_lammps_data
 
     lammps, _, _, _ = _import_backends()
@@ -788,10 +794,7 @@ def relax_framework_native(
     original = framework
     framework = _push_off_overlaps(framework, force_field, verbose=verbose)
     data = write_lammps_data(framework, force_field=force_field)
-    sink = io.StringIO()
-    quiet: contextlib.AbstractContextManager = (
-        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
-    )
+    quiet = _quiet(verbose)
     with tempfile.TemporaryDirectory(
         prefix="autografs_native_", ignore_cleanup_errors=True
     ) as tmp:
@@ -847,16 +850,9 @@ def relax_framework_native(
         ]
     )
     # no supercell, so no fold-back: LAMMPS atom i+1 IS sorted node i
-    relaxed = networkx.Graph(cell=cell)
-    for row, node in enumerate(sorted(framework.graph)):
-        copied = dict(framework.graph.nodes[node])
-        copied["coord"] = positions[row] - np.array([xlo, ylo, zlo])
-        relaxed.add_node(node, **copied)
-    relaxed.add_edges_from(framework.graph.edges(data=True))
-    from autografs.framework import Framework as FrameworkCls
-
-    result = FrameworkCls(relaxed, name=framework.name)
-    result.energy = energy
+    result = _with_new_geometry(
+        framework, positions - np.array([xlo, ylo, zlo]), cell, energy=energy
+    )
     _reject_collapse(original, result)
     logger.info(
         f"Relaxed {framework.name!r} natively with {force_field}: "

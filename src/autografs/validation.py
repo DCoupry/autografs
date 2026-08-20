@@ -73,6 +73,9 @@ STRICT_MIN_DISTANCE = 1.5
 #: Two atoms closer than this are coincident, not bonded. Catches a
 #: corrupted relaxation, which can return bonded pairs at 1e-8 A.
 COINCIDENT_DISTANCE = 0.3
+#: Neighbor-list radius for the closest-pair scan: any bonded pair is
+#: within it, so the scan finds the minimum without a dense matrix.
+_CLOSEST_PAIR_SCAN_RADIUS = 3.0
 
 
 @dataclass(frozen=True)
@@ -715,7 +718,13 @@ def _closest_pair(structure) -> float | None:
     """Closest distance between any two atoms, bonded or not."""
     if len(structure) < 2:
         return None
-    centers, points, _, distances = structure.get_neighbor_list(r=COINCIDENT_DISTANCE)
+    # a bonded framework always has a pair within a covalent length, so
+    # the neighbor-list scan answers in the common case and the dense
+    # O(n^2) distance matrix is built only for pathologically sparse
+    # cells (it used to run on every clean structure)
+    centers, points, _, distances = structure.get_neighbor_list(
+        r=_CLOSEST_PAIR_SCAN_RADIUS
+    )
     real = distances[centers != points]
     if real.size:
         return float(real.min())
