@@ -296,11 +296,21 @@ def _node_slots(topology: Topology, run: SlotRun | HelicalRun) -> list[int]:
     """
     if run.nodes is not None:
         return list(run.nodes)
-    return [
-        s
-        for s in run.slots
-        if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-    ]
+    return [s for s in run.slots if _slot_degree(topology, s) > 2]
+
+
+def _slot_degree(topology: Topology, slot: int) -> int:
+    """Connection count of one blueprint slot (its dummy count)."""
+    return len(topology.slots[slot].atoms.indices_from_symbol("X"))
+
+
+def _min_image_norms(
+    delta: np.ndarray, cell: np.ndarray, inv: np.ndarray
+) -> np.ndarray:
+    """Minimum-image lengths of cartesian difference vectors."""
+    frac = delta @ inv
+    frac -= np.round(frac)
+    return np.asarray(np.linalg.norm(frac @ cell, axis=-1))
 
 
 def _unwrapped_node_frac(topology: Topology, run: HelicalRun) -> np.ndarray:
@@ -659,10 +669,7 @@ def _pair_ports(
     rows, cols = (
         candidates if candidates is not None else _port_candidates(port_slot, budget)
     )
-    delta = tips[rows] - tips[cols]
-    frac = delta @ inv
-    frac -= np.round(frac)
-    distance = np.linalg.norm(frac @ cell, axis=1)
+    distance = _min_image_norms(tips[rows] - tips[cols], cell, inv)
     order = np.argsort(distance, kind="stable")
     free = np.ones(n_ports, dtype=bool)
     remaining = dict(budget)
@@ -1414,9 +1421,9 @@ class _RodBuild:
         )
         left, right = pairs[:, 0], pairs[:, 1]
         anchor_array = np.asarray(anchors)
-        delta = (anchor_array[left] - anchor_array[right]) @ inv
-        delta -= np.round(delta)
-        distances = np.linalg.norm(delta @ cell, axis=1)
+        distances = _min_image_norms(
+            anchor_array[left] - anchor_array[right], cell, inv
+        )
         radius_array = np.asarray(radii)
         residuals = np.abs(distances - (radius_array[left] + radius_array[right]))
         return {
@@ -1730,11 +1737,9 @@ def _select_runs(
     if rod_is_helical:
 
         def _nodeset(a_run: HelicalRun) -> frozenset[int]:
-            return frozenset(
-                s
-                for s in a_run.slots
-                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-            )
+            # NOT _node_slots: the dedup compares detected runs by the
+            # degree convention alone, whatever a run's own `nodes` says
+            return frozenset(s for s in a_run.slots if _slot_degree(topology, s) > 2)
 
         seen: set[frozenset[int]] = set()
         by_period: dict[float, list[SlotRun | HelicalRun]] = {}

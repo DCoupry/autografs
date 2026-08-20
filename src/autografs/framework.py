@@ -121,24 +121,30 @@ def _append_cif_bonds(path: Path, framework: Framework) -> None:
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _cif_site_labels(lines: list[str]) -> list[str]:
-    """The ``_atom_site_label`` column of a P1 CIF, in file order."""
+def _atom_site_loop(lines: list[str], where: str) -> tuple[list[int], list[int]]:
+    """Header and site-row line indices of a P1 CIF's ``_atom_site_`` loop."""
     headers = [
         i for i, line in enumerate(lines) if line.strip().startswith("_atom_site_")
     ]
     if not headers:
-        raise ValueError("No _atom_site_ loop found in the CIF.")
+        raise ValueError(f"No _atom_site_ loop found in {where}.")
+    rows = []
+    for i in range(headers[-1] + 1, len(lines)):
+        if not lines[i].strip() or lines[i].strip().startswith(("loop_", "_", "#")):
+            break
+        rows.append(i)
+    return headers, rows
+
+
+def _cif_site_labels(lines: list[str]) -> list[str]:
+    """The ``_atom_site_label`` column of a P1 CIF, in file order."""
+    headers, rows = _atom_site_loop(lines, "the CIF")
     column = next(
         i
         for i, header in enumerate(headers)
         if lines[header].strip() == "_atom_site_label"
     )
-    labels = []
-    for i in range(headers[-1] + 1, len(lines)):
-        if not lines[i].strip() or lines[i].strip().startswith(("loop_", "_", "#")):
-            break
-        labels.append(lines[i].split()[column])
-    return labels
+    return [lines[i].split()[column] for i in rows]
 
 
 def _append_cif_charges(path: Path, charges: np.ndarray) -> None:
@@ -152,17 +158,8 @@ def _append_cif_charges(path: Path, charges: np.ndarray) -> None:
     order, so charges line up by position.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
-    headers = [
-        i for i, line in enumerate(lines) if line.strip().startswith("_atom_site_")
-    ]
-    if not headers:
-        raise ValueError(f"No _atom_site_ loop found in {path}.")
+    headers, rows = _atom_site_loop(lines, str(path))
     last_header = headers[-1]
-    rows = []
-    for i in range(last_header + 1, len(lines)):
-        if not lines[i].strip() or lines[i].strip().startswith(("loop_", "_", "#")):
-            break
-        rows.append(i)
     if len(rows) != len(charges):
         raise ValueError(
             f"CIF site count ({len(rows)}) does not match the number of "
@@ -251,20 +248,24 @@ class Framework:
         """The cell as a pymatgen Lattice."""
         return Lattice(self.cell)
 
+    def _column(self, key: str) -> list:
+        """One node attribute in sorted node order."""
+        return [self.graph.nodes[n][key] for n in sorted(self.graph)]
+
     @property
     def symbols(self) -> list[str]:
         """Element symbols in node order."""
-        return [self.graph.nodes[n]["symbol"] for n in sorted(self.graph)]
+        return self._column("symbol")
 
     @property
     def cart_coords(self) -> np.ndarray:
         """Unwrapped cartesian coordinates in node order."""
-        return np.array([self.graph.nodes[n]["coord"] for n in sorted(self.graph)])
+        return np.array(self._column("coord"))
 
     @property
     def mmtypes(self) -> list[str]:
         """UFF4MOF atom types in node order."""
-        return [self.graph.nodes[n]["ufftype"] for n in sorted(self.graph)]
+        return self._column("ufftype")
 
     @property
     def bonds(self) -> list[tuple[int, int, float]]:
@@ -289,11 +290,13 @@ class Framework:
         per copy, so every placed unit stays individually
         addressable.
         """
-        found: dict[int, str] = {}
-        for _, data in self.graph.nodes(data=True):
-            if "slot" in data:
-                found[data["slot"]] = data["sbu"]
-        return dict(sorted(found.items()))
+        return dict(
+            sorted(
+                (data["slot"], data["sbu"])
+                for _, data in self.graph.nodes(data=True)
+                if "slot" in data
+            )
+        )
 
     def min_contact(self, cutoff: float = 3.0) -> float:
         """Smallest periodic distance between non-bonded atoms.
@@ -570,7 +573,7 @@ class Framework:
         frac = self.cart_coords @ np.linalg.inv(self.cell) % 1.0
         # x % 1.0 returns exactly 1.0 for tiny negative x
         frac[frac >= 1.0] -= 1.0
-        tags = [self.graph.nodes[n]["tag"] for n in sorted(self.graph)]
+        tags = self._column("tag")
         site_properties: dict = {"tags": tags, "ufftype": self.mmtypes}
         charges = self.charges
         if charges is not None:

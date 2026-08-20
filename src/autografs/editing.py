@@ -22,12 +22,11 @@ from __future__ import annotations
 
 import itertools
 import logging
+import math
 from collections.abc import Iterable
 
 import networkx
 import numpy as np
-from pymatgen.analysis.graphs import MoleculeGraph
-from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_length, get_bond_order
 from pymatgen.core.structure import FunctionalGroups, Molecule
 from scipy.spatial.transform import Rotation
@@ -286,8 +285,6 @@ def _min_internet_contact(framework: Framework, n_atoms: int, cutoff: float) -> 
     Copies are blocks of n_atoms consecutive node ids, so the net of
     an atom is its id // n_atoms.
     """
-    import math
-
     centers, points, _, distances = framework.structure.get_neighbor_list(r=cutoff)
     if len(distances) == 0:
         return math.inf
@@ -699,12 +696,7 @@ def functionalize(
                 [parent_symbol] + [group[i].specie.symbol for i in real_indices],
                 np.vstack([parent_coord, placed]),
             )
-            strategy = EconNN(
-                tol=autografs.utils.BOND_TOLERANCE,
-                use_fictive_radius=True,
-                cutoff=autografs.utils.BOND_CUTOFF,
-            )
-            molgraph = MoleculeGraph.from_local_env_strategy(local, strategy=strategy)
+            molgraph = autografs.utils.molgraph_of(local)
             uff_lib, uff_symbs = autografs.utils.load_uff_lib(local)
             mmtypes = autografs.utils.find_mmtypes(
                 molgraph=molgraph, uff_lib=uff_lib, uff_symbs=uff_symbs

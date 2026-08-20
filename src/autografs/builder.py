@@ -144,14 +144,30 @@ def _displacement_simplex(plan, x0) -> np.ndarray | None:
     return np.asarray(vertices)
 
 
-def _refine(plan, x0, objective=None, seed_displacements=False):
-    """Nelder-Mead over a plan's free parameters."""
-    n_free = plan.cell_param.n_free + plan.n_slot_free
-    options = {
+def _data_dir() -> Path:
+    """The bundled package data directory."""
+    return Path(autografs.data.__path__[0])
+
+
+def _check_subset(subset, available, what: str) -> None:
+    """Raise on subset entries absent from the available names."""
+    unknown = set(subset) - set(available)
+    if unknown:
+        raise ValueError(f"Unknown {what} in subset: {sorted(unknown)}")
+
+
+def _nm_options(n_free: int) -> dict:
+    """Nelder-Mead convergence options, maxiter scaled per free parameter."""
+    return {
         "xatol": NELDER_MEAD_XATOL,
         "fatol": NELDER_MEAD_FATOL,
         "maxiter": NELDER_MEAD_MAXITER * n_free,
     }
+
+
+def _refine(plan, x0, objective=None, seed_displacements=False):
+    """Nelder-Mead over a plan's free parameters."""
+    options = _nm_options(plan.cell_param.n_free + plan.n_slot_free)
     if seed_displacements:
         simplex = _displacement_simplex(plan, x0)
         if simplex is not None:
@@ -183,11 +199,7 @@ def _refine_cell_only(plan, x0):
         objective,
         np.asarray(x0)[:n_cell],
         method="Nelder-Mead",
-        options={
-            "xatol": NELDER_MEAD_XATOL,
-            "fatol": NELDER_MEAD_FATOL,
-            "maxiter": NELDER_MEAD_MAXITER * n_cell,
-        },
+        options=_nm_options(n_cell),
     )
     return np.concatenate([result.x, zeros])
 
@@ -1364,7 +1376,7 @@ class Autografs:
         for k, v in mappings.items():
             if isinstance(k, int):
                 true_mappings[k] = None if v is None else to_fragment(v).copy()
-        all_indices = set(itertools.chain(*topology.mappings.values()))
+        all_indices = set(itertools.chain.from_iterable(topology.mappings.values()))
         missing = all_indices - true_mappings.keys()
         if missing:
             raise ValueError(f"Unfilled slots in mappings: {sorted(missing)}")
@@ -1393,7 +1405,7 @@ class Autografs:
             Custom SBUs with the same name as defaults will override them.
         """
         t0 = time.time()
-        data_dir = Path(autografs.data.__path__[0])
+        data_dir = _data_dir()
         sbu = autografs.utils.xyz_to_sbu(str(data_dir / "defaults.xyz"))
         # the PORMAKE building-block library (MIT, see PORMAKE_LICENSE.md
         # in the data directory), converted by scripts/import_pormake_bbs.py
@@ -1428,7 +1440,7 @@ class Autografs:
         """
         t0 = time.time()
         if topofile is None:
-            data_dir = Path(autografs.data.__path__[0])
+            data_dir = _data_dir()
             json_default = data_dir / "topologies.json.gz"
             if json_default.exists():
                 path = json_default
@@ -1454,7 +1466,7 @@ class Autografs:
             # them in lowercase (FAU -> fau); lookup-only, so nothing
             # is enumerated twice. attach_aliases drops entries whose
             # target is absent, so custom libraries are safe.
-            alias_path = Path(autografs.data.__path__[0]) / "iza_aliases.json"
+            alias_path = _data_dir() / "iza_aliases.json"
             if alias_path.exists():
                 aliases = json.loads(alias_path.read_text(encoding="utf-8"))
                 attached = topologies.attach_aliases(aliases)
@@ -1496,9 +1508,7 @@ class Autografs:
         >>> compatible = mofgen.list_topologies(sieve="Benzene_linear")
         """
         if subset is not None:
-            unknown = set(subset) - self.topologies.keys()
-            if unknown:
-                raise ValueError(f"Unknown topologies in subset: {sorted(unknown)}")
+            _check_subset(subset, self.topologies.keys(), "topologies")
             full_list = sorted(subset)
         else:
             full_list = sorted(self.topologies.keys())
@@ -1560,9 +1570,7 @@ class Autografs:
         >>> print(sorted(by_connectivity))  # [1, 2, 3, 4, ...]
         """
         if subset is not None:
-            unknown = set(subset) - self.sbu.keys()
-            if unknown:
-                raise ValueError(f"Unknown SBUs in subset: {sorted(unknown)}")
+            _check_subset(subset, self.sbu.keys(), "SBUs")
             sbus = [self.sbu[k] for k in subset]
         else:
             sbus = list(self.sbu.values())
