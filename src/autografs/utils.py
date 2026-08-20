@@ -69,6 +69,27 @@ BOND_TOLERANCE = 0.3  # Tolerance for bond detection in EconNN
 BOND_CUTOFF = 10.0  # Maximum cutoff distance for bond detection
 
 
+def copy_graph_markers(source, target) -> None:
+    """Copy the build-provenance graph markers between attribute dicts.
+
+    The markers keep guards and conventions working wherever a
+    framework's graph is rebuilt: ``rod_build`` (with its
+    ``rod_empty_slots``) drives the rod editing guard
+    (``editing._reject_rod``) and rod net verification, and
+    ``empty_slots`` (#179) tells ``verify_net`` which blueprint slots
+    to contract. Used by ``editing.replicated_graph`` and both
+    directions of ``framework_io``, so a marker added here propagates
+    through replication and save/load together instead of being
+    hand-copied (and silently dropped) per site.
+    """
+    if source.get("rod_build"):
+        target["rod_build"] = True
+        if source.get("rod_empty_slots"):
+            target["rod_empty_slots"] = list(source["rod_empty_slots"])
+    if source.get("empty_slots"):
+        target["empty_slots"] = list(source["empty_slots"])
+
+
 def format_indices(iterable: Iterable[int]) -> str:
     """Format a consecutive run of indices as "first-last" (or "only")."""
     lst = list(iterable)

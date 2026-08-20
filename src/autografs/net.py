@@ -307,18 +307,8 @@ def _contract_slots(edges: Counter[Edge], slots: set[int]) -> Counter[Edge]:
                 f"Cannot contract slot {slot}: not a 2-coordinated "
                 "vertex of the blueprint's quotient graph."
             )
-        (nb_a, v_a), (nb_b, v_b) = halves
-        adjacency[nb_a].remove((slot, _negate(v_a)))
-        adjacency[nb_b].remove((slot, _negate(v_b)))
-        adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
-        adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
-        del adjacency[slot]
-    contracted: Counter[Edge] = Counter()
-    for node, halves in adjacency.items():
-        for neighbor, voltage in halves:
-            contracted[_canonical(node, neighbor, np.asarray(voltage))] += 1
-    # every edge was seen from both ends
-    return Counter({edge: mult // 2 for edge, mult in contracted.items()})
+        _splice_out(adjacency, slot)
+    return _edges_from_adjacency(adjacency)
 
 
 def _verify_rod_net(framework: Framework, topology: Topology) -> None:
@@ -427,6 +417,37 @@ def _adjacency(edges: Counter[Edge]) -> _Adjacency:
     return dict(adjacency)
 
 
+def _splice_out(adjacency: _Adjacency, node: int) -> None:
+    """Splice a 2-coordinated vertex out of the adjacency, in place.
+
+    The vertex's two half-edges become one direct edge between its
+    neighbors, seen from both ends; the contracted edge runs
+    nb_a -> node -> nb_b, so its voltage chains the two hops. The
+    caller has already checked the vertex is a plain 2-coordinated
+    one (two half-edges, neither a self-loop).
+    """
+    (nb_a, v_a), (nb_b, v_b) = adjacency[node]
+    adjacency[nb_a].remove((node, _negate(v_a)))
+    adjacency[nb_b].remove((node, _negate(v_b)))
+    adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
+    adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
+    del adjacency[node]
+
+
+def _edges_from_adjacency(adjacency: _Adjacency) -> Counter[Edge]:
+    """Canonical edge multiset of a half-edge adjacency.
+
+    Every non-loop edge was seen from both ends and every self-loop
+    from both voltage signs (canonicalized to one key), so the raw
+    counts are halved.
+    """
+    edges: Counter[Edge] = Counter()
+    for node, halves in adjacency.items():
+        for neighbor, voltage in halves:
+            edges[_canonical(node, neighbor, np.asarray(voltage))] += 1
+    return Counter({edge: mult // 2 for edge, mult in edges.items()})
+
+
 def _prune_and_contract(adjacency: _Adjacency, contract: bool = True) -> _Adjacency:
     """Reduce a quotient graph to its topology-bearing vertices.
 
@@ -453,14 +474,7 @@ def _prune_and_contract(adjacency: _Adjacency, contract: bool = True) -> _Adjace
                 del adjacency[node]
                 changed = True
             elif len(halves) == 2 and contract:
-                (nb_a, v_a), (nb_b, v_b) = halves
-                # the contracted edge runs nb_a -> node -> nb_b, so its
-                # voltage chains the two hops
-                adjacency[nb_a].remove((node, _negate(v_a)))
-                adjacency[nb_b].remove((node, _negate(v_b)))
-                adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
-                adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
-                del adjacency[node]
+                _splice_out(adjacency, node)
                 changed = True
     return adjacency
 
@@ -490,15 +504,9 @@ def contract_quotient_edges(
         The reduced multiset, in the same canonical edge form as the
         input. Vertex ids are those of the surviving vertices.
     """
-    reduced = _prune_and_contract(_adjacency(edges), contract=contract)
-    quotient: Counter[Edge] = Counter()
-    for node, halves in reduced.items():
-        for neighbor, voltage in halves:
-            key = _canonical(node, neighbor, np.asarray(voltage))
-            quotient[key] += 1
-    # every non-loop edge was seen from both ends, every self-loop from
-    # both voltage signs (canonicalized to one key)
-    return Counter({edge: mult // 2 for edge, mult in quotient.items()})
+    return _edges_from_adjacency(
+        _prune_and_contract(_adjacency(edges), contract=contract)
+    )
 
 
 def coordination_sequences(
@@ -802,25 +810,10 @@ def axial_runs(
         its reverse are the same run (reported once, with the
         direction canonicalized lexicographically positive).
     """
-    cell = topology.cell.matrix
-    images = _topology_slot_images(topology)
-    centers = np.array(
-        [np.asarray(slot.atoms.cart_coords).mean(axis=0) for slot in topology.slots]
-    )
-    wrapped = centers - np.array([images[i] for i in range(len(centers))]) @ cell
-
-    steps: dict[int, list[tuple[int, np.ndarray, np.ndarray]]] = {
-        i: [] for i in range(len(centers))
-    }
-    for (a, b, voltage), _count in topology_quotient_edges(topology).items():
-        for u, v, sign in ((a, b, 1), (b, a, -1)):
-            offset = sign * np.asarray(voltage, dtype=float)
-            displacement = wrapped[v] + offset @ cell - wrapped[u]
-            if np.linalg.norm(displacement) > 1e-9:
-                steps[u].append((v, offset, displacement))
+    cell, wrapped, steps = _directed_steps(topology)
 
     found: dict[tuple, SlotRun] = {}
-    for start in range(len(centers)):
+    for start in range(len(wrapped)):
         for first, first_offset, first_disp in steps[start]:
             axis = first_disp / np.linalg.norm(first_disp)
             walk = [start, first]
@@ -1185,16 +1178,5 @@ def topology_rod_quotient_edges(
         halves = adjacency.get(slot)
         if halves is None or len(halves) != 2:
             continue  # not a plain 2-connected edge center; leave it be
-        (nb_a, v_a), (nb_b, v_b) = halves
-        adjacency[nb_a].remove((slot, _negate(v_a)))
-        adjacency[nb_b].remove((slot, _negate(v_b)))
-        adjacency[nb_a].append((nb_b, _add(_negate(v_a), v_b)))
-        adjacency[nb_b].append((nb_a, _add(_negate(v_b), v_a)))
-        del adjacency[slot]
-    edges: Counter[Edge] = Counter()
-    for node, halves in adjacency.items():
-        for neighbor, voltage in halves:
-            edges[_canonical(node, neighbor, np.asarray(voltage))] += 1
-    # every non-loop edge was seen from both ends, every self-loop from
-    # both voltage signs (canonicalized to one key)
-    return Counter({edge: mult // 2 for edge, mult in edges.items()})
+        _splice_out(adjacency, slot)
+    return _edges_from_adjacency(adjacency)

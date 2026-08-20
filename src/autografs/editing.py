@@ -377,14 +377,7 @@ def replicated_graph(
     combined = networkx.Graph(cell=framework.cell.copy() if cell is None else cell)
     # graph-level markers follow the framework through replication (the
     # rod-build editing guard must survive a supercell)
-    if framework.graph.graph.get("rod_build"):
-        combined.graph["rod_build"] = True
-        if framework.graph.graph.get("rod_empty_slots"):
-            combined.graph["rod_empty_slots"] = list(
-                framework.graph.graph["rod_empty_slots"]
-            )
-    if framework.graph.graph.get("empty_slots"):
-        combined.graph["empty_slots"] = list(framework.graph.graph["empty_slots"])
+    autografs.utils.copy_graph_markers(framework.graph.graph, combined.graph)
     tag_base = max((d["tag"] for _, d in graph.nodes(data=True)), default=0)
     slot_base = (
         max((d.get("slot", 0) for _, d in graph.nodes(data=True)), default=0) + 1
