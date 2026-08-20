@@ -28,7 +28,6 @@ does not forbid them, but only in-plane components should be read.
 from __future__ import annotations
 
 import contextlib
-import io
 import logging
 import tempfile
 from dataclasses import dataclass
@@ -38,7 +37,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from autografs.relax import _launch_lammps, _write_lammps_inputs
+from autografs.relax import _launch_lammps, _quiet, _write_lammps_inputs
 
 if TYPE_CHECKING:
     from pymatgen.core import Structure
@@ -362,10 +361,7 @@ def elastic_properties(
     """
     if strain <= 0.0:
         raise ValueError(f"strain must be positive, got {strain}.")
-    sink = io.StringIO()
-    quiet: contextlib.AbstractContextManager = (
-        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
-    )
+    quiet = _quiet(verbose)
     # ignore_cleanup_errors: see relax_framework - a lingering handle on
     # the staged LAMMPS files must not discard a completed calculation
     with tempfile.TemporaryDirectory(

@@ -1,31 +1,7 @@
 """
-Utility functions for AuToGraFS framework generation.
-
-This module provides utility functions for file I/O, molecular graph
-manipulation, force field parameterization, and structure visualization.
-
-Functions
----------
-format_mappings
-    Format slot-to-SBU mappings for logging output.
-get_xyz_names
-    Extract fragment names from multi-structure XYZ files.
-xyz_to_sbu
-    Load Secondary Building Units from an XYZ file.
-load_uff_lib
-    Load UFF force field parameters for a molecule.
-find_element_cutoffs
-    Calculate bond distance cutoffs from UFF radii.
-find_mmtypes
-    Determine UFF atom types from molecular connectivity.
-fragment_to_molgraph
-    Convert a Fragment to a pymatgen MoleculeGraph.
-fragments_to_networkx
-    Combine fragments into a single networkx Graph.
-view_graph
-    Visualize a molecular graph using ASE.
-networkx_to_gulp
-    Export a molecular graph to GULP input format.
+Utility functions for AuToGraFS framework generation: XYZ I/O,
+molecular-graph conversions, UFF force-field typing, and structure
+export (see ``__all__``).
 """
 
 from __future__ import annotations
@@ -401,12 +377,9 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
     mol = fragment.atoms.copy()
     dummies_idx = fragment.atoms.indices_from_symbol("X")
     mol.replace_species({"X": "H"})
-    # setting up UFF type analysis
     uff_lib, uff_symbs = load_uff_lib(mol)
-    # obtaining cutoffs from the maximum UFF radius
     strategy = EconNN(tol=BOND_TOLERANCE, use_fictive_radius=True, cutoff=BOND_CUTOFF)
     mg = MoleculeGraph.from_local_env_strategy(mol, strategy=strategy)
-    # add mmtypes
     mmtypes = find_mmtypes(molgraph=mg, uff_lib=uff_lib, uff_symbs=uff_symbs)
     for i, mmtype in enumerate(mmtypes):
         mg.molecule[i].properties["ufftype"] = mmtype
@@ -442,7 +415,6 @@ def fragment_to_molgraph(fragment: Fragment) -> MoleculeGraph:
                     key=lambda i: float(np.linalg.norm(coords[i] - coords[dummy_idx])),
                 )
                 anchor_tags.append((int(tag), nearest - removed_before[nearest]))
-    # remove dummies
     mg.remove_nodes(list(dummies_idx))
     mg.graph.graph["anchor_tags"] = anchor_tags
     return mg
@@ -490,7 +462,6 @@ def fragments_to_networkx(
         # obtaining non-standard cutoffs from the maximum UFF radius
         bond_lengths = find_element_cutoffs(*load_uff_lib(subgraph.molecule))
         this_len = len(subgraph.molecule)
-        # add the nodes
         species = [s.symbol for s in subgraph.molecule.species]
         coords = subgraph.molecule.cart_coords
         tags = subgraph.molecule.site_properties["tags"]
@@ -508,13 +479,13 @@ def fragments_to_networkx(
                 sbu=fragment.name,
             )
         for i in range(this_len):
-            for j, ij_dist in [
-                (s.index, s.dist) for s in subgraph.get_connected_sites(i)
-            ]:
-                # evaluate bond orders
+            for site in subgraph.get_connected_sites(i):
+                j = site.index
+                if j <= i:
+                    continue  # symmetric listing: each bond appears twice
                 uff_bl = bond_lengths[(species[i], species[j])]
                 bo = get_bond_order(
-                    species[i], species[j], ij_dist, tol=0.2, default_bl=uff_bl
+                    species[i], species[j], site.dist, tol=0.2, default_bl=uff_bl
                 )
                 full_graph.add_edge(i + offset, j + offset, bond_order=bo)
         offset += this_len
@@ -673,7 +644,6 @@ def networkx_to_gulp(
 
     out_string = "\n".join(lines)
 
-    # Write to file
     if write_to_file:
         output_path = Path.cwd() / f"{name}.gin"
         logger.info(f" [x] Saved to {output_path}")

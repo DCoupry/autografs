@@ -97,23 +97,24 @@ def _coincidence_pairs(
         for j in range(-max_index, max_index + 1)
         if (i, j) != (0, 0) and math.gcd(abs(i), abs(j)) == 1
     ]
-    vectors = {ij: np.asarray(ij, dtype=float) @ basis for ij in indices}
-    lengths = {ij: float(np.linalg.norm(v)) for ij, v in vectors.items()}
+    vectors = np.asarray(indices, dtype=float) @ basis
+    lengths = np.linalg.norm(vectors, axis=1)
     tolerance = max(max_strain, 1e-9)
-    pairs = []
-    for v_ij, v in vectors.items():
-        for w_ij, w in vectors.items():
-            if w_ij == v_ij:
-                continue
-            if abs(lengths[w_ij] / lengths[v_ij] - 1.0) > tolerance:
-                continue
-            angle = math.degrees(math.atan2(v[0] * w[1] - v[1] * w[0], float(v @ w)))
-            if angle <= 1e-9:
-                # the negative-angle twin of every candidate appears
-                # with v and w exchanged; keep one chirality
-                continue
-            pairs.append((v_ij, w_ij, angle))
-    return pairs
+    # all ordered (v, w) pairs at once, rows = v: near-equal lengths,
+    # positive signed angle only (the negative-angle twin of every
+    # candidate appears with v and w exchanged; keep one chirality)
+    length_ok = np.abs(lengths[None, :] / lengths[:, None] - 1.0) <= tolerance
+    cross = (
+        vectors[:, 0, None] * vectors[None, :, 1]
+        - vectors[:, 1, None] * vectors[None, :, 0]
+    )
+    angles = np.degrees(np.arctan2(cross, vectors @ vectors.T))
+    keep = length_ok & (angles > 1e-9)
+    np.fill_diagonal(keep, False)
+    return [
+        (indices[v], indices[w], float(angles[v, w]))
+        for v, w in zip(*np.nonzero(keep), strict=True)
+    ]
 
 
 def _reduce_candidate(

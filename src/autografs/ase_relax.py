@@ -27,15 +27,13 @@ cell convention ``Framework.energy`` uses everywhere.
 
 from __future__ import annotations
 
-import contextlib
-import io
 import logging
 from typing import TYPE_CHECKING, Any
 
-import networkx
 import numpy as np
 
 from autografs.exceptions import RelaxationError
+from autografs.relax import _quiet, _with_new_geometry
 
 if TYPE_CHECKING:
     from ase.calculators.calculator import Calculator
@@ -46,7 +44,8 @@ logger = logging.getLogger(__name__)
 
 EV_TO_KCAL_PER_MOL = 23.060548
 
-# constructors are imported lazily; each entry is (builder, install hint)
+# calculator names the by-name dispatch accepts; the backends behind
+# them are imported lazily, with install hints on failure
 _KNOWN_CALCULATORS = ("gfn-ff", "gfn1", "gfn2", "dftb")
 
 
@@ -220,10 +219,7 @@ def relax_framework_ase(
             "provide stress."
         )
     target = FrechetCellFilter(atoms) if relax_cell else atoms
-    sink = io.StringIO()
-    quiet: contextlib.AbstractContextManager = (
-        contextlib.nullcontext() if verbose else contextlib.redirect_stdout(sink)
-    )
+    quiet = _quiet(verbose)
     try:
         with quiet:
             optimizer = FIRE(target, logfile="-" if verbose else None)
@@ -261,18 +257,6 @@ def relax_framework_ase(
         f"cell, max atom displacement {moved.max():.2f} A."
     )
 
-    # nodes first, in sorted order, then edges: same insertion order
-    # as every builder graph, so edge iteration matches the input
-    # exactly (#145)
-    relaxed = networkx.Graph(cell=new_cell)
-    for row, node in enumerate(sorted(framework.graph)):
-        copied = dict(framework.graph.nodes[node])
-        copied["coord"] = new_coords[row]
-        relaxed.add_node(node, **copied)
-    relaxed.add_edges_from(framework.graph.edges(data=True))
-
-    from autografs.framework import Framework as FrameworkCls
-
-    result = FrameworkCls(relaxed, name=framework.name)
-    result.energy = energy_ev * EV_TO_KCAL_PER_MOL
-    return result
+    return _with_new_geometry(
+        framework, new_coords, new_cell, energy=energy_ev * EV_TO_KCAL_PER_MOL
+    )

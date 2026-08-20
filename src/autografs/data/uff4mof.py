@@ -30,6 +30,16 @@ class UFFType(NamedTuple):
     coordination: int
 
 
+def element_of(uff_symbol: str) -> str:
+    """Element of a UFF type symbol.
+
+    UFF pads the element into a fixed two-character field ("C_R",
+    "N_3", "Co6+2"), so the element is the first two characters with
+    the padding stripped.
+    """
+    return uff_symbol[:2].rstrip("_")
+
+
 UFF4MOF: tuple[UFFType, ...] = (
     UFFType("X_", 0.354, 180.0, 1),
     UFFType("H_", 0.354, 180.0, 1),

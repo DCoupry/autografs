@@ -181,6 +181,8 @@ def topology_from_string(
             elements.append(get_el_sp(int(tokens[2])))
             xyz.append(np.array(tokens[3:], dtype=float))
         elif key.startswith("EDGE_CENTER"):
+            # NB: this branch must stay BEFORE the EDGE one - both
+            # prefixes match startswith("EDGE")
             # add a linear connector, represented by He
             elements.append(get_el_sp(2))
             xyz.append(np.array(tokens[1:], dtype=float))

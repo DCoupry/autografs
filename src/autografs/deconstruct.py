@@ -73,7 +73,14 @@ from autografs.fragment import Fragment
 # _canonical and _split_image are net's gauge conventions; the unit
 # quotient graph below must share them exactly, so it uses the same
 # helpers rather than re-deriving them
-from autografs.net import Edge, NetMatches, _canonical, _split_image, identify_net
+from autografs.net import (
+    Edge,
+    NetMatches,
+    _canonical,
+    _negate,
+    _split_image,
+    identify_net,
+)
 from autografs.utils import (
     BOND_CUTOFF,
     BOND_TOLERANCE,
@@ -387,19 +394,35 @@ def merge_fragment(
     merged fragment therefore reads "same building block for the
     builder", not "same molecule".
     """
+    matched, name = _resolve_name(library, instance, base_name)
+    if matched is not None:
+        return matched
+    typed = instance.copy()
+    typed.name = name
+    library[name] = typed
+    return name
+
+
+def _resolve_name(
+    library: Mapping[str, Fragment], instance: Fragment, base_name: str
+) -> tuple[str | None, str]:
+    """Walk ``base_name`` and its numeric suffixes for a geometric match.
+
+    The one walk both merge_fragment and match_fragment take: returns
+    the matching entry's name (None when no occupied name matches) and
+    the first free name, so the identity test - arm-direction RMSD
+    within DEDUPLICATION_MAX_RMSD - lives in exactly one place.
+    """
     name = base_name
     suffix = 1
     while name in library:
         if library[name].has_compatible_symmetry(
             instance, max_rmsd=DEDUPLICATION_MAX_RMSD
         ):
-            return name
+            return name, name
         suffix += 1
         name = f"{base_name}_{suffix}"
-    typed = instance.copy()
-    typed.name = name
-    library[name] = typed
-    return name
+    return None, name
 
 
 def match_fragment(
@@ -413,16 +436,7 @@ def match_fragment(
     re-expressed in another harvest's vocabulary - the operation
     assembly fingerprints (autografs.fingerprint) are built on.
     """
-    name = base_name
-    suffix = 1
-    while name in library:
-        if library[name].has_compatible_symmetry(
-            instance, max_rmsd=DEDUPLICATION_MAX_RMSD
-        ):
-            return name
-        suffix += 1
-        name = f"{base_name}_{suffix}"
-    return None
+    return _resolve_name(library, instance, base_name)[0]
 
 
 def _hill_formula(symbols: Iterable[str]) -> str:
@@ -449,17 +463,29 @@ def _structure_bond_graph(structure: Structure) -> networkx.MultiGraph:
     # spurious long metal-metal contacts
     cutoffs = find_element_cutoffs(*load_uff_lib(structure))
     frac = structure.frac_coords
-    lattice = structure.lattice
+    matrix = structure.lattice.matrix
     symbols = [site.specie.symbol for site in structure]
     bonds = networkx.MultiGraph()
     bonds.add_nodes_from(range(len(structure)))
-    for u, v, data in graph.graph.edges(data=True):
-        jimage = tuple(int(x) for x in data["to_jimage"])
-        vector = lattice.get_cartesian_coords(frac[v] + jimage) - (
-            lattice.get_cartesian_coords(frac[u])
-        )
-        distance = float(np.linalg.norm(vector))
-        if distance > BOND_LENGTH_SLACK * cutoffs[(symbols[u], symbols[v])]:
+    detected = [
+        (u, v, tuple(int(x) for x in data["to_jimage"]))
+        for u, v, data in graph.graph.edges(data=True)
+    ]
+    if not detected:
+        return bonds
+    # all bond lengths in one pass instead of two pymatgen coordinate
+    # calls per edge (this runs once per guest-removal iteration)
+    us = np.fromiter((u for u, _, _ in detected), dtype=int, count=len(detected))
+    vs = np.fromiter((v for _, v, _ in detected), dtype=int, count=len(detected))
+    jimages = np.array([j for _, _, j in detected], dtype=float)
+    distances = np.linalg.norm(
+        (frac[vs] + jimages) @ matrix - frac[us] @ matrix, axis=1
+    )
+    limits = np.array(
+        [BOND_LENGTH_SLACK * cutoffs[(symbols[u], symbols[v])] for u, v, _ in detected]
+    )
+    for (u, v, jimage), keep in zip(detected, distances <= limits, strict=True):
+        if not keep:
             continue
         # canonical orientation low-index -> high-index: an undirected
         # networkx edge yields its data from either end, so the image
@@ -625,11 +651,11 @@ def _ring_bonds(
         offset = _jimage_from(u, v, data["to_jimage"])
         voltage = (int(offset[0]), int(offset[1]), int(offset[2]))
         adjacency[u].append((v, voltage))
-        adjacency[v].append((u, (-voltage[0], -voltage[1], -voltage[2])))
+        adjacency[v].append((u, _negate(voltage)))
         edges.append((u, v, voltage))
     ring_bonds: set[tuple[int, int, _Voltage]] = set()
     for u, v, voltage in edges:
-        back = (-voltage[0], -voltage[1], -voltage[2])
+        back = _negate(voltage)
         target = (v, voltage)
         seen = {(u, (0, 0, 0))}
         frontier: deque[tuple[tuple[int, _Voltage], int]] = deque([((u, (0, 0, 0)), 0)])

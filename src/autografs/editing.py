@@ -30,6 +30,7 @@ from pymatgen.analysis.graphs import MoleculeGraph
 from pymatgen.analysis.local_env import EconNN
 from pymatgen.core.bonds import get_bond_length, get_bond_order
 from pymatgen.core.structure import FunctionalGroups, Molecule
+from scipy.spatial.transform import Rotation
 
 import autografs.utils
 from autografs.framework import Framework
@@ -129,12 +130,8 @@ def _anchor_nodes(framework: Framework, nodes: list[int]) -> list[int]:
 
 
 def _axis_rotation(axis: np.ndarray, theta: float) -> np.ndarray:
-    """Rodrigues rotation matrix around a unit axis."""
-    x, y, z = axis
-    skew = np.array([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]])
-    return np.asarray(
-        np.eye(3) + np.sin(theta) * skew + (1.0 - np.cos(theta)) * (skew @ skew)
-    )
+    """Rotation matrix around a unit axis."""
+    return np.asarray(Rotation.from_rotvec(theta * np.asarray(axis)).as_matrix())
 
 
 def _rotation_between(source: np.ndarray, target: np.ndarray) -> np.ndarray:
