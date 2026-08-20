@@ -339,10 +339,13 @@ def rod_topology_from_deconstruction(result: Deconstruction, name: str = "self-r
     Returns
     -------
     tuple
-        ``(topology, run, lateral_mapping)`` where ``run`` is a
-        ``SlotRun`` (screwless rod) or ``HelicalRun`` (its screw from
-        the rod's own canonical repeat) and ``lateral_mapping`` maps
-        lateral slot index -> fragment name (the identity assignment).
+        ``(topology, run, lateral_mapping, rod_fragment)`` where
+        ``run`` is a ``SlotRun`` (screwless rod) or ``HelicalRun``
+        (its screw from the rod's own canonical repeat),
+        ``lateral_mapping`` maps lateral slot index -> fragment name
+        (the identity assignment), and ``rod_fragment`` is the
+        harvested rod in its buildable form - the ``RodFragment`` to
+        hand to ``build_rod_framework``.
 
     Raises
     ------
