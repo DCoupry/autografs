@@ -222,11 +222,15 @@ def commensurate_twists(
 
 def _supercell_translations(
     basis: np.ndarray, supercell: np.ndarray
-) -> list[np.ndarray]:
-    """Cartesian lattice translations of ``basis`` inside ``supercell``.
+) -> list[tuple[int, int]]:
+    """Integer lattice translations of ``basis`` inside ``supercell``.
 
     ``supercell`` is the (2, 2) cartesian matrix whose rows span the
-    moiré cell; the returned translations tile it exactly once.
+    moiré cell; the returned integer index pairs tile it exactly once
+    (cartesian translation of pair (i, j) is ``(i, j) @ basis``). The
+    integers are what the bond rewiring in ``_tiled_layer_graph``
+    needs: which copy a boundary-crossing bond lands in is exact
+    integer arithmetic, not geometry.
     """
     inverse = np.linalg.inv(supercell)
     # integer bounding box from the supercell corners in basis units
@@ -237,10 +241,9 @@ def _supercell_translations(
     translations = []
     for i in range(lo[0], hi[0] + 1):
         for j in range(lo[1], hi[1] + 1):
-            t = np.array([i, j], dtype=float) @ basis
-            frac = t @ inverse
+            frac = np.array([i, j], dtype=float) @ basis @ inverse
             if np.all(frac > -1e-9) and np.all(frac < 1.0 - 1e-9):
-                translations.append(t)
+                translations.append((i, j))
     expected = int(round(abs(np.linalg.det(supercell) / np.linalg.det(basis))))
     if len(translations) != expected:
         raise StackingError(
@@ -249,6 +252,72 @@ def _supercell_translations(
             "degenerate."
         )
     return translations
+
+
+def _tiled_layer_graph(
+    layer: Framework,
+    indices: list[tuple[int, int]],
+    new_cell: np.ndarray,
+    z_shift: float,
+) -> networkx.Graph:
+    """Tile a primitive layer into the moiré cell, bonds rewired.
+
+    ``replicated_graph`` with its default ``copy_edges`` keeps every
+    bond inside its own copy, which is exact when each copy is a full
+    periodic layer under the same in-plane cell (the preset stacking
+    modes) and wrong here: the copies are primitive tiles inside a
+    *larger* in-plane cell, so a bond crossing the primitive boundary
+    must land in the neighbouring copy. Left intra-copy, it reads as a
+    bond one primitive lattice vector long that no moiré lattice
+    translation can shorten -- measured on the hcb bilayer before this
+    existed, 28 of 672 bonds came out 13.1 Å.
+
+    The rewiring is exact integer arithmetic. A bond's primitive image
+    ``m`` is recovered by minimum-image rounding under the layer's own
+    cell, and copy ``(i, j)`` then bonds into copy ``(i - m0, j - m1)``
+    folded back into the moiré cell modulo the supercell's integer
+    lattice.
+    """
+    from autografs.editing import replicated_graph
+
+    basis = layer.cell[:2, :2]
+    shifts = [
+        np.array([t[0], t[1], z_shift])
+        for t in (np.array(ij, dtype=float) @ basis for ij in indices)
+    ]
+    combined = replicated_graph(layer, shifts, cell=new_cell, copy_edges=False)
+
+    # the supercell in this layer's own basis units is integer by
+    # construction (for the top layer too: the coincidence carries the
+    # v basis onto the w basis, so the moiré cell is v_int there)
+    w_float = new_cell[:2, :2] @ np.linalg.inv(basis)
+    w_int = np.rint(w_float).astype(int)
+    if not np.allclose(w_float, w_int, atol=1e-6):
+        raise StackingError(
+            "Moiré supercell is not an integer supercell of the layer "
+            f"lattice (got {w_float}); the coincidence is inconsistent."
+        )
+    w_inverse = np.linalg.inv(w_int.astype(float))
+    copy_of = {ij: k for k, ij in enumerate(indices)}
+
+    graph = layer.graph
+    n_atoms = len(graph)
+    inverse = np.linalg.inv(layer.cell)
+    for a, b, data in graph.edges(data=True):
+        delta = np.asarray(graph.nodes[b]["coord"]) - np.asarray(
+            graph.nodes[a]["coord"]
+        )
+        m = np.rint(delta @ inverse).astype(int)
+        for k, (i, j) in enumerate(indices):
+            if m[0] == 0 and m[1] == 0:
+                partner = k
+            else:
+                target = np.array([i - m[0], j - m[1]], dtype=float)
+                frac = target @ w_inverse
+                folded = target - np.floor(frac + 1e-9) @ w_int
+                partner = copy_of[(int(round(folded[0])), int(round(folded[1])))]
+            combined.add_edge(a + k * n_atoms, b + partner * n_atoms, **dict(data))
+    return combined
 
 
 def twisted_bilayer(
@@ -299,7 +368,6 @@ def twisted_bilayer(
         If no commensurate angle lies within the tolerance, or the
         moiré supercell exceeds ``max_atoms``.
     """
-    from autografs.editing import replicated_graph
     from autografs.framework import Framework as FrameworkCls
 
     candidates = commensurate_twists(
@@ -339,21 +407,19 @@ def twisted_bilayer(
     new_cell[:2, :2] = super2d
     new_cell[2, 2] = 2.0 * interlayer
 
-    # bottom layer: unrotated copies tiling the moiré cell
-    bottom_shifts = [
-        np.array([t[0], t[1], 0.0]) for t in _supercell_translations(basis, super2d)
-    ]
-    combined = replicated_graph(framework, bottom_shifts, cell=new_cell)
+    # bottom layer: unrotated copies tiling the moiré cell, boundary
+    # bonds rewired into the neighbouring copies
+    combined = _tiled_layer_graph(
+        framework, _supercell_translations(basis, super2d), new_cell, 0.0
+    )
 
     # top layer: the exact commensurate transform (rotation + any
     # admitted strain) applied in-plane, then tiled and lifted
     top = _transformed_layer(framework, chosen.transform)
     top_basis = basis @ chosen.transform
-    top_shifts = [
-        np.array([t[0], t[1], interlayer])
-        for t in _supercell_translations(top_basis, super2d)
-    ]
-    top_graph = replicated_graph(top, top_shifts, cell=new_cell)
+    top_graph = _tiled_layer_graph(
+        top, _supercell_translations(top_basis, super2d), new_cell, interlayer
+    )
     _append_graph(combined, top_graph)
 
     combined.graph["twist_angle"] = chosen.angle

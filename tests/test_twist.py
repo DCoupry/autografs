@@ -230,6 +230,19 @@ class TestTwistedBilayer:
         assert moire.graph.number_of_edges() == 2 * 7 * layer.graph.number_of_edges()
         # vdW-stacked layers must not clash
         assert moire.min_contact() > 1.5
+        # every bond must realise at a covalent length under the moiré
+        # cell's minimum image. The tiling rewires primitive-boundary
+        # bonds into the neighbouring copy; before it did, 28 of 672
+        # bonds here read as 13 A "bonds" spanning a primitive cell,
+        # invisible to the count and min_contact checks above.
+        cell = np.asarray(moire.cell)
+        inverse = np.linalg.inv(cell)
+        for i, j in moire.graph.edges():
+            delta = np.asarray(moire.graph.nodes[j]["coord"]) - np.asarray(
+                moire.graph.nodes[i]["coord"]
+            )
+            delta = delta - np.round(delta @ inverse) @ cell
+            assert np.linalg.norm(delta) < 2.0
 
     def test_direct_call_matches_stack(self):
         layer = _square_layer()
