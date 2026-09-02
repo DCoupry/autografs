@@ -442,6 +442,17 @@ rod's slots are its repeats and linker placements, not blueprint slots. A
 mis-wired build (a dropped continuation, a linker on the wrong unit)
 raises `NetMismatchError`.
 
+By default the verifier compares against every straight and helical run it
+detects on the blueprint. When you chose the run yourself
+(`build_rod(..., run=my_run, verify_net=True)`, or
+`mof.verify_net(topology, runs=[my_run])`) it compares against exactly that
+run instead. That matters for a structure's **own** blueprint
+(`rod_topology_from_deconstruction`): a P1 cell with one node slot per
+chemical repeat and no edge centres has nothing detection can read, and its
+cut list never held the rod's own continuation, so the verifier supplies the
+continuation from the run — consecutive repeats bonded within the period, the
+last closing on the first across the run's generator.
+
 ## Editing rod frameworks
 
 `Framework.is_rod` flags a rod build. Because rods carry explicit

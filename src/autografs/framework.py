@@ -35,10 +35,13 @@ import autografs.utils
 from autografs.exceptions import StackingError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import ase
     from pymatgen.core.structure import Molecule
 
     from autografs.elastic import ElasticProperties
+    from autografs.net import HelicalRun, SlotRun
     from autografs.topology import Topology
     from autografs.validation import ValidationReport
 
@@ -396,7 +399,11 @@ class Framework:
             require_connected=require_connected,
         )
 
-    def verify_net(self, topology: Topology) -> None:
+    def verify_net(
+        self,
+        topology: Topology,
+        runs: Sequence[SlotRun | HelicalRun] | None = None,
+    ) -> None:
         """Check that this as-built framework realizes its blueprint.
 
         Compares the labeled quotient graphs (one node per slot, one
@@ -418,6 +425,12 @@ class Framework:
         ----------
         topology : Topology
             The blueprint this framework was built on.
+        runs : sequence of SlotRun or HelicalRun, optional
+            Rod frameworks only: the run(s) the rod was laid down on.
+            Verification is then against exactly that rod form rather
+            than every run detection finds - required for a
+            structure's own self-blueprint, which detection cannot
+            read. Ignored for finite builds.
 
         Raises
         ------
@@ -426,7 +439,7 @@ class Framework:
         """
         from autografs.net import verify_net
 
-        verify_net(self, topology)
+        verify_net(self, topology, runs)
 
     # ------------------------------------------------------------------
     # porosity descriptors (implementations in autografs.porosity)

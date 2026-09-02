@@ -51,7 +51,7 @@ import numpy as np
 from autografs.exceptions import NetMismatchError
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping
+    from collections.abc import Iterable, Mapping, Sequence
 
     from autografs.framework import Framework
     from autografs.topology import Topology
@@ -221,7 +221,11 @@ def framework_quotient_edges(
     return edges
 
 
-def verify_net(framework: Framework, topology: Topology) -> None:
+def verify_net(
+    framework: Framework,
+    topology: Topology,
+    runs: Sequence[SlotRun | HelicalRun] | None = None,
+) -> None:
     """Check that a built framework realizes its blueprint topology.
 
     Compares the labeled quotient graphs (slots + inter-slot bonds
@@ -236,6 +240,12 @@ def verify_net(framework: Framework, topology: Topology) -> None:
         The built framework (untouched by post-build editing).
     topology : Topology
         The blueprint it was built on.
+    runs : sequence of SlotRun or HelicalRun, optional
+        Rod frameworks only: the slot run(s) the rod was laid down on.
+        When given, verification is against exactly that rod form
+        instead of every run detection finds on the blueprint - the
+        only route for a blueprint detection cannot read, such as a
+        structure's own P1 self-blueprint. Ignored for finite builds.
 
     Raises
     ------
@@ -253,7 +263,7 @@ def verify_net(framework: Framework, topology: Topology) -> None:
     """
     _require_provenance(framework)
     if framework.is_rod:
-        _verify_rod_net(framework, topology)
+        _verify_rod_net(framework, topology, runs)
         return
     # slots deliberately left empty (#179) exist in the blueprint but
     # not in the build; contract them out of the blueprint's quotient
@@ -311,7 +321,11 @@ def _contract_slots(edges: Counter[Edge], slots: set[int]) -> Counter[Edge]:
     return _edges_from_adjacency(adjacency)
 
 
-def _verify_rod_net(framework: Framework, topology: Topology) -> None:
+def _verify_rod_net(
+    framework: Framework,
+    topology: Topology,
+    runs: Sequence[SlotRun | HelicalRun] | None = None,
+) -> None:
     """Verify a rod framework against its blueprint's PoE form.
 
     A rod build (``build_rod``) records its continuation as direct
@@ -327,6 +341,16 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
     least one of the blueprint's runs. Uncontracted, so the linkers'
     2-connected decoration is checked, not blurred away.
 
+    With ``runs`` given, the rod form is built on exactly those runs
+    and nothing is detected: the caller laid the rod down on them, so
+    they are the blueprint the build answers to. That is the only
+    route for a self-blueprint (``rod_topology_from_deconstruction``):
+    a P1 cell with one node slot per chemical repeat and no edge
+    centers has nothing straight or helical for detection to find, and
+    the corpus arm that leaned on detection recorded zero
+    verifications out of 203 composition-exact rebuilds for that
+    reason alone.
+
     Raises
     ------
     NetMismatchError
@@ -339,27 +363,30 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
     # directly); contracted out of the blueprint alongside the runs' own
     # edge centers so the two forms are comparable
     empty_slots = framework.graph.graph.get("rod_empty_slots", ())
-    # candidate rod-form quotients: helical runs grouped by screw order
-    # (a net can carry several - unc has a 2_1 and a 4_1 over the same
-    # nodes - and only one order is the rod's; a cross-linked multi-rod
-    # net like etb has one rod per helix, all the same order), or each
-    # straight axial run on its own (pcu-family)
-    by_order: dict[int, list[HelicalRun]] = {}
-    seen: dict[int, set[frozenset[int]]] = {}
-    for run in helical_runs(topology):
-        nodes = frozenset(
-            s
-            for s in run.slots
-            if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
-        )
-        if nodes in seen.setdefault(run.screw_order, set()):
-            continue
-        seen[run.screw_order].add(nodes)
-        by_order.setdefault(run.screw_order, []).append(run)
-    candidates: list[list[SlotRun | HelicalRun]] = [
-        list(group) for group in by_order.values()
-    ]
-    candidates.extend([run] for run in axial_runs(topology))
+    candidates: list[list[SlotRun | HelicalRun]]
+    if runs is not None:
+        candidates = [list(runs)]
+    else:
+        # candidate rod-form quotients: helical runs grouped by screw
+        # order (a net can carry several - unc has a 2_1 and a 4_1 over
+        # the same nodes - and only one order is the rod's; a
+        # cross-linked multi-rod net like etb has one rod per helix, all
+        # the same order), or each straight axial run on its own
+        # (pcu-family)
+        by_order: dict[int, list[HelicalRun]] = {}
+        seen: dict[int, set[frozenset[int]]] = {}
+        for run in helical_runs(topology):
+            nodes = frozenset(
+                s
+                for s in run.slots
+                if len(topology.slots[s].atoms.indices_from_symbol("X")) > 2
+            )
+            if nodes in seen.setdefault(run.screw_order, set()):
+                continue
+            seen[run.screw_order].add(nodes)
+            by_order.setdefault(run.screw_order, []).append(run)
+        candidates = [list(group) for group in by_order.values()]
+        candidates.extend([run] for run in axial_runs(topology))
     if not candidates:
         raise NetMismatchError(
             f"Topology {topology.name!r} has no axial or helical slot run; "
@@ -372,10 +399,11 @@ def _verify_rod_net(framework: Framework, topology: Topology) -> None:
         )
         if built == blueprint:
             return
+    where = "the given run(s)" if runs is not None else "any rod run of the blueprint"
     raise NetMismatchError(
         f"Rod framework {framework.name!r} does not realize topology "
-        f"{topology.name!r}: its points-of-extension signature matches no "
-        f"rod run(s) of the blueprint (checked {len(candidates)})."
+        f"{topology.name!r}: its points-of-extension signature matches "
+        f"{where} on none of {len(candidates)} candidate rod form(s)."
     )
 
 
@@ -1179,4 +1207,50 @@ def topology_rod_quotient_edges(
         if halves is None or len(halves) != 2:
             continue  # not a plain 2-connected edge center; leave it be
         _splice_out(adjacency, slot)
+    # a run with no edge centers at all - a structure's own blueprint,
+    # one node slot per chemical repeat, every slot declared a node -
+    # has no continuation anywhere in the blueprint's quotient: the
+    # deconstruction cut only rod-to-lateral bonds, so the rod's own
+    # chain never became a blueprint edge. Contraction above had
+    # nothing to splice into it. Supply what the rod build realizes by
+    # construction: each repeat bonds the next one step up the axis and
+    # the last closes on the first across the run's generator (a single
+    # repeat is a self-loop carrying that voltage, exactly pcu's
+    # contracted form). The voltage is read from the slots' own
+    # positions in the blueprint's gauge, not assumed zero: consecutive
+    # repeats of a real crystal routinely sit in different home cells,
+    # and a zero voltage there described a lower-periodic graph
+    # (measured: two of twelve corpus self-rebuilds compared against a
+    # 2-periodic blueprint and failed for that reason alone). A library
+    # run always carries edge centers and is untouched here.
+    self_runs = [r for r in runs if all(s in node_slots for s in r.slots)]
+    if self_runs:
+        cell = topology.cell.matrix
+        inv_cell = np.linalg.inv(cell)
+        images = _topology_slot_images(topology)
+    for a_run in self_runs:
+        chain = list(a_run.slots)
+        step = np.asarray(a_run.direction, dtype=float) @ cell / len(chain)
+        for near, far in zip(chain, chain[1:] + chain[:1], strict=True):
+            # the bond leaves slot ``near`` in its home image and lands
+            # on the image of ``far`` one axial step away
+            drift = step + _slot_centre(topology, near) - _slot_centre(topology, far)
+            shift = np.round(drift @ inv_cell).astype(int)
+            voltage = _canonical(0, 1, shift + images[far] - images[near])[2]
+            adjacency.setdefault(near, []).append((far, voltage))
+            adjacency.setdefault(far, []).append((near, _negate(voltage)))
     return _edges_from_adjacency(adjacency)
+
+
+def _slot_centre(topology: Topology, slot: int) -> np.ndarray:
+    """Cartesian centre of a blueprint slot: its centre atom, else its
+    dummy centroid (the two coincide for every slot the CGD parser or
+    a self-blueprint constructs)."""
+    atoms = topology.slots[slot].atoms
+    centre: np.ndarray
+    for site in atoms:
+        if site.specie.symbol != "X":
+            centre = np.array(site.coords, dtype=float)
+            return centre
+    centre = np.array(atoms.cart_coords, dtype=float).mean(axis=0)
+    return centre
