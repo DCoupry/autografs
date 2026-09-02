@@ -127,12 +127,15 @@ def _rod_selftemplate(mofgen: Autografs, result, record: dict, start: float) -> 
 
     Single rod, single periodic component only (the multi-rod and
     catenated-rod cases await their own increment). Closure gates on
-    composition and whole-supercell atom count - the builder stacks at
-    least two repeats - with per-atom packing recorded; exact net
-    verification is attempted and recorded, not gating, because the
-    rod-form verifier re-detects runs on the blueprint instead of
-    trusting the injected one and is known-conservative on distorted
-    self-blueprints (coverage plan, rod self-templates).
+    exact net verification against the injected run - the rod-form
+    signature comparison, the rod's continuation supplied by the run
+    since a self-blueprint has no edge centers to contract - plus
+    composition and whole-supercell atom count (the builder stacks at
+    least two repeats), with per-atom packing recorded. Earlier sweeps
+    recorded verification without gating on it and let the verifier
+    re-detect runs on the blueprint, which a P1 self-blueprint defeats:
+    0 of 203 composition-exact rebuilds verified, for that reason and
+    not for any property of the builds.
     """
     from autografs.extract_topology import rod_topology_from_deconstruction
 
@@ -192,17 +195,23 @@ def _rod_selftemplate(mofgen: Autografs, result, record: dict, start: float) -> 
     record["min_contact"] = framework.min_contact()
     record["bond_residual"] = bond_residuals(framework)
     try:
-        framework.verify_net(topology)
+        framework.verify_net(topology, runs=[run])
         record["net_verified"] = True
-    except AutografsError:
+    except AutografsError as exc:
         record["net_verified"] = False
+        record["error"] = f"{type(exc).__name__}: {exc}"
     matched = (
         built.composition.reduced_formula == experimental.composition.reduced_formula
         and len(built) % len(experimental) == 0
     )
     record["formula"] = built.composition.reduced_formula
     record["experimental_formula"] = experimental.composition.reduced_formula
-    record["outcome"] = "closed_self" if matched else "composition_mismatch"
+    # the same gate order as the finite arm: a build that realizes a
+    # different net is verify_failed whatever its formula says
+    if not record["net_verified"]:
+        record["outcome"] = "verify_failed"
+    else:
+        record["outcome"] = "closed_self" if matched else "composition_mismatch"
     record["seconds"] = time.perf_counter() - start
     return record
 

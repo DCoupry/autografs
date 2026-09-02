@@ -833,11 +833,10 @@ class TestRodSelfTemplate:
             index: copy.deepcopy(result.fragments[name])
             for index, name in lateral_mapping.items()
         }
-        # verify_net stays off: the rod-form verifier re-detects runs
-        # on the blueprint instead of trusting the injected one, and a
-        # distorted self-blueprint fails that detection - a machinery
-        # conservatism recorded in the coverage plan, not a mismatch.
-        # Composition plus exact atom count is the v1 closure gate.
+        # verify_net gates the self-rebuild against the INJECTED run:
+        # a P1 self-blueprint has nothing run detection can read, so
+        # the verifier is told the run and supplies the continuation
+        # the blueprint's cut list never held
         rebuilt = build_rod_framework(
             topology,
             fragment,
@@ -845,10 +844,11 @@ class TestRodSelfTemplate:
             run=run,
             min_distance=None,
             bond_tolerance=10.0,
-            verify_net=False,
+            verify_net=True,
             initial_scale=1.0,
             scale_band=0.25,
         )
+        rebuilt.verify_net(topology, runs=[run])
         built = rebuilt.structure.composition
         experimental = result.structure.composition
         assert built.reduced_formula == experimental.reduced_formula

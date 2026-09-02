@@ -2279,7 +2279,10 @@ def build_rod_framework(
     if verify_net:
         from autografs.net import verify_net as _verify_net
 
-        _verify_net(framework, topology)
+        # a caller-chosen run is the blueprint the build answers to;
+        # detection stays the reference only when the run was detected
+        # here too (a self-blueprint has nothing detection can read)
+        _verify_net(framework, topology, list(build.runs) if run is not None else None)
     return framework
 
 
